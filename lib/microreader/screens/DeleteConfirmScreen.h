@@ -12,8 +12,9 @@ class DeleteConfirmScreen final : public ListMenuScreen {
  public:
   DeleteConfirmScreen() = default;
 
-  void setup(const std::string& book_path) {
+  void setup(const std::string& book_path, bool was_opened) {
     book_path_ = book_path;
+    was_opened_ = was_opened;
     // Extract filename from path
     const char* name = book_path_.c_str();
     const char* sep = std::strrchr(name, '/');
@@ -38,11 +39,14 @@ class DeleteConfirmScreen final : public ListMenuScreen {
  private:
   std::string book_path_;
   std::string filename_;
+  bool was_opened_ = false;
   int delete_idx_ = 0;
+  int remove_recent_idx_ = -1;
   int cancel_idx_ = 0;
   int filename_lines_ = 0;
 
   void delete_book_();
+  void remove_from_recent_();
 };
 
 }  // namespace microreader

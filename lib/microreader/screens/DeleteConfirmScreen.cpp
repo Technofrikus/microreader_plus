@@ -73,12 +73,19 @@ void DeleteConfirmScreen::on_start() {
   add_item("Delete");
   cancel_idx_ = count();
   add_item("Cancel");
+  if (was_opened_) {
+    remove_recent_idx_ = count();
+    add_item("Remove");
+  }
   set_selected(cancel_idx_);
 }
 
 void DeleteConfirmScreen::on_select(int index) {
   if (index == delete_idx_) {
     delete_book_();
+    app_->pop_screen();
+  } else if (index == remove_recent_idx_) {
+    remove_from_recent_();
     app_->pop_screen();
   } else {
     app_->pop_screen();
@@ -143,6 +150,19 @@ void DeleteConfirmScreen::delete_book_() {
     }
     index.save(index_path);
   }
+}
+
+void DeleteConfirmScreen::remove_from_recent_() {
+  const char* data_dir = app_->data_dir_;
+  if (!data_dir)
+    return;
+
+  std::string index_path = std::string(data_dir) + "/book_index.dat";
+  BookIndex::instance().load(index_path);
+
+  auto& index = BookIndex::instance();
+  index.set_last_opened(book_path_, 0);
+  index.save(index_path);
 }
 
 }  // namespace microreader

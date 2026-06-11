@@ -122,9 +122,11 @@ bool MainMenu::draw_custom_header_(DrawBuffer& buf) const {
 }
 
 void MainMenu::on_long_back(int index) {
-  if (index < 0 || index >= static_cast<int>(entries_.size()))
+  if (is_separator(index)) return;
+  int real = entries_index_for(index);
+  if (real < 0 || real >= static_cast<int>(entries_.size()))
     return;
-  app_->delete_confirm()->setup(entries_[index].path);
+  app_->delete_confirm()->setup(entries_[real].path, entries_[real].last_open_order > 0);
   app_->push_screen(ScreenId::DeleteConfirm);
 }
 
