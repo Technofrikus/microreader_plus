@@ -104,6 +104,9 @@ class ListMenuScreen : public IScreen {
     selected_ = index;
     on_start_set_selection_ = true;
   }
+  virtual bool draw_custom_header_(DrawBuffer& buf) const { return false; }
+  static constexpr int kHeaderY = 15;
+
   virtual bool is_separator(int index) const {
     return index >= 0 && index < static_cast<int>(separators_.size()) && separators_[index];
   }

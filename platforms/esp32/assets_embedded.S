@@ -3,5 +3,5 @@
     .global _binary_assets_bin_start
     .global _binary_assets_bin_end
 _binary_assets_bin_start:
-    .incbin "C:/Users/Patrick/Desktop/microreader/microreader/platforms/esp32/assets.bin"
+    .incbin "C:/Users/pablo/github/pablohc/microreader/platforms/esp32/assets.bin"
 _binary_assets_bin_end:

@@ -92,6 +92,7 @@ class MainMenu final : public ListMenuScreen {
   void on_select(int index) override;
   void on_back() override;
   void on_long_back(int index) override;
+  bool draw_custom_header_(DrawBuffer& buf) const override;
 
  private:
   const char* books_dir_ = nullptr;

@@ -13,7 +13,6 @@ namespace microreader {
 
 int ListMenuScreen::font_size_idx_ = 0;
 
-static constexpr int kHeaderY = 15;         // top padding before the title text
 static constexpr int kHeaderBottomGap = 4;  // gap between last header line and first list item
 // The hint row (nav glyphs + battery bar) is centred on a line kHintCenterY pixels above the
 // screen bottom.  kBottomEdgePad is the gap from that centre line to the absolute screen edge.
@@ -142,6 +141,9 @@ int ListMenuScreen::compute_header_h_() const {
 //    Returns header_h = pixels from y=0 to where list items begin.
 // ─────────────────────────────────────────────────────────────────────────────
 int ListMenuScreen::draw_header_(DrawBuffer& buf, int W, int H) const {
+  if (draw_custom_header_(buf))
+    return kHeaderY + (header_font_.valid() ? header_font_.y_advance() : 0) + kHeaderBottomGap;
+
   if (title_ && header_font_.valid()) {
     const size_t len = std::strlen(title_);
     const int tw = header_font_.word_width(title_, len, FontStyle::Regular);

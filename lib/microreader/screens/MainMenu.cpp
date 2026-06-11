@@ -44,7 +44,7 @@ static bool ci_less(std::string_view a, std::string_view b) {
 }
 
 void MainMenu::on_start() {
-  title_ = "Microreader";
+  title_ = nullptr;
   set_long_back_threshold(20);
 
   if (!app_->data_dir_) {
@@ -98,6 +98,27 @@ void MainMenu::stop() {
 
 void MainMenu::on_back() {
   app_->push_screen(ScreenId::Settings);
+}
+
+bool MainMenu::draw_custom_header_(DrawBuffer& buf) const {
+  if (!header_font_.valid() || !ui_font_.valid())
+    return false;
+
+  const int W = buf.width();
+  static const char kMicro[] = "micro";
+  static const char kReaderPlus[] = "reader\xe2\x81\xba";
+
+  const int w_micro = ui_font_.word_width(kMicro, 5, FontStyle::Regular);
+  const int w_reader_plus = header_font_.word_width(kReaderPlus, 9, FontStyle::Regular);
+  const int x_start = (W - w_micro - w_reader_plus) / 2;
+
+  const int baseline_reader = kHeaderY + header_font_.baseline();
+  const int baseline_micro = kHeaderY + ui_font_.baseline() + 1;
+
+  buf.draw_text_proportional(x_start, baseline_micro, kMicro, 5, ui_font_, false);
+  buf.draw_text_proportional(x_start + w_micro, baseline_reader, kReaderPlus, 9, header_font_, false);
+
+  return true;
 }
 
 void MainMenu::on_long_back(int index) {
