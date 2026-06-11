@@ -352,9 +352,8 @@ void microreader::Application::save_settings_() {
   std::fprintf(f, "list_format=%u\n", static_cast<unsigned>(menu_.list_format()));
   std::fprintf(f, "sort_order=%u\n", static_cast<unsigned>(menu_.sort_order()));
   std::fprintf(f, "open_counter=%u\n", static_cast<unsigned>(open_counter_));
-  std::fprintf(f, "inv_menu=%u\n", invert_menu_buttons_ ? 1u : 0u);
-  std::fprintf(f, "inv_bpage=%u\n", invert_bottom_paging_ ? 1u : 0u);
-  std::fprintf(f, "inv_side=%u\n", invert_side_buttons_ ? 1u : 0u);
+  std::fprintf(f, "reader_ctrl=%u\n", static_cast<unsigned>(reader_controls_));
+  std::fprintf(f, "menu_ctrl=%u\n", static_cast<unsigned>(menu_controls_));
   std::fprintf(f, "rotate_display=%u\n", rotate_display_ ? 1u : 0u);
   std::fprintf(f, "menu_font_size=%d\n", menu_font_size_);
 
@@ -387,6 +386,12 @@ void microreader::Application::load_settings_() {
   std::string last_screen, last_book_path, book_sel;
   int setting_sel = 0;
   ReaderSettings& rs = reader_.reader_settings();
+  bool old_inv_menu = false;
+  bool old_inv_bpage = true;
+  bool old_inv_side = false;
+  bool has_old_keys = false;
+  bool read_new_reader_ctrl = false;
+  bool read_new_menu_ctrl = false;
 
   while (std::fgets(line, sizeof(line), f)) {
     // Strip trailing newline
@@ -432,13 +437,22 @@ void microreader::Application::load_settings_() {
       menu_.set_sort_order(uval == 1 ? BookSortOrder::LastOpened : BookSortOrder::Alphabetical);
     else if (std::sscanf(line, "open_counter=%u", &uval) == 1)
       open_counter_ = uval;
-    else if (std::sscanf(line, "inv_menu=%u", &uval) == 1)
-      invert_menu_buttons_ = (uval != 0);
-    else if (std::sscanf(line, "inv_bpage=%u", &uval) == 1)
-      invert_bottom_paging_ = (uval != 0);
-    else if (std::sscanf(line, "inv_side=%u", &uval) == 1)
-      invert_side_buttons_ = (uval != 0);
-    else if (std::sscanf(line, "rotate_display=%u", &uval) == 1)
+    else if (std::sscanf(line, "reader_ctrl=%u", &uval) == 1) {
+      reader_controls_ = uval <= 3 ? static_cast<ControlMode>(uval) : ControlMode::Default;
+      read_new_reader_ctrl = true;
+    } else if (std::sscanf(line, "menu_ctrl=%u", &uval) == 1) {
+      menu_controls_ = uval <= 3 ? static_cast<ControlMode>(uval) : ControlMode::Default;
+      read_new_menu_ctrl = true;
+    } else if (std::sscanf(line, "inv_menu=%u", &uval) == 1) {
+      old_inv_menu = (uval != 0);
+      has_old_keys = true;
+    } else if (std::sscanf(line, "inv_bpage=%u", &uval) == 1) {
+      old_inv_bpage = (uval != 0);
+      has_old_keys = true;
+    } else if (std::sscanf(line, "inv_side=%u", &uval) == 1) {
+      old_inv_side = (uval != 0);
+      has_old_keys = true;
+    } else if (std::sscanf(line, "rotate_display=%u", &uval) == 1)
       rotate_display_ = (uval != 0);
     else if (std::sscanf(line, "menu_font_size=%u", &uval) == 1)
       menu_font_size_ = static_cast<int>(uval > 2 ? 2 : uval);
@@ -452,6 +466,14 @@ void microreader::Application::load_settings_() {
       sleep_image_idx_ = static_cast<int>(uval);
   }
   std::fclose(f);
+
+  if (has_old_keys && (!read_new_reader_ctrl || !read_new_menu_ctrl)) {
+    if (!read_new_reader_ctrl)
+      reader_controls_ = static_cast<ControlMode>((!old_inv_side ? 1 : 0) | (!old_inv_bpage ? 2 : 0));
+    if (!read_new_menu_ctrl)
+      menu_controls_ = static_cast<ControlMode>(!old_inv_menu ? 2 : 0);
+    save_settings_();
+  }
 
   MR_LOGI("app", "Loaded settings: align=%u ph=%u pv=%u ls=%u prog=%u sel=%s", static_cast<unsigned>(rs.align_override),
           rs.padding_h_idx, rs.padding_v_idx, static_cast<unsigned>(rs.spacing_override),

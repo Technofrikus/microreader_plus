@@ -52,9 +52,8 @@ class SettingsScreen final : public ListMenuScreen {
   int idx_switch_ota_ = -1;
   int idx_invalidate_font_ = -1;
   int idx_spiffs_ = -1;
-  int idx_invert_menu_ = -1;
-  int idx_invert_bottom_paging_ = -1;
-  int idx_invert_side_ = -1;
+  int idx_reader_controls_ = -1;
+  int idx_menu_controls_ = -1;
   int idx_rotate_display_ = -1;
   int idx_menu_font_ = -1;
   int idx_font_ = -1;

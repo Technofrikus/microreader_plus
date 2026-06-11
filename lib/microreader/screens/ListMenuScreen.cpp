@@ -375,10 +375,10 @@ void ListMenuScreen::draw_button_hints_(DrawBuffer& buf) const {
   const int baseline = ui_font_.baseline();
 
   // Four labels: back=◀, select=▶, down=▼, up=▲
-  bool inv_menu = app_ && app_->invert_menu_buttons();
+  bool front_inv = app_ && app_->menu_front_inverted();
   const char* lbl_down = "\xe2\x96\xbc";
   const char* lbl_up = "\xe2\x96\xb2";
-  const char* kLabels[4] = {"\xe2\x97\x80", "\xe2\x96\xb6", inv_menu ? lbl_up : lbl_down, inv_menu ? lbl_down : lbl_up};
+  const char* kLabels[4] = {"\xe2\x97\x80", "\xe2\x96\xb6", front_inv ? lbl_down : lbl_up, front_inv ? lbl_up : lbl_down};
   static const size_t kLens[4] = {3, 3, 3, 3};
 
   const bool sideways = buf.rotation() == Rotation::Deg90;
@@ -436,12 +436,12 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
   bool had_up_press = false;
   bool had_down_press = false;
 
-  bool inv_menu = app_ && app_->invert_menu_buttons();
-  // Default (inv_menu=false): Button3=up, Button2=down, Up=up, Down=down.
-  Button logical_up_front = inv_menu ? Button::Button2 : Button::Button3;
-  Button logical_down_front = inv_menu ? Button::Button3 : Button::Button2;
-  Button logical_up_side = Button::Up;
-  Button logical_down_side = Button::Down;
+  bool side_inv = app_ && app_->menu_side_inverted();
+  bool front_inv = app_ && app_->menu_front_inverted();
+  Button logical_up_front = front_inv ? Button::Button3 : Button::Button2;
+  Button logical_down_front = front_inv ? Button::Button2 : Button::Button3;
+  Button logical_up_side = side_inv ? Button::Down : Button::Up;
+  Button logical_down_side = side_inv ? Button::Up : Button::Down;
 
   Button btn;
   while (buttons.next_press(btn)) {
