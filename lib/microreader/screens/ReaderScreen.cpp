@@ -745,7 +745,9 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
   }
 
   // Track whether grayscale pass is needed (deferred to update()).
-  grayscale_pending_ = fset && fset->has_grayscale();
+  // Skip on X3: grayscale mode causes 440ms revert per page turn.
+  grayscale_pending_ = (fset && fset->has_grayscale()) &&
+                       buf.config().model != DeviceModel::X3;
 
   // ── BW rendering
   // ────────────────────────────────────────────────────────

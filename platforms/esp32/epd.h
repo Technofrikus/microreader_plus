@@ -71,6 +71,7 @@
 #define CMD_X3_PARTIAL_OUT 0x92
 #define CMD_X3_DUSPI 0x65
 #define CMD_X3_AUTO_MEASURE 0x82
+#define CMD_X3_DATA_STOP 0x11
 
 // clang-format off
 // ---- Grayscale LUT tables (112 bytes each) ----
@@ -216,8 +217,8 @@ static const uint8_t kX3LutBbFull[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-// ---- Turbo (fast differential) LUTs ----
-// Same VS as full.  Phase 0: TP=(4,2,4,4) RP=1 = 14 groups.  Phase 1: TP=(4,1,0,0) RP=1 = 5 groups.
+// ---- TURBO (fast differential) LUTs ----
+// From papyrix-reader. Phase 0: TP=(4,2,4,4) RP=1. Phase 1: TP=(4,1,0,0) RP=1.
 static const uint8_t kX3LutVcomTurbo[] = {
     0x00, 0x04, 0x02, 0x04, 0x04, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00, 0x01,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -310,6 +311,40 @@ static const uint8_t kX3LutWbFast2[] = {
 };
 static const uint8_t kX3LutBbFast2[] = {
     0x10, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// ---- UltraFast (B&W differential, minimal groups for speed) LUTs ----
+// Two phases: TP=(4,2,4,4) RP=1 = 14 groups + TP=(3,1,0,0) RP=1 = 4 groups.
+// Total 18 groups (~343ms). Same VS values as TURBO.
+static const uint8_t kX3LutVcomUltraFast[] = {
+    0x00, 0x04, 0x02, 0x04, 0x04, 0x01, 0x00, 0x03, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutWwUltraFast[] = {
+    0x20, 0x04, 0x02, 0x04, 0x04, 0x01, 0x00, 0x03, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutBwUltraFast[] = {
+    0xAA, 0x04, 0x02, 0x04, 0x04, 0x01, 0x80, 0x03, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutWbUltraFast[] = {
+    0x55, 0x04, 0x02, 0x04, 0x04, 0x01, 0x40, 0x03, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutBbUltraFast[] = {
+    0x10, 0x04, 0x02, 0x04, 0x04, 0x01, 0x00, 0x03, 0x01, 0x00, 0x00, 0x01,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00
@@ -436,7 +471,9 @@ class EInkDisplay : public microreader::IDisplay {
 
   // ---- X3 state tracking ----
   bool x3_red_ram_synced_ = false;
-  enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2 };
+  bool x3_needs_old_sync_ = false;
+  const uint8_t* x3_old_sync_data_ = nullptr;
+  enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2, ULTRAFAST };
   X3LutSet x3_loaded_luts_ = X3LutSet::NONE;
 
   const microreader::DeviceConfig config_;
@@ -496,58 +533,37 @@ class EInkDisplay : public microreader::IDisplay {
     waitWhileBusy();
 
     if (config_.model == microreader::DeviceModel::X3) {
+      // Clear any pending fire-and-forget OLD sync (full_refresh handles its own).
+      x3_needs_old_sync_ = false;
+      x3_old_sync_data_ = nullptr;
+
       uint32_t t0 = millis();
 
-      if (singlePhase) {
-        // Single-phase: IMG LUTs, non-inverted data to NEW only.
-        // OLD RAM preserves the previous display state so the controller
-        // applies correct transitions (BW/WB) via IMG's 50-group waveform.
-        x3LoadLuts_(X3LutSet::IMG);
-        sendCommand(CMD_X3_VCOM_DI);
-        sendData(0x29);
-        sendData(0x07);
-        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
-        x3Refresh_(false);
+      // Phase 1: IMG LUTs, inverted data to both RAMs (strong uniform drive)
+      x3LoadLuts_(X3LutSet::IMG);
+      sendCommand(CMD_X3_VCOM_DI);
+      sendData(0xA9);
+      sendData(0x07);
+      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, true);
+      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
+      x3Refresh_(false);
 
-        // Sync OLD with the new frame for next fast diff
-        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
-        x3_red_ram_synced_ = true;
+      // Phase 2: FULL condition pass, non-inverted to DTM2
+      x3LoadLuts_(X3LutSet::FULL);
+      sendCommand(CMD_X3_VCOM_DI);
+      sendData(0x29);
+      sendData(0x07);
+      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+      x3Refresh_(false);
 
-        if (turnOffScreen)
-          x3PowerOff_();
+      // Sync DTM1 with current frame for next differential
+      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
+      x3_red_ram_synced_ = true;
 
-        ESP_LOGI("X3", "full_refresh: singlePhase IMG total=%ums", (unsigned)(millis() - t0));
-      } else {
-        // X3 full sync: IMG LUTs (strong 47-group waveform) + condition pass.
-        // IMG Phase 1 provides uniform drive to clear prior content without grain;
-        // FULL Phase 2 conditions the final state.
-        // Phase 1: IMG LUTs, inverted data to both RAMs
-        x3LoadLuts_(X3LutSet::IMG);
-        sendCommand(CMD_X3_VCOM_DI);
-        sendData(0xA9);
-        sendData(0x07);
-        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, true);
-        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
-        x3Refresh_(false);
+      if (turnOffScreen)
+        x3PowerOff_();
 
-        // Phase 2: Condition pass — FULL LUTs,
-        // non-inverted to 0x13 (0x10 still inverted).
-        x3LoadLuts_(X3LutSet::FULL);
-        sendCommand(CMD_X3_VCOM_DI);
-        sendData(0x29);
-        sendData(0x07);
-        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
-        x3Refresh_(false);
-
-        // Sync OLD RAM (0x10) with non-inverted frame for next fast diff
-        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
-        x3_red_ram_synced_ = true;
-
-        if (turnOffScreen)
-          x3PowerOff_();
-
-        ESP_LOGI("X3", "full_refresh: IMG+FULL total=%ums", (unsigned)(millis() - t0));
-      }
+      ESP_LOGI("X3", "full_refresh: IMG+FULL total=%ums", (unsigned)(millis() - t0));
       return;
     }
 
@@ -560,16 +576,27 @@ class EInkDisplay : public microreader::IDisplay {
 
   void partial_refresh(const uint8_t* new_pixels, const uint8_t* prev_pixels) override {
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 differential: TURBO LUTs (proven quality, ~380ms CMD12)
+      // X3 differential: fire-and-forget pattern.
+      // CMD12 runs in background; next call's waitWhileBusy catches up.
       wakeIfNeeded();
-      waitWhileBusy();
+      waitWhileBusy();  // catches previous fire-and-forget CMD12
+
+      // Deferred OLD sync from previous fire-and-forget refresh.
+      // Must wait for BUSY before touching RAM (controller reads RAM during CMD12).
+      if (x3_needs_old_sync_) {
+        x3_red_ram_synced_ = true;
+        x3_needs_old_sync_ = false;
+        // x3_old_sync_data_ is the new_pixels from the previous call, which is now
+        // prev_pixels for this call (DrawBuffer swaps buffers between calls).
+        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, x3_old_sync_data_, false);
+      }
+
       x3LoadLuts_(X3LutSet::TURBO);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0x29);
       sendData(0x07);
       uint32_t t0 = millis();
       uint32_t spi_bytes = 0;
-      // If 0x10 is already in sync, write only 0x13 (new) — saves one full-frame SPI write
       if (x3_red_ram_synced_) {
         ESP_LOGD("X3", "partial_refresh: synced path");
         spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_NEW, new_pixels, false);
@@ -578,12 +605,17 @@ class EInkDisplay : public microreader::IDisplay {
         spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_OLD, prev_pixels, false);
         spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_NEW, new_pixels, false);
       }
-      x3Refresh_(false);
-      // Sync 0x10 with new frame for next diff
-      spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_OLD, new_pixels, false);
-      x3_red_ram_synced_ = true;
+
+      // Fire CMD12 in background — no wait.
+      x3PowerOn_();
+      sendCommand(CMD_X3_REFRESH);
+
+      // Defer OLD sync to next call (can't touch RAM during refresh).
+      x3_needs_old_sync_ = true;
+      x3_old_sync_data_ = new_pixels;
+
       uint32_t dt = millis() - t0;
-      ESP_LOGI("X3", "partial_refresh: LUTS=TURBO VCOM=0x29 synced=%d spi=%uB refresh=%ums",
+      ESP_LOGI("X3", "partial_refresh: LUTS=TURBO VCOM=0x29 synced=%d spi=%uB fire=%ums",
                (int)x3_red_ram_synced_, (unsigned)spi_bytes, (unsigned)dt);
       return;
     }
@@ -673,7 +705,9 @@ class EInkDisplay : public microreader::IDisplay {
     if (!in_grayscale_mode_)
       return;
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 grayscale revert: reload TURBO LUTs and sync both RAMs
+      // X3 grayscale revert: TURBO LUTs, sync both RAMs with prev_pixels
+      x3_needs_old_sync_ = false;
+      x3_old_sync_data_ = nullptr;
       in_grayscale_mode_ = false;
       wakeIfNeeded();
       waitWhileBusy();
@@ -1152,12 +1186,32 @@ class EInkDisplay : public microreader::IDisplay {
     return total;
   }
 
+  void x3SendWhitePlane_(uint8_t cmd) {
+    static constexpr size_t kChunk = 4092;
+    const uint32_t total = static_cast<uint32_t>(DISPLAY_HEIGHT) * DISPLAY_WIDTH_BYTES;
+    uint8_t row[128];
+    memset(row, 0xFF, DISPLAY_WIDTH_BYTES);
+    sendCommand(cmd);
+    gpio_set_level(EPD_DC, 1);
+    for (uint16_t y = 0; y < DISPLAY_HEIGHT; y++) {
+      size_t offset = 0;
+      while (offset < DISPLAY_WIDTH_BYTES) {
+        const size_t chunk = (DISPLAY_WIDTH_BYTES - offset < kChunk) ? (DISPLAY_WIDTH_BYTES - offset) : kChunk;
+        gpio_set_level(EPD_CS, 0);
+        spi_transaction_t t{}; t.length = chunk * 8; t.tx_buffer = row + offset;
+        spi_device_polling_transmit(spi_, &t);
+        gpio_set_level(EPD_CS, 1);
+        offset += chunk;
+      }
+    }
+  }
+
   void x3LoadLuts_(X3LutSet set) {
     if (x3_loaded_luts_ == set) {
       ESP_LOGD("X3", "LoadLuts: already loaded %d (skip)", (int)set);
       return;
     }
-    static const char* kLutNames[] = {"NONE","FULL","TURBO","IMG","GRAY","FAST","FAST2"};
+    static const char* kLutNames[] = {"NONE","FULL","TURBO","IMG","GRAY","FAST","FAST2","ULTRAFAST"};
     const uint8_t* vcom; const uint8_t* ww; const uint8_t* bw;
     const uint8_t* wb; const uint8_t* bb;
     switch (set) {
@@ -1184,6 +1238,10 @@ class EInkDisplay : public microreader::IDisplay {
       case X3LutSet::FAST2:
         vcom = kX3LutVcomFast2; ww = kX3LutWwFast2; bw = kX3LutBwFast2;
         wb = kX3LutWbFast2; bb = kX3LutBbFast2;
+        break;
+      case X3LutSet::ULTRAFAST:
+        vcom = kX3LutVcomUltraFast; ww = kX3LutWwUltraFast; bw = kX3LutBwUltraFast;
+        wb = kX3LutWbUltraFast; bb = kX3LutBbUltraFast;
         break;
       default:
         return;
@@ -1213,12 +1271,16 @@ class EInkDisplay : public microreader::IDisplay {
     x3_loaded_luts_ = X3LutSet::NONE;
   }
 
-  void x3Refresh_(bool turnOffScreen) {
+  void x3Refresh_(bool turnOffScreen, bool waitForBusy = true) {
     x3PowerOn_();
     uint32_t t0 = millis();
     sendCommand(CMD_X3_REFRESH);
-    x3WaitBusy_(" X3_CMD12");
-    ESP_LOGI("X3", "Refresh: CMD12 done (%ums) turnOff=%d", (unsigned)(millis() - t0), (int)turnOffScreen);
+    if (waitForBusy) {
+      x3WaitBusy_(" X3_CMD12");
+      ESP_LOGI("X3", "Refresh: CMD12 done (%ums) turnOff=%d", (unsigned)(millis() - t0), (int)turnOffScreen);
+    } else {
+      ESP_LOGD("X3", "Refresh: CMD12 fired (deferred wait)");
+    }
     if (turnOffScreen) {
       x3PowerOff_();
     }
