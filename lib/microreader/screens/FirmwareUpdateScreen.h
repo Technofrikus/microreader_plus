@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "ListMenuScreen.h"
@@ -34,6 +35,9 @@ class FirmwareUpdateScreen final : public ListMenuScreen {
   std::string error_message_;
   std::string sha256_hex_;
   int confirm_idx_ = -1;
+#ifdef ESP_PLATFORM
+  uint32_t flash_start_ms_ = 0;
+#endif
 
   void do_validate_();
   void do_flash_();

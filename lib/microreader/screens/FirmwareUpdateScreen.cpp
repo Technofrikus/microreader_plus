@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "../Application.h"
+#include "../HeapLog.h"
 
 #ifdef ESP_PLATFORM
 #include "../firmware/SdFirmwareFlasher.h"
@@ -21,6 +22,7 @@ namespace microreader {
 static constexpr const char* kFirmwarePath = "/sdcard/firmware.bin";
 
 void FirmwareUpdateScreen::on_start() {
+  MR_LOGI("FW", "screen started, checking %s", kFirmwarePath);
   title_ = "Validating...";
   add_separator("Checking firmware...");
   if (buffer()) {
@@ -95,16 +97,22 @@ void FirmwareUpdateScreen::do_validate_() {
 #ifdef ESP_PLATFORM
   struct stat st;
   if (stat(kFirmwarePath, &st) != 0) {
+    MR_LOGI("FW", "ERROR: firmware not found: %s", kFirmwarePath);
     show_failed_("No firmware.bin found", "Place firmware.bin on SD card root");
     return;
   }
   firmware_size_ = static_cast<size_t>(st.st_size);
+  MR_LOGI("FW", "found %s: %u bytes (%u KB)", kFirmwarePath,
+          static_cast<unsigned>(firmware_size_), static_cast<unsigned>(firmware_size_ / 1024));
 
   const esp_partition_t* dest = esp_ota_get_next_update_partition(nullptr);
   if (!dest) {
+    MR_LOGI("FW", "ERROR: no OTA partition found");
     show_failed_("No OTA partition", nullptr);
     return;
   }
+  MR_LOGI("FW", "OTA dest: %s addr=0x%x size=%u", dest->label,
+          static_cast<unsigned>(dest->address), static_cast<unsigned>(dest->size));
 
   if (firmware_size_ > dest->size) {
     show_failed_("Firmware too large", nullptr);
@@ -113,17 +121,25 @@ void FirmwareUpdateScreen::do_validate_() {
 
   {
     auto bat = runtime()->battery_percentage();
-    if (bat.has_value() && *bat < 75) {
-      show_failed_("Battery too low", "Connect charger (>75%)");
-      return;
+    MR_LOGI("FW", "battery: %s", bat.has_value() ? "available" : "N/A");
+    if (bat.has_value()) {
+      MR_LOGI("FW", "battery level: %u%%", *bat);
+      if (*bat < 75) {
+        MR_LOGI("FW", "WARN: battery too low: %u%% (need >=75%%)", *bat);
+        show_failed_("Battery too low", "Connect charger (>75%)");
+        return;
+      }
     }
   }
 
+  MR_LOGI("FW", "validating firmware image...");
   FlashResult vr = sd_firmware_validate(kFirmwarePath, dest->size, &firmware_info_);
   if (vr != FlashResult::OK) {
+    MR_LOGI("FW", "ERROR: validation failed: %s", flash_result_name(vr));
     show_failed_("Invalid firmware", flash_result_name(vr));
     return;
   }
+  MR_LOGI("FW", "validation passed: chip=%s rev=%u", chip_name(firmware_info_.chip_id), firmware_info_.min_chip_rev);
 
   sha256_hex_.clear();
   {
@@ -182,7 +198,10 @@ void FirmwareUpdateScreen::do_validate_() {
     sha256_hex_ = hex;
   }
 skip_sha:;
+  if (!sha256_hex_.empty())
+    MR_LOGI("FW", "sha256: %s", sha256_hex_.c_str());
 
+  MR_LOGI("FW", "firmware ready for update");
   build_confirm_items_();
 #else
   show_failed_("Not available on desktop", nullptr);
@@ -193,6 +212,8 @@ void FirmwareUpdateScreen::do_flash_() {
 #ifdef ESP_PLATFORM
   ESP_LOGI("FW", "SD update: %s (%u bytes)", kFirmwarePath,
            static_cast<unsigned>(firmware_size_));
+  MR_LOGI("FW", "user confirmed flash, starting...");
+  flash_start_ms_ = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
   show_hints_ = false;
   clear_items();
@@ -208,11 +229,16 @@ void FirmwareUpdateScreen::do_flash_() {
 
   FlashResult result = sd_firmware_flash(kFirmwarePath, flash_progress_cb_, this, true);
 
+  uint32_t elapsed = xTaskGetTickCount() * portTICK_PERIOD_MS - flash_start_ms_;
+  MR_LOGI("FW", "flash finished in %u ms", static_cast<unsigned>(elapsed));
+
   if (result != FlashResult::OK) {
+    MR_LOGI("FW", "ERROR: flash failed after %u ms: %s", static_cast<unsigned>(elapsed), flash_result_name(result));
     show_failed_("Flash failed", flash_result_name(result));
     return;
   }
 
+  MR_LOGI("FW", "firmware update complete, rebooting in 2s...");
   clear_items();
   title_ = "Complete!";
   add_separator("Firmware updated successfully");
@@ -237,6 +263,10 @@ void FirmwareUpdateScreen::flash_progress_cb_(size_t written, size_t total, void
   self->set_item_label(1, pct_str);
 
   if (pct % 5 != 0) return;
+
+  if (pct % 25 == 0)
+    MR_LOGI("FW", "flash progress: %d%% (%u/%u KB)", pct,
+            static_cast<unsigned>(written / 1024), static_cast<unsigned>(total / 1024));
 
   if (self->buffer()) {
     self->draw_all_(*self->buffer());
