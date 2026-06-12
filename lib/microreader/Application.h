@@ -10,6 +10,9 @@
 #include "display/DrawBuffer.h"
 #include "screens/ChapterSelectScreen.h"
 #include "screens/DeleteConfirmScreen.h"
+#ifdef ESP_PLATFORM
+#include "screens/FirmwareUpdateScreen.h"
+#endif
 #include "screens/IScreen.h"
 #include "screens/LinksScreen.h"
 #include "screens/MainMenu.h"
@@ -38,6 +41,7 @@ enum class ScreenId : uint8_t {
   ChapterSelect,
   Links,
   DeleteConfirm,
+  FirmwareUpdate,
   BouncingBall,
   GrayscaleDemo,
 };
@@ -265,6 +269,9 @@ class Application {
   ChapterSelectScreen chapter_select_;
   LinksScreen links_screen_;
   DeleteConfirmScreen delete_confirm_;
+#ifdef ESP_PLATFORM
+  FirmwareUpdateScreen firmware_update_;
+#endif
 
 #ifdef MICROREADER_ENABLE_DEMOS
   BouncingBallDemo bouncing_ball_;

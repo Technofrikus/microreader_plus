@@ -256,6 +256,15 @@ void SettingsScreen::on_start() {
       }
     }
   }
+
+  {
+    FILE* f = std::fopen("/sdcard/firmware.bin", "rb");
+    if (f) {
+      std::fclose(f);
+      idx_sd_firmware_ = count();
+      add_item("SD Card Firmware Update");
+    }
+  }
 #endif
 
   // --- Demos ---
@@ -378,6 +387,10 @@ void SettingsScreen::on_select(int index) {
 #ifdef ESP_PLATFORM
   if (index == idx_switch_ota_) {
     switch_ota_partition_();
+    return;
+  }
+  if (index == idx_sd_firmware_) {
+    app_->push_screen(ScreenId::FirmwareUpdate);
     return;
   }
   if (index == idx_invalidate_font_) {

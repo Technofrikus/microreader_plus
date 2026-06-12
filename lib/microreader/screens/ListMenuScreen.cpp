@@ -207,7 +207,8 @@ int ListMenuScreen::draw_bottom_(DrawBuffer& buf, int W, int H, std::optional<ui
     }
   }
 
-  draw_button_hints_(buf);
+  if (show_hints_)
+    draw_button_hints_(buf);
   return kBottomAreaH;
 }
 

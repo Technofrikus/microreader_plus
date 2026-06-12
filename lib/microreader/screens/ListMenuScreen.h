@@ -151,6 +151,9 @@ class ListMenuScreen : public IScreen {
   }
 
   int buffer_width() const { return buf_ ? buf_->width() : 0; }
+  DrawBuffer* buffer() const { return buf_; }
+  IRuntime* runtime() const { return runtime_; }
+  bool show_hints_ = true;
 
   // Re-run start() to rebuild items with updated settings (e.g. after font change).
   void restart() {

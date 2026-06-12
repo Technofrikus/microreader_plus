@@ -58,6 +58,7 @@ class SettingsScreen final : public ListMenuScreen {
   int idx_menu_font_ = -1;
   int idx_font_ = -1;
   int idx_sleep_image_ = -1;
+  int idx_sd_firmware_ = -1;
   DrawBuffer* buf_ = nullptr;
   std::vector<std::string> sd_fonts_;
   int font_sel_idx_ = 0;
