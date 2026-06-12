@@ -68,6 +68,7 @@
 #define CMD_X3_WRITE_LUT_WB 0x23
 #define CMD_X3_WRITE_LUT_BB 0x24
 #define CMD_X3_PARTIAL_IN 0x91
+#define CMD_X3_PARTIAL_WINDOW 0x90
 #define CMD_X3_PARTIAL_OUT 0x92
 #define CMD_X3_DUSPI 0x65
 #define CMD_X3_AUTO_MEASURE 0x82
@@ -473,6 +474,8 @@ class EInkDisplay : public microreader::IDisplay {
   bool x3_red_ram_synced_ = false;
   bool x3_needs_old_sync_ = false;
   const uint8_t* x3_old_sync_data_ = nullptr;
+  bool x3_partial_mode_active_ = false;
+  bool x3_first_refresh_ = false;
   enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2, ULTRAFAST };
   X3LutSet x3_loaded_luts_ = X3LutSet::NONE;
 
@@ -537,6 +540,11 @@ class EInkDisplay : public microreader::IDisplay {
       x3_needs_old_sync_ = false;
       x3_old_sync_data_ = nullptr;
 
+      if (x3_partial_mode_active_) {
+        sendCommand(CMD_X3_PARTIAL_OUT);
+        x3_partial_mode_active_ = false;
+      }
+
       uint32_t t0 = millis();
 
       // Phase 1: IMG LUTs, inverted data to both RAMs (strong uniform drive)
@@ -563,6 +571,7 @@ class EInkDisplay : public microreader::IDisplay {
       if (turnOffScreen)
         x3PowerOff_();
 
+      x3_first_refresh_ = false;
       ESP_LOGI("X3", "full_refresh: IMG+FULL total=%ums", (unsigned)(millis() - t0));
       return;
     }
@@ -579,7 +588,19 @@ class EInkDisplay : public microreader::IDisplay {
       // X3 differential: fire-and-forget pattern.
       // CMD12 runs in background; next call's waitWhileBusy catches up.
       wakeIfNeeded();
+      uint32_t t_wait = millis();
       waitWhileBusy();  // catches previous fire-and-forget CMD12
+      uint32_t t_wait_ms = millis() - t_wait;
+
+      // When exiting partial-window mode, OLD RAM doesn't match the screen
+      // (partial_refresh_region only wrote to NEW RAM). Force a full_refresh
+      // to re-sync everything cleanly.
+      if (x3_partial_mode_active_) {
+        sendCommand(CMD_X3_PARTIAL_OUT);
+        x3_partial_mode_active_ = false;
+        full_refresh(new_pixels, microreader::RefreshMode::Full, false);
+        return;
+      }
 
       // Deferred OLD sync from previous fire-and-forget refresh.
       // Must wait for BUSY before touching RAM (controller reads RAM during CMD12).
@@ -615,11 +636,14 @@ class EInkDisplay : public microreader::IDisplay {
       x3_old_sync_data_ = new_pixels;
 
       uint32_t dt = millis() - t0;
-      ESP_LOGI("X3", "partial_refresh: LUTS=TURBO VCOM=0x29 synced=%d spi=%uB fire=%ums",
-               (int)x3_red_ram_synced_, (unsigned)spi_bytes, (unsigned)dt);
+      uint32_t t_total = millis() - t_wait;
+      ESP_LOGI("X3", "partial_refresh: LUTS=TURBO VCOM=0x29 synced=%d spi=%uB fire=%ums wait=%ums total=%ums",
+               (int)x3_red_ram_synced_, (unsigned)spi_bytes, (unsigned)dt,
+               (unsigned)t_wait_ms, (unsigned)t_total);
       return;
     }
 
+    uint32_t t_x4 = millis();
     if (in_grayscale_mode_) {
       grayscale_revert_();
       wakeIfNeeded();
@@ -633,6 +657,7 @@ class EInkDisplay : public microreader::IDisplay {
     setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
     writeRamBuffer(CMD_WRITE_RAM_BW, new_pixels, BUFFER_SIZE);
     refreshDisplay(EPD_FAST_REFRESH);
+    ESP_LOGI("X4", "partial_refresh: %ums", (unsigned)(millis() - t_x4));
   }
 
   void write_ram_bw(const uint8_t* data) override {
@@ -755,26 +780,56 @@ class EInkDisplay : public microreader::IDisplay {
   void partial_refresh_region(int phys_x, int phys_y, int phys_w, int phys_h, const uint8_t* new_buf,
                               int stride_bytes) override {
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3: full-sync — write new frame to both RAMs with img LUTs, then sync
-      (void)phys_x; (void)phys_y; (void)phys_w; (void)phys_h;
-      const uint32_t total_bytes = static_cast<uint32_t>(stride_bytes * config_.physical_height);
-      uint32_t t0 = millis();
+      // X3: UC81xx partial window via 0x91/0x90/0x92, fire-and-forget.
       wakeIfNeeded();
       waitWhileBusy();
-      x3LoadLuts_(X3LutSet::FULL);
+
+      if (x3_partial_mode_active_) {
+        sendCommand(CMD_X3_PARTIAL_OUT);
+      }
+
+      x3LoadLuts_(X3LutSet::TURBO);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0x29);
       sendData(0x07);
+
+      sendCommand(CMD_X3_PARTIAL_IN);
+
+      const uint16_t x_end = static_cast<uint16_t>(phys_x + phys_w);
+      const int y_start_ctrl = DISPLAY_HEIGHT - phys_y - phys_h;
+      const int y_end_ctrl = DISPLAY_HEIGHT - phys_y;
+
+      sendCommand(CMD_X3_PARTIAL_WINDOW);
+      sendData(static_cast<uint8_t>(phys_x >> 8));
+      sendData(static_cast<uint8_t>(phys_x & 0xFF));
+      sendData(static_cast<uint8_t>((x_end - 1) >> 8));
+      sendData(static_cast<uint8_t>((x_end - 1) & 0xFF));
+      sendData(static_cast<uint8_t>(y_start_ctrl >> 8));
+      sendData(static_cast<uint8_t>(y_start_ctrl & 0xFF));
+      sendData(static_cast<uint8_t>((y_end_ctrl - 1) >> 8));
+      sendData(static_cast<uint8_t>((y_end_ctrl - 1) & 0xFF));
+      sendData(0x01);
+
       sendCommand(CMD_X3_WRITE_NEW);
-      sendData(new_buf, total_bytes);
-      sendCommand(CMD_X3_WRITE_OLD);
-      sendData(new_buf, total_bytes);
-      x3Refresh_(false);
-      // Sync OLD RAM with non-inverted frame
-      sendCommand(CMD_X3_WRITE_OLD);
-      sendData(new_buf, total_bytes);
-      x3_red_ram_synced_ = true;
-      ESP_LOGI("X3", "partial_refresh_region: LUTS=FULL VCOM=0xA9 total=%ums", (unsigned)(millis() - t0));
+      gpio_set_level(EPD_DC, 1);
+      for (int y = 0; y < phys_h; y++) {
+        const uint8_t* row = new_buf + static_cast<uint32_t>(phys_h - 1 - y) * stride_bytes;
+        gpio_set_level(EPD_CS, 0);
+        spi_transaction_t t{};
+        t.length = static_cast<size_t>(stride_bytes) * 8;
+        t.tx_buffer = row;
+        spi_device_polling_transmit(spi_, &t);
+        gpio_set_level(EPD_CS, 1);
+      }
+
+      x3PowerOn_();
+      sendCommand(CMD_X3_REFRESH);
+
+      x3_partial_mode_active_ = true;
+      x3_red_ram_synced_ = false;
+
+      ESP_LOGD("X3", "partial_refresh_region: x=%d y=%d w=%d h=%d fired",
+               phys_x, phys_y, phys_w, phys_h);
       return;
     }
 
@@ -1140,7 +1195,9 @@ class EInkDisplay : public microreader::IDisplay {
     sendData(kX3LutBbFull, 42);
     x3_loaded_luts_ = X3LutSet::FULL;
 
-    x3_red_ram_synced_ = false;
+    x3_red_ram_synced_ = true;
+    x3_first_refresh_ = true;
+    x3_loaded_luts_ = X3LutSet::NONE;
 
     isScreenOn = false;
 
@@ -1186,11 +1243,11 @@ class EInkDisplay : public microreader::IDisplay {
     return total;
   }
 
-  void x3SendWhitePlane_(uint8_t cmd) {
+  void x3SendFillPlane_(uint8_t cmd, uint8_t fill) {
     static constexpr size_t kChunk = 4092;
     const uint32_t total = static_cast<uint32_t>(DISPLAY_HEIGHT) * DISPLAY_WIDTH_BYTES;
     uint8_t row[128];
-    memset(row, 0xFF, DISPLAY_WIDTH_BYTES);
+    memset(row, fill, DISPLAY_WIDTH_BYTES);
     sendCommand(cmd);
     gpio_set_level(EPD_DC, 1);
     for (uint16_t y = 0; y < DISPLAY_HEIGHT; y++) {

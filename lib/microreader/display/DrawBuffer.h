@@ -451,7 +451,7 @@ class DrawBuffer {
   int bar_y() const { return (height() - kLoadLogH) + kLoadLogH - kBarH - 4; }
 
   void show_loading(const char* text, int progress_pct) {
-    if (display_.is_busy())
+    if (config_.model != DeviceModel::X3 && display_.is_busy())
       return;
     uint8_t new_buf[kLoadBufBytes];
     render_loading_box_(new_buf, text, progress_pct);
@@ -680,7 +680,7 @@ class DrawBuffer {
       memset(inactive_() + static_cast<size_t>(y_offset + draw_h) * config_.stride,
              0xFF, static_cast<size_t>(disp_h - y_offset - draw_h) * config_.stride);
 
-      draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
+      draw_text_centered(width() / 2, height() - 24, "sleeping...", true, false);
       display_.full_refresh(inactive_(), RefreshMode::Full, true);
       if (deep_sleep_after)
         display_.deep_sleep();
