@@ -249,6 +249,72 @@ static const uint8_t kX3LutBbTurbo[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
+// ---- FAST (B&W differential, RP=3 like GRAY) LUTs ----
+// Same transitions as TURBO but only 3 repeats (instead of 4) for faster refresh.
+static const uint8_t kX3LutVcomFast[] = {
+    0x00, 0x03, 0x02, 0x04, 0x04, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutWwFast[] = {
+    0x20, 0x03, 0x02, 0x04, 0x04, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutBwFast[] = {
+    0xAA, 0x03, 0x02, 0x04, 0x04, 0x01, 0x80, 0x04, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutWbFast[] = {
+    0x55, 0x03, 0x02, 0x04, 0x04, 0x01, 0x40, 0x04, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutBbFast[] = {
+    0x10, 0x03, 0x02, 0x04, 0x04, 0x01, 0x00, 0x04, 0x01, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+// ---- FAST2 (B&W differential, RP=3, 3 phases like GRAY) LUTs ----
+// GRAY structure (3 phases, 5 groups) but with correct B&W transition values from TURBO.
+static const uint8_t kX3LutVcomFast2[] = {
+    0x00, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutWwFast2[] = {
+    0x20, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutBwFast2[] = {
+    0xAA, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutWbFast2[] = {
+    0x55, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t kX3LutBbFast2[] = {
+    0x10, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
 // ---- Grayscale LUTs ----
 // Single phase: TP=(3,2,1,1) RP=1 = 7 groups (~127ms)
 static const uint8_t kX3LutVcomGray[] = {
@@ -370,7 +436,7 @@ class EInkDisplay : public microreader::IDisplay {
 
   // ---- X3 state tracking ----
   bool x3_red_ram_synced_ = false;
-  enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY };
+  enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2 };
   X3LutSet x3_loaded_luts_ = X3LutSet::NONE;
   uint8_t x3_initial_full_syncs_remaining_ = 0;
 
@@ -409,7 +475,7 @@ class EInkDisplay : public microreader::IDisplay {
     spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
 
     spi_device_interface_config_t dev{};
-    dev.clock_speed_hz = config_.model == microreader::DeviceModel::X3 ? 10 * 1000 * 1000 : 40 * 1000 * 1000;
+    dev.clock_speed_hz = config_.model == microreader::DeviceModel::X3 ? 20 * 1000 * 1000 : 40 * 1000 * 1000;
     dev.mode = 0;
     dev.spics_io_num = -1;
     dev.queue_size = 1;
@@ -431,19 +497,40 @@ class EInkDisplay : public microreader::IDisplay {
     waitWhileBusy();
 
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 full sync: img LUTs, inverted data to both RAMs
+      // X3 full sync: IMG LUTs (strong 47-group waveform) + condition pass
       uint32_t t0 = millis();
+      const bool needsCondition = (x3_initial_full_syncs_remaining_ > 0);
+      if (needsCondition)
+        x3_initial_full_syncs_remaining_ = 0;
+
+      // Phase 1: IMG LUTs, inverted data to both RAMs
       x3LoadLuts_(X3LutSet::IMG);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0xA9);
+      sendData(0x07);
       x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, true);
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
-      x3Refresh_(turnOffScreen);
+      x3Refresh_(false);
+
+      // Phase 2: Condition pass — FULL LUTs, non-inverted to 0x13 (0x10 still inverted)
+      // Controller drives every pixel at full strength to settle the display.
+      if (needsCondition) {
+        x3LoadLuts_(X3LutSet::FULL);
+        sendCommand(CMD_X3_VCOM_DI);
+        sendData(0x29);
+        sendData(0x07);
+        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+        x3Refresh_(false);
+      }
+
       // Sync OLD RAM (0x10) with non-inverted frame for next fast diff
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
       x3_red_ram_synced_ = true;
-      if (x3_initial_full_syncs_remaining_ > 0) x3_initial_full_syncs_remaining_--;
-      ESP_LOGI("X3", "full_refresh: LUTS=IMG VCOM=0xA9 inverty=1 total=%ums", (unsigned)(millis() - t0));
+
+      if (turnOffScreen)
+        x3PowerOff_();
+
+      ESP_LOGI("X3", "full_refresh: LUTS=IMG+cond total=%ums", (unsigned)(millis() - t0));
       return;
     }
 
@@ -456,12 +543,13 @@ class EInkDisplay : public microreader::IDisplay {
 
   void partial_refresh(const uint8_t* new_pixels, const uint8_t* prev_pixels) override {
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 differential: TURBO LUTs for speed, diff 0x10(old) vs 0x13(new)
+      // X3 differential: TURBO LUTs (proven quality, ~380ms CMD12)
       wakeIfNeeded();
       waitWhileBusy();
       x3LoadLuts_(X3LutSet::TURBO);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0x29);
+      sendData(0x07);
       uint32_t t0 = millis();
       uint32_t spi_bytes = 0;
       // If 0x10 is already in sync, write only 0x13 (new) — saves one full-frame SPI write
@@ -539,6 +627,7 @@ class EInkDisplay : public microreader::IDisplay {
       x3LoadLuts_(X3LutSet::GRAY);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0x29);
+      sendData(0x07);
       x3Refresh_(turnOffScreen);
       x3_red_ram_synced_ = false;
       x3_loaded_luts_ = X3LutSet::NONE;
@@ -574,6 +663,7 @@ class EInkDisplay : public microreader::IDisplay {
       x3LoadLuts_(X3LutSet::TURBO);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0x29);
+      sendData(0x07);
       uint32_t t0 = millis();
       uint32_t spi_bytes = x3SendMirroredPlane_(CMD_X3_WRITE_NEW, prev_pixels, false);
       spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_OLD, prev_pixels, false);
@@ -620,9 +710,10 @@ class EInkDisplay : public microreader::IDisplay {
       uint32_t t0 = millis();
       wakeIfNeeded();
       waitWhileBusy();
-      x3LoadLuts_(X3LutSet::IMG);
+      x3LoadLuts_(X3LutSet::FULL);
       sendCommand(CMD_X3_VCOM_DI);
-      sendData(0xA9);
+      sendData(0x29);
+      sendData(0x07);
       sendCommand(CMD_X3_WRITE_NEW);
       sendData(new_buf, total_bytes);
       sendCommand(CMD_X3_WRITE_OLD);
@@ -632,7 +723,7 @@ class EInkDisplay : public microreader::IDisplay {
       sendCommand(CMD_X3_WRITE_OLD);
       sendData(new_buf, total_bytes);
       x3_red_ram_synced_ = true;
-      ESP_LOGI("X3", "partial_refresh_region: LUTS=IMG VCOM=0xA9 total=%ums", (unsigned)(millis() - t0));
+      ESP_LOGI("X3", "partial_refresh_region: LUTS=FULL VCOM=0xA9 total=%ums", (unsigned)(millis() - t0));
       return;
     }
 
@@ -1050,7 +1141,7 @@ class EInkDisplay : public microreader::IDisplay {
       ESP_LOGD("X3", "LoadLuts: already loaded %d (skip)", (int)set);
       return;
     }
-    static const char* kLutNames[] = {"NONE","FULL","TURBO","IMG","GRAY"};
+    static const char* kLutNames[] = {"NONE","FULL","TURBO","IMG","GRAY","FAST","FAST2"};
     const uint8_t* vcom; const uint8_t* ww; const uint8_t* bw;
     const uint8_t* wb; const uint8_t* bb;
     switch (set) {
@@ -1069,6 +1160,14 @@ class EInkDisplay : public microreader::IDisplay {
       case X3LutSet::IMG:
         vcom = kX3LutVcomImg; ww = kX3LutWwImg; bw = kX3LutBwImg;
         wb = kX3LutWbImg; bb = kX3LutBbImg;
+        break;
+      case X3LutSet::FAST:
+        vcom = kX3LutVcomFast; ww = kX3LutWwFast; bw = kX3LutBwFast;
+        wb = kX3LutWbFast; bb = kX3LutBbFast;
+        break;
+      case X3LutSet::FAST2:
+        vcom = kX3LutVcomFast2; ww = kX3LutWwFast2; bw = kX3LutBwFast2;
+        wb = kX3LutWbFast2; bb = kX3LutBbFast2;
         break;
       default:
         return;
