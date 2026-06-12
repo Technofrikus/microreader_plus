@@ -368,10 +368,10 @@ class DrawBuffer {
   void show_grayscale_image(const uint8_t* lsb, const uint8_t* msb, uint16_t w, uint16_t h) {
     fill(true);
     draw_image(lsb, 0, 0, w, h);
-    display_.write_ram_red(inactive_());    // LSB → OLD (0x10)
+    display_.write_ram_bw(inactive_());
     fill(true);
     draw_image(msb, 0, 0, w, h);
-    display_.write_ram_bw(inactive_());     // MSB → NEW (0x13)
+    display_.write_ram_red(inactive_());
     display_.grayscale_refresh(/*turnOffScreen=*/true);
     display_.deep_sleep();
   }
@@ -703,10 +703,10 @@ class DrawBuffer {
     };
     decode_pass(false);
     draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
-    display_.write_ram_red(inactive_());
+    display_.write_ram_bw(inactive_());
     decode_pass(true);
     draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
-    display_.write_ram_bw(inactive_());
+    display_.write_ram_red(inactive_());
     display_.grayscale_refresh_1pass(/*turnOffScreen=*/true);
     if (deep_sleep_after)
       display_.deep_sleep();
