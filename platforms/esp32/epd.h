@@ -490,41 +490,62 @@ class EInkDisplay : public microreader::IDisplay {
 
   // ---- microreader::IDisplay ----
 
-  void full_refresh(const uint8_t* pixels, microreader::RefreshMode mode, bool turnOffScreen) override {
+  void full_refresh(const uint8_t* pixels, microreader::RefreshMode mode, bool turnOffScreen, bool singlePhase = false) override {
     in_grayscale_mode_ = false;  // full refresh resets display state
     wakeIfNeeded();
     waitWhileBusy();
 
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 full sync: IMG LUTs (strong 47-group waveform) + condition pass
       uint32_t t0 = millis();
 
-      // Phase 1: IMG LUTs, inverted data to both RAMs
-      x3LoadLuts_(X3LutSet::IMG);
-      sendCommand(CMD_X3_VCOM_DI);
-      sendData(0xA9);
-      sendData(0x07);
-      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, true);
-      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
-      x3Refresh_(false);
+      if (singlePhase) {
+        // Single-phase: IMG LUTs, non-inverted data to NEW only.
+        // OLD RAM preserves the previous display state so the controller
+        // applies correct transitions (BW/WB) via IMG's 50-group waveform.
+        x3LoadLuts_(X3LutSet::IMG);
+        sendCommand(CMD_X3_VCOM_DI);
+        sendData(0x29);
+        sendData(0x07);
+        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+        x3Refresh_(false);
 
-      // Phase 2: Condition pass — FULL LUTs (different timing breaks symmetry),
-      // non-inverted to 0x13 (0x10 still inverted).
-      x3LoadLuts_(X3LutSet::FULL);
-      sendCommand(CMD_X3_VCOM_DI);
-      sendData(0x29);
-      sendData(0x07);
-      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
-      x3Refresh_(false);
+        // Sync OLD with the new frame for next fast diff
+        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
+        x3_red_ram_synced_ = true;
 
-      // Sync OLD RAM (0x10) with non-inverted frame for next fast diff
-      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
-      x3_red_ram_synced_ = true;
+        if (turnOffScreen)
+          x3PowerOff_();
 
-      if (turnOffScreen)
-        x3PowerOff_();
+        ESP_LOGI("X3", "full_refresh: singlePhase IMG total=%ums", (unsigned)(millis() - t0));
+      } else {
+        // X3 full sync: IMG LUTs (strong 47-group waveform) + condition pass
+        // Phase 1: IMG LUTs, inverted data to both RAMs
+        x3LoadLuts_(X3LutSet::IMG);
+        sendCommand(CMD_X3_VCOM_DI);
+        sendData(0xA9);
+        sendData(0x07);
+        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, true);
+        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
+        x3Refresh_(false);
 
-      ESP_LOGI("X3", "full_refresh: LUTS=IMG+cond total=%ums", (unsigned)(millis() - t0));
+        // Phase 2: Condition pass — FULL LUTs,
+        // non-inverted to 0x13 (0x10 still inverted).
+        x3LoadLuts_(X3LutSet::FULL);
+        sendCommand(CMD_X3_VCOM_DI);
+        sendData(0x29);
+        sendData(0x07);
+        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+        x3Refresh_(false);
+
+        // Sync OLD RAM (0x10) with non-inverted frame for next fast diff
+        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
+        x3_red_ram_synced_ = true;
+
+        if (turnOffScreen)
+          x3PowerOff_();
+
+        ESP_LOGI("X3", "full_refresh: LUTS=IMG+cond total=%ums", (unsigned)(millis() - t0));
+      }
       return;
     }
 

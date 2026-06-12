@@ -27,7 +27,7 @@ class IDisplay {
  public:
   virtual ~IDisplay() = default;
 
-  virtual void full_refresh(const uint8_t* pixels, RefreshMode mode, bool turnOffScreen = false) = 0;
+  virtual void full_refresh(const uint8_t* pixels, RefreshMode mode, bool turnOffScreen = false, bool singlePhase = false) = 0;
 
   virtual void partial_refresh(const uint8_t* new_pixels, const uint8_t* prev_pixels) = 0;
 
@@ -349,8 +349,8 @@ class DrawBuffer {
     active_valid_ = true;
   }
 
-  void full_refresh(RefreshMode mode = RefreshMode::Half, bool turnOffScreen = false) {
-    display_.full_refresh(inactive_(), mode, turnOffScreen);
+  void full_refresh(RefreshMode mode = RefreshMode::Half, bool turnOffScreen = false, bool singlePhase = false) {
+    display_.full_refresh(inactive_(), mode, turnOffScreen, singlePhase);
     memcpy(bufs_[active_idx_], bufs_[1 - active_idx_], config_.pixel_bytes);
     active_idx_ = 1 - active_idx_;
     active_valid_ = true;
@@ -650,27 +650,36 @@ class DrawBuffer {
 
   void show_mgr2_sleep_(Mgr2Source_& src, bool deep_sleep_after) {
     if (config_.model == DeviceModel::X3) {
-      // X3: render grayscale MGR2 as 1-bit B&W via full_refresh (IMG+cond).
-      // MGR2 images are 800x480 (X4 size); center on X3 (792x528).
+      // X3: render MGR2 as 1-bit B&W via dual-phase IMG+FULL.
+      // Pre-inverted: Phase 1 (invertBits=true) flips bits → correct on screen.
+      // Phase 2 (FULL, weaker) can't overcome Phase 1 result.
       fill(false);
       const int src_w = static_cast<int>(src.w);
       const int src_h = static_cast<int>(src.h);
       const int disp_w = config_.physical_width;
       const int disp_h = config_.physical_height;
-      const int x_offset = (src_w - disp_w) / 2;   // clip sides when src wider
-      const int y_offset = (disp_h - src_h) / 2;    // pad when src shorter
+      const int x_offset = (src_w - disp_w) / 2;
+      const int y_offset = (disp_h - src_h) / 2;
       const int draw_w = std::min(src_w, disp_w);
       const int draw_h = std::min(src_h, disp_h);
+
+      // Fill padding areas (top/bottom) with 0xFF so Phase 1 invert →
+      // 0x00 → white on display (X3: 0=white). Content area stays 0x00
+      // from fill(false) and we set bits for background (state < 2).
+      memset(inactive_(), 0xFF, static_cast<size_t>(y_offset) * config_.stride);
       for (int y = 0; y < draw_h; ++y) {
         const uint8_t* src_row = src.get_row(static_cast<uint16_t>(y));
         uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
         for (int x = 0; x < draw_w; x++) {
           const int src_x = x + x_offset;
           int state = (src_row[src_x / 4] >> (6 - (src_x % 4) * 2)) & 0x3;
-          if (state >= 2)
+          if (state < 2)
             dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
         }
       }
+      memset(inactive_() + static_cast<size_t>(y_offset + draw_h) * config_.stride,
+             0xFF, static_cast<size_t>(disp_h - y_offset - draw_h) * config_.stride);
+
       draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
       display_.full_refresh(inactive_(), RefreshMode::Full, true);
       if (deep_sleep_after)
