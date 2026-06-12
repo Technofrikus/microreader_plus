@@ -518,7 +518,9 @@ class EInkDisplay : public microreader::IDisplay {
 
         ESP_LOGI("X3", "full_refresh: singlePhase IMG total=%ums", (unsigned)(millis() - t0));
       } else {
-        // X3 full sync: IMG LUTs (strong 47-group waveform) + condition pass
+        // X3 full sync: IMG LUTs (strong 47-group waveform) + condition pass.
+        // IMG Phase 1 provides uniform drive to clear prior content without grain;
+        // FULL Phase 2 conditions the final state.
         // Phase 1: IMG LUTs, inverted data to both RAMs
         x3LoadLuts_(X3LutSet::IMG);
         sendCommand(CMD_X3_VCOM_DI);
@@ -544,7 +546,7 @@ class EInkDisplay : public microreader::IDisplay {
         if (turnOffScreen)
           x3PowerOff_();
 
-        ESP_LOGI("X3", "full_refresh: LUTS=IMG+cond total=%ums", (unsigned)(millis() - t0));
+        ESP_LOGI("X3", "full_refresh: IMG+FULL total=%ums", (unsigned)(millis() - t0));
       }
       return;
     }
