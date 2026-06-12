@@ -20,8 +20,8 @@ void GrayscaleDemo::draw_plane_(DrawBuffer& buf, const uint8_t* data, int src_w,
   // Displayed dimensions after rotation.
   const int disp_w = (rotation_ & 1) ? src_h : src_w;
   const int disp_h = (rotation_ & 1) ? src_w : src_h;
-  const int ox = (DrawBuffer::kWidth - disp_w) / 2;
-  const int oy = (DrawBuffer::kHeight - disp_h) / 2;
+  const int ox = (buf.width() - disp_w) / 2;
+  const int oy = (buf.height() - disp_h) / 2;
 
   const int src_stride = (src_w + 7) / 8;
 

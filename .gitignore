@@ -15,6 +15,15 @@ cmake_install.cmake
 # Test build directories
 test/build/
 test/build_msvc/
+test/build_temp/
+test/build_vs/
+
+# Desktop/emulator build directories
+platforms/desktop/build*/
+
+# Ignore git subrepos in any _deps/ (cmake fetchcontent artifacts)
+_deps/
+
 __pycache__
 .vscode
 /test/output

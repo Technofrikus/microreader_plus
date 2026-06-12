@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "microreader/display/DeviceConfig.h"
 #include "microreader/display/DrawBuffer.h"
 
 // Lightweight IDisplay that does nothing on refresh.
@@ -24,10 +25,11 @@ class ScreenshotDisplay final : public microreader::IDisplay {
   // Uses deflate STORE blocks (no compression) — ~10x faster than stb for large books.
   // File size is ~50KB/page; binary B&W text is already sparse at 1 bit per pixel.
   static bool save_image(microreader::DrawBuffer& buf, const std::string& path) {
-    const int W = microreader::DrawBuffer::kWidth;
-    const int H = microreader::DrawBuffer::kHeight;
-    const int STRIDE = microreader::DisplayFrame::kStride;
-    const int PHYS_H = microreader::DisplayFrame::kPhysicalHeight;
+    const auto& cfg = buf.config();
+    const int W = buf.width();
+    const int H = buf.height();
+    const int STRIDE = cfg.stride;
+    const int PHYS_H = cfg.physical_height;
     const uint8_t* phys = buf.render_buf();
     const int ROW_BYTES = (W + 7) / 8;
 

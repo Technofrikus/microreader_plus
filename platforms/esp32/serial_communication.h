@@ -90,6 +90,10 @@ static volatile SerialCmdType g_cmd_type = SerialCmdType::None;
 // Set when a font has been uploaded to the partition and needs re-mmap.
 static volatile bool g_font_uploaded = false;
 
+// Model-change request: main loop persists to NVS and reboots.
+static volatile bool g_model_change_pending = false;
+static char g_device_model[4] = {};  // "x3" or "x4"
+
 // Call from the main loop. Returns true (and copies into `out`) when a fresh
 // LUT has been received since the last call.
 // Returns true and sets *type_out if a new LUT is available.
@@ -627,6 +631,26 @@ static void handle_serial_cmd() {
       // Render benchmark on the currently open page (no path argument).
       g_cmd_type = SerialCmdType::RenderBench;
       serial_write("OK\n");
+      break;
+    }
+    case 'M': {
+      // SET_MODEL: read 2 bytes ("X3" or "X4"), store, reboot.
+      uint8_t model_buf[2];
+      if (!serial_read_exact(model_buf, 2, 1000)) {
+        serial_write("ERR:model_read\n");
+        break;
+      }
+      if ((model_buf[0] == 'X' || model_buf[0] == 'x') &&
+          (model_buf[1] == '3' || model_buf[1] == '4')) {
+        g_device_model[0] = static_cast<char>(model_buf[0] | 0x20);  // lowercase
+        g_device_model[1] = static_cast<char>(model_buf[1]);
+        g_device_model[2] = '\0';
+        g_model_change_pending = true;
+        serial_write("MODEL_SET_REBOOT\n");
+        ESP_LOGI(kCmdTag, "device_model set to %s, will reboot", g_device_model);
+      } else {
+        serial_write("ERR:invalid_model\n");
+      }
       break;
     }
     default:

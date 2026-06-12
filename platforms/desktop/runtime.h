@@ -7,6 +7,7 @@
 
 #include "microreader/Input.h"
 #include "microreader/Runtime.h"
+#include "microreader/display/DeviceConfig.h"
 #include "microreader/display/DrawBuffer.h"
 
 // Window scale factor: each display pixel becomes kScale×kScale screen pixels.
@@ -14,13 +15,14 @@ static constexpr int kDisplayScale = 1;
 
 class DesktopRuntime final : public microreader::IRuntime {
  public:
-  explicit DesktopRuntime(uint32_t frame_time_ms) : frame_time_ms_(frame_time_ms) {
+  explicit DesktopRuntime(uint32_t frame_time_ms, const microreader::DeviceConfig& cfg = microreader::DeviceConfig::x4())
+      : frame_time_ms_(frame_time_ms), cfg_(cfg) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
       throw std::runtime_error(std::string("SDL_Init: ") + SDL_GetError());
     }
     window_ = SDL_CreateWindow("microreader", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                               microreader::DisplayFrame::kPhysicalWidth * kDisplayScale,
-                               microreader::DisplayFrame::kPhysicalHeight * kDisplayScale, SDL_WINDOW_SHOWN);
+                               cfg_.physical_width * kDisplayScale,
+                               cfg_.physical_height * kDisplayScale, SDL_WINDOW_SHOWN);
     if (!window_)
       throw std::runtime_error(std::string("SDL_CreateWindow: ") + SDL_GetError());
 
@@ -28,13 +30,12 @@ class DesktopRuntime final : public microreader::IRuntime {
     if (!renderer_)
       throw std::runtime_error(std::string("SDL_CreateRenderer: ") + SDL_GetError());
 
-    // Nearest-neighbour scaling so individual pixels stay crisp when zoomed.
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
-    SDL_RenderSetLogicalSize(renderer_, microreader::DisplayFrame::kPhysicalWidth,
-                             microreader::DisplayFrame::kPhysicalHeight);
+    SDL_RenderSetLogicalSize(renderer_, cfg_.physical_width,
+                             cfg_.physical_height);
 
     texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
-                                 microreader::DisplayFrame::kPhysicalWidth, microreader::DisplayFrame::kPhysicalHeight);
+                                 cfg_.physical_width, cfg_.physical_height);
     if (!texture_)
       throw std::runtime_error(std::string("SDL_CreateTexture: ") + SDL_GetError());
   }
@@ -61,16 +62,16 @@ class DesktopRuntime final : public microreader::IRuntime {
   void apply_rotation(microreader::Rotation rotation) {
     const bool sideways = rotation == microreader::Rotation::Deg90;
     const int win_w =
-        (sideways ? microreader::DisplayFrame::kPhysicalHeight : microreader::DisplayFrame::kPhysicalWidth) *
+        (sideways ? cfg_.physical_height : cfg_.physical_width) *
         kDisplayScale;
     const int win_h =
-        (sideways ? microreader::DisplayFrame::kPhysicalWidth : microreader::DisplayFrame::kPhysicalHeight) *
+        (sideways ? cfg_.physical_width : cfg_.physical_height) *
         kDisplayScale;
     SDL_SetWindowSize(window_, win_w, win_h);
     SDL_SetWindowPosition(window_, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_RenderSetLogicalSize(
-        renderer_, sideways ? microreader::DisplayFrame::kPhysicalHeight : microreader::DisplayFrame::kPhysicalWidth,
-        sideways ? microreader::DisplayFrame::kPhysicalWidth : microreader::DisplayFrame::kPhysicalHeight);
+        renderer_, sideways ? cfg_.physical_height : cfg_.physical_width,
+        sideways ? cfg_.physical_width : cfg_.physical_height);
   }
 
   // Register a bool to flip when the user presses T.
@@ -180,6 +181,7 @@ class DesktopRuntime final : public microreader::IRuntime {
   static constexpr uint8_t kQueueSize = 32;
 
   uint32_t frame_time_ms_;
+  const microreader::DeviceConfig cfg_;
   bool quit_ = false;
   bool* transition_flag_ = nullptr;
   uint8_t press_queue_[kQueueSize] = {};

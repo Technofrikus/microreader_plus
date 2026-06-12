@@ -20,8 +20,8 @@ void BouncingBallDemo::draw_all_(DrawBuffer& buf) const {
 }
 
 void BouncingBallDemo::start(DrawBuffer& buf, IRuntime& runtime) {
-  const int W = DrawBuffer::kWidth;
-  const int H = DrawBuffer::kHeight;
+  const int W = buf.width();
+  const int H = buf.height();
 
   ball_cx_ = kBallRadius;
   ball_cy_ = kBallRadius;
@@ -52,8 +52,8 @@ void BouncingBallDemo::update(const ButtonState& buttons, DrawBuffer& buf, IRunt
     return;
   }
 
-  const int W = DrawBuffer::kWidth;
-  const int H = DrawBuffer::kHeight;
+  const int W = buf.width();
+  const int H = buf.height();
 
   ball_cx_ += demo_vx_;
   ball_cy_ += demo_vy_;

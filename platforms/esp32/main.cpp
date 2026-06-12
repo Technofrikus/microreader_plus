@@ -17,10 +17,33 @@
 #include "microreader/Loop.h"
 #include "microreader/content/Book.h"
 #include "microreader/content/mrb/MrbConverter.h"
+#include "microreader/display/DeviceConfig.h"
 #include "microreader/display/DrawBuffer.h"
+#include "nvs_flash.h"
 #include "runtime.h"
 #include "sdcard.h"
 #include "serial_communication.h"
+
+// Load the device model from NVS.  Defaults to X4 (backward compatible).
+// The NVS namespace "microreader" key "device_model" stores "x3" or "x4".
+static microreader::DeviceConfig load_device_config() {
+  nvs_handle_t nvs;
+  esp_err_t err = nvs_open("microreader", NVS_READONLY, &nvs);
+  if (err != ESP_OK) {
+    ESP_LOGI("nvs", "NVS open failed (%s), defaulting to X4", esp_err_to_name(err));
+    return microreader::DeviceConfig::x4();
+  }
+  char model[4] = {};
+  size_t len = sizeof(model);
+  err = nvs_get_str(nvs, "device_model", model, &len);
+  nvs_close(nvs);
+  if (err == ESP_OK && strcmp(model, "x3") == 0) {
+    ESP_LOGI("nvs", "NVS device_model = x3");
+    return microreader::DeviceConfig::x3();
+  }
+  ESP_LOGI("nvs", "NVS device_model = %s (defaulting to X4)", err == ESP_OK ? model : "(not set)");
+  return microreader::DeviceConfig::x4();
+}
 
 static void verify_ota() {
   const esp_partition_t* running = esp_ota_get_running_partition();
@@ -87,15 +110,30 @@ extern "C" void app_main(void) {
   verify_ota();
   verify_wakeup_press();
 
+  // Initialise NVS.  Try erase+re-init once on failure (fresh flash / corruption).
+  {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_LOGW("nvs", "NVS needs erase, erasing...");
+      nvs_flash_erase();
+      err = nvs_flash_init();
+    }
+    if (err != ESP_OK) {
+      ESP_LOGE("nvs", "NVS init failed (%s), continuing", esp_err_to_name(err));
+    }
+  }
+
+  // Load device config from NVS (defaults to X4).
+  static const microreader::DeviceConfig device_config = load_device_config();
+
   // Initialise the appended asset blob (fonts, sleep images, ...).
   // Must happen before FontManager::init() and any sleep-image rendering.
   asset_blob::g_assets.init();
-
   static Esp32InputSource input;
-  static EInkDisplay epd;
+  static EInkDisplay epd(device_config);
   static Esp32Runtime runtime(50, input.get_adc_handle());
   static microreader::Application app;
-  static microreader::DrawBuffer buf(epd);
+  static microreader::DrawBuffer buf(epd, device_config);
 
 #ifndef QEMU_BUILD
   // After a software reset (post-flash) wait briefly for the serial monitor.
@@ -168,6 +206,21 @@ extern "C" void app_main(void) {
     if (g_font_uploaded) {
       g_font_uploaded = false;
       font_mgr.on_serial_upload();
+    }
+
+    // Persist model change to NVS and reboot.
+    if (g_model_change_pending) {
+      g_model_change_pending = false;
+      nvs_handle_t nvs;
+      if (nvs_open("microreader", NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_str(nvs, "device_model", g_device_model);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        ESP_LOGI("nvs", "device_model saved as %s — rebooting", g_device_model);
+      } else {
+        ESP_LOGE("nvs", "failed to open NVS for model write");
+      }
+      esp_restart();
     }
 
     // Check if a new grayscale LUT was uploaded via serial.

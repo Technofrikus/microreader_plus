@@ -67,10 +67,9 @@ static uint16_t le16(const uint8_t* p)  { return (uint16_t)p[0] | ((uint16_t)p[1
 
 namespace microreader {
 
-bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path) {
-    static constexpr int OUT_W      = 800;
-    static constexpr int OUT_H      = 480;
-    static constexpr int OUT_STRIDE = (OUT_W + 3) / 4;  // 200 bytes per row
+bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
+                          int OUT_W, int OUT_H) {
+    const int OUT_STRIDE = (OUT_W + 3) / 4;  // bytes per row
 
     FILE* f = std::fopen(bmp_path, "rb");
     if (!f) return false;

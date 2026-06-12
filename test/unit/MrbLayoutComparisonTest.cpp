@@ -133,7 +133,7 @@ class MrbLayoutComparisonTest : public ::testing::Test {
         << epub_name << " chapter count mismatch";
 
     FixedFont font(16, 20);
-    PageOptions opts(DrawBuffer::kWidth, DrawBuffer::kHeight, 20, 16, Alignment::Start);
+    PageOptions opts(DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), 20, 16, Alignment::Start);
 
     for (uint16_t ci = 0; ci < mrb.chapter_count(); ++ci) {
       // EPUB path: load chapter into memory.
@@ -249,7 +249,7 @@ TEST_P(BulkMrbComparisonTest, LayoutMatchesEpub) {
   ASSERT_EQ(mrb.chapter_count(), static_cast<uint16_t>(book.chapter_count())) << filename << " chapter count mismatch";
 
   FixedFont font(16, 20);
-  PageOptions opts(DrawBuffer::kWidth, DrawBuffer::kHeight, 20, 16, Alignment::Start);
+  PageOptions opts(DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), 20, 16, Alignment::Start);
 
   size_t total_pages = 0;
   for (uint16_t ci = 0; ci < mrb.chapter_count(); ++ci) {

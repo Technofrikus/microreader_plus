@@ -1217,7 +1217,7 @@ TEST(PageLayout, InlineImageBottomAlignsWithBaseline) {
   // Image bottom should align with the baseline of the first text line.
   auto ch = make_inline_image_chapter(80, 75, "URIOUSER and curiouser cried Alice she was so much surprised");
   TestChapterSource src(ch);
-  PageOptions opts(DrawBuffer::kWidth, DrawBuffer::kHeight, 0, 20);
+  PageOptions opts(DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), 0, 20);
   auto page = TextLayout(font8, opts, src, PagePosition(0, 0)).layout();
 
   ASSERT_TRUE(page.text_items()[0].inline_image.has_value());
@@ -1241,7 +1241,7 @@ TEST(PageLayout, InlineImageFirstLineIndented) {
   // First line text should be indented by image width + 4px gap
   auto ch = make_inline_image_chapter(80, 75, "URIOUSER and curiouser cried Alice she was so much surprised");
   TestChapterSource src(ch);
-  PageOptions opts(DrawBuffer::kWidth, DrawBuffer::kHeight, 0, 20);
+  PageOptions opts(DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), 0, 20);
   auto page = TextLayout(font8, opts, src, PagePosition(0, 0)).layout();
 
   ASSERT_GE(page.text_items().size(), 2u);
@@ -1317,7 +1317,7 @@ TEST(PageLayout, InlineImageNoOverlapWithText) {
       80, 75,
       "URIOUSER and curiouser cried Alice she was so much surprised that for a moment she quite forgot how to speak");
   TestChapterSource src(ch);
-  PageOptions opts(DrawBuffer::kWidth, DrawBuffer::kHeight, 0, 20);
+  PageOptions opts(DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), 0, 20);
   auto page = TextLayout(font8, opts, src, PagePosition(0, 0)).layout();
 
   ASSERT_TRUE(page.text_items()[0].inline_image.has_value());

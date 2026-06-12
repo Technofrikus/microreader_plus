@@ -76,14 +76,23 @@ def main():
     parser.add_argument(
         "--save-layers", action="store_true", help="Save a grayscale preview PNG for debugging"
     )
+    parser.add_argument(
+        "--width", type=int, default=800, help="Output width (default: 800)"
+    )
+    parser.add_argument(
+        "--height", type=int, default=480, help="Output height (default: 480)"
+    )
     args = parser.parse_args()
+
+    out_w = args.width
+    out_h = args.height
 
     img = Image.open(args.input).convert("L")
 
     if img.width < img.height:
         img = img.transpose(Image.Transpose.ROTATE_90)
 
-    img = ImageOps.fit(img, (800, 480), method=Image.Resampling.LANCZOS)
+    img = ImageOps.fit(img, (out_w, out_h), method=Image.Resampling.LANCZOS)
 
     levels = quantize_4level_atkinson(img)  # 0=white, 1=light gray, 2=dark gray, 3=black
 
