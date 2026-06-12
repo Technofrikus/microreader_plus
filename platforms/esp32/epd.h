@@ -438,7 +438,6 @@ class EInkDisplay : public microreader::IDisplay {
   bool x3_red_ram_synced_ = false;
   enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2 };
   X3LutSet x3_loaded_luts_ = X3LutSet::NONE;
-  uint8_t x3_initial_full_syncs_remaining_ = 0;
 
   const microreader::DeviceConfig config_;
   spi_device_handle_t spi_;
@@ -499,9 +498,6 @@ class EInkDisplay : public microreader::IDisplay {
     if (config_.model == microreader::DeviceModel::X3) {
       // X3 full sync: IMG LUTs (strong 47-group waveform) + condition pass
       uint32_t t0 = millis();
-      const bool needsCondition = (x3_initial_full_syncs_remaining_ > 0);
-      if (needsCondition)
-        x3_initial_full_syncs_remaining_ = 0;
 
       // Phase 1: IMG LUTs, inverted data to both RAMs
       x3LoadLuts_(X3LutSet::IMG);
@@ -512,16 +508,14 @@ class EInkDisplay : public microreader::IDisplay {
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
       x3Refresh_(false);
 
-      // Phase 2: Condition pass — FULL LUTs, non-inverted to 0x13 (0x10 still inverted)
-      // Controller drives every pixel at full strength to settle the display.
-      if (needsCondition) {
-        x3LoadLuts_(X3LutSet::FULL);
-        sendCommand(CMD_X3_VCOM_DI);
-        sendData(0x29);
-        sendData(0x07);
-        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
-        x3Refresh_(false);
-      }
+      // Phase 2: Condition pass — FULL LUTs (different timing breaks symmetry),
+      // non-inverted to 0x13 (0x10 still inverted).
+      x3LoadLuts_(X3LutSet::FULL);
+      sendCommand(CMD_X3_VCOM_DI);
+      sendData(0x29);
+      sendData(0x07);
+      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+      x3Refresh_(false);
 
       // Sync OLD RAM (0x10) with non-inverted frame for next fast diff
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
@@ -590,8 +584,8 @@ class EInkDisplay : public microreader::IDisplay {
     wakeIfNeeded();
     waitWhileBusy();
     if (config_.model == microreader::DeviceModel::X3) {
-      sendCommand(CMD_X3_WRITE_NEW);
-      sendData(data, BUFFER_SIZE);
+      // X3 requires Y-mirrored rows, like papyrix grayscale pipeline.
+      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, data, false);
     } else {
       setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
       writeRamBuffer(CMD_WRITE_RAM_BW, data, BUFFER_SIZE);
@@ -602,8 +596,8 @@ class EInkDisplay : public microreader::IDisplay {
     wakeIfNeeded();
     waitWhileBusy();
     if (config_.model == microreader::DeviceModel::X3) {
-      sendCommand(CMD_X3_WRITE_OLD);
-      sendData(data, BUFFER_SIZE);
+      // X3 requires Y-mirrored rows, like papyrix grayscale pipeline.
+      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, data, false);
     } else {
       setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
       writeRamBuffer(CMD_WRITE_RAM_RED, data, BUFFER_SIZE);
@@ -1090,7 +1084,6 @@ class EInkDisplay : public microreader::IDisplay {
     x3_loaded_luts_ = X3LutSet::FULL;
 
     x3_red_ram_synced_ = false;
-    x3_initial_full_syncs_remaining_ = 2;
 
     isScreenOn = false;
 

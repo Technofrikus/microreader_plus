@@ -368,10 +368,10 @@ class DrawBuffer {
   void show_grayscale_image(const uint8_t* lsb, const uint8_t* msb, uint16_t w, uint16_t h) {
     fill(true);
     draw_image(lsb, 0, 0, w, h);
-    display_.write_ram_bw(inactive_());
+    display_.write_ram_red(inactive_());    // LSB → OLD (0x10)
     fill(true);
     draw_image(msb, 0, 0, w, h);
-    display_.write_ram_red(inactive_());
+    display_.write_ram_bw(inactive_());     // MSB → NEW (0x13)
     display_.grayscale_refresh(/*turnOffScreen=*/true);
     display_.deep_sleep();
   }
@@ -649,6 +649,36 @@ class DrawBuffer {
   };
 
   void show_mgr2_sleep_(Mgr2Source_& src, bool deep_sleep_after) {
+    if (config_.model == DeviceModel::X3) {
+      // X3: render grayscale MGR2 as 1-bit B&W via full_refresh (IMG+cond).
+      // MGR2 images are 800x480 (X4 size); center on X3 (792x528).
+      fill(false);
+      const int src_w = static_cast<int>(src.w);
+      const int src_h = static_cast<int>(src.h);
+      const int disp_w = config_.physical_width;
+      const int disp_h = config_.physical_height;
+      const int x_offset = (src_w - disp_w) / 2;   // clip sides when src wider
+      const int y_offset = (disp_h - src_h) / 2;    // pad when src shorter
+      const int draw_w = std::min(src_w, disp_w);
+      const int draw_h = std::min(src_h, disp_h);
+      for (int y = 0; y < draw_h; ++y) {
+        const uint8_t* src_row = src.get_row(static_cast<uint16_t>(y));
+        uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
+        for (int x = 0; x < draw_w; x++) {
+          const int src_x = x + x_offset;
+          int state = (src_row[src_x / 4] >> (6 - (src_x % 4) * 2)) & 0x3;
+          if (state >= 2)
+            dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+        }
+      }
+      draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
+      display_.full_refresh(inactive_(), RefreshMode::Full, true);
+      if (deep_sleep_after)
+        display_.deep_sleep();
+      return;
+    }
+
+    // Non-X3 grayscale path: dual-plane MGR2 → write LSB/MSB to separate RAMs.
     auto decode_pass = [&](bool red_bit) {
       fill(false);
       const int max_x = std::min(static_cast<int>(src.w), config_.physical_width);
@@ -662,13 +692,12 @@ class DrawBuffer {
         }
       }
     };
-
     decode_pass(false);
     draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
-    display_.write_ram_bw(inactive_());
+    display_.write_ram_red(inactive_());
     decode_pass(true);
     draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
-    display_.write_ram_red(inactive_());
+    display_.write_ram_bw(inactive_());
     display_.grayscale_refresh_1pass(/*turnOffScreen=*/true);
     if (deep_sleep_after)
       display_.deep_sleep();
