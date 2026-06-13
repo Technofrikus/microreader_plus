@@ -472,11 +472,10 @@ class EInkDisplay : public microreader::IDisplay {
 
   // ---- X3 state tracking ----
   bool x3_red_ram_synced_ = false;
-  bool x3_needs_old_sync_ = false;
-  const uint8_t* x3_old_sync_data_ = nullptr;
   bool x3_partial_mode_active_ = false;
   bool x3_first_refresh_ = false;
   int x3_cmd12_in_flight_ = 0;
+  uint8_t x3_initial_syncs_remaining_ = 0;
 
   bool x3_region_needs_sync_ = false;
   static constexpr int kX3RegionSyncBufMax = 1024;
@@ -546,9 +545,6 @@ class EInkDisplay : public microreader::IDisplay {
     waitWhileBusy();
 
     if (config_.model == microreader::DeviceModel::X3) {
-      // Clear any pending fire-and-forget OLD sync (full_refresh handles its own).
-      x3_needs_old_sync_ = false;
-      x3_old_sync_data_ = nullptr;
       x3_region_needs_sync_ = false;
 
       if (x3_partial_mode_active_) {
@@ -558,28 +554,22 @@ class EInkDisplay : public microreader::IDisplay {
 
       uint32_t t0 = millis();
 
-      // FULL LUT with forced differential: NEW = content, OLD = ~content.
-      // Every pixel transitions BW or WB → maximum VDH/VDL drive on ALL pixels.
-      // Two passes (2×260ms drive) to clear image retention from previous screen.
-      x3LoadLuts_(X3LutSet::FULL);
+      x3LoadLuts_(X3LutSet::IMG);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0xA9);
       sendData(0x07);
 
-      for (int pass = 0; pass < 2; pass++) {
-        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
-        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
-        x3Refresh_(false);
-        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
-      }
-
+      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, true);
+      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
+      x3Refresh_(false);
+      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
       x3_red_ram_synced_ = true;
 
       if (turnOffScreen)
         x3PowerOff_();
 
       x3_first_refresh_ = false;
-      ESP_LOGI("X3", "full_refresh: FULL diff x2 total=%ums", (unsigned)(millis() - t0));
+      ESP_LOGI("X3", "full_refresh: IMG sync total=%ums", (unsigned)(millis() - t0));
       return;
     }
 
@@ -592,16 +582,9 @@ class EInkDisplay : public microreader::IDisplay {
 
   void partial_refresh(const uint8_t* new_pixels, const uint8_t* prev_pixels) override {
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 differential: fire-and-forget pattern.
-      // CMD12 runs in background; next call's waitWhileBusy catches up.
       wakeIfNeeded();
-      uint32_t t_wait = millis();
-      waitWhileBusy();  // catches previous fire-and-forget CMD12
-      uint32_t t_wait_ms = millis() - t_wait;
+      waitWhileBusy();
 
-      // When exiting partial-window mode, OLD RAM doesn't match the screen
-      // (partial_refresh_region only wrote to NEW RAM). Force a full_refresh
-      // to re-sync everything cleanly.
       if (x3_partial_mode_active_) {
         sendCommand(CMD_X3_PARTIAL_OUT);
         x3_partial_mode_active_ = false;
@@ -609,45 +592,34 @@ class EInkDisplay : public microreader::IDisplay {
         return;
       }
 
-      // Deferred OLD sync from previous fire-and-forget refresh.
-      // Must wait for BUSY before touching RAM (controller reads RAM during CMD12).
-      if (x3_needs_old_sync_) {
-        x3_red_ram_synced_ = true;
-        x3_needs_old_sync_ = false;
-        // x3_old_sync_data_ is the new_pixels from the previous call, which is now
-        // prev_pixels for this call (DrawBuffer swaps buffers between calls).
-        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, x3_old_sync_data_, false);
+      if (x3_initial_syncs_remaining_ > 0 || !x3_red_ram_synced_) {
+        full_refresh(new_pixels, microreader::RefreshMode::Full, false);
+        if (x3_initial_syncs_remaining_ > 0) {
+          x3_initial_syncs_remaining_--;
+          if (x3_initial_syncs_remaining_ == 0) {
+            x3ConditioningPass_(new_pixels);
+          }
+        }
+        return;
       }
 
       x3LoadLuts_(X3LutSet::TURBO);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0x29);
       sendData(0x07);
-      uint32_t t0 = millis();
-      uint32_t spi_bytes = 0;
-      if (x3_red_ram_synced_) {
-        ESP_LOGD("X3", "partial_refresh: synced path");
-        spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_NEW, new_pixels, false);
-      } else {
-        ESP_LOGD("X3", "partial_refresh: full-sync path");
-        spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_OLD, prev_pixels, false);
-        spi_bytes += x3SendMirroredPlane_(CMD_X3_WRITE_NEW, new_pixels, false);
-      }
 
-      // Fire CMD12 in background — no wait.
+      uint32_t t0 = millis();
+
+      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, new_pixels, false);
+
       x3PowerOn_();
       sendCommand(CMD_X3_REFRESH);
-      ++x3_cmd12_in_flight_;
+      x3WaitBusy_(" X3_CMD12");
 
-      // Defer OLD sync to next call (can't touch RAM during refresh).
-      x3_needs_old_sync_ = true;
-      x3_old_sync_data_ = new_pixels;
+      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, new_pixels, false);
+      x3_red_ram_synced_ = true;
 
-      uint32_t dt = millis() - t0;
-      uint32_t t_total = millis() - t_wait;
-      ESP_LOGI("X3", "partial_refresh: LUTS=TURBO VCOM=0x29 synced=%d spi=%uB fire=%ums wait=%ums total=%ums",
-               (int)x3_red_ram_synced_, (unsigned)spi_bytes, (unsigned)dt,
-               (unsigned)t_wait_ms, (unsigned)t_total);
+      ESP_LOGI("X3", "partial_refresh: TURBO+0x29 sync=%ums", (unsigned)(millis() - t0));
       return;
     }
 
@@ -739,8 +711,6 @@ class EInkDisplay : public microreader::IDisplay {
       return;
     if (config_.model == microreader::DeviceModel::X3) {
       // X3 grayscale revert: TURBO LUTs, sync both RAMs with prev_pixels
-      x3_needs_old_sync_ = false;
-      x3_old_sync_data_ = nullptr;
       x3_region_needs_sync_ = false;
       in_grayscale_mode_ = false;
       wakeIfNeeded();
@@ -1077,21 +1047,8 @@ class EInkDisplay : public microreader::IDisplay {
 
   void clearDisplay() {
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3: write all-white to both RAMs via bulk data
-      const uint32_t len = BUFFER_SIZE;
-      // Build a temporary all-white buffer (up to 256 bytes at a time)
-      uint8_t white[256];
-      memset(white, 0xFF, sizeof(white));
-      sendCommand(CMD_X3_WRITE_NEW);
-      for (uint32_t off = 0; off < len; off += sizeof(white)) {
-        uint32_t chunk = (len - off < sizeof(white)) ? (len - off) : sizeof(white);
-        sendData(white, chunk);
-      }
-      sendCommand(CMD_X3_WRITE_OLD);
-      for (uint32_t off = 0; off < len; off += sizeof(white)) {
-        uint32_t chunk = (len - off < sizeof(white)) ? (len - off) : sizeof(white);
-        sendData(white, chunk);
-      }
+      x3SendFillPlane_(CMD_X3_WRITE_NEW, 0xFF);
+      x3SendFillPlane_(CMD_X3_WRITE_OLD, 0xFF);
       return;
     }
     sendCommand(CMD_AUTO_WRITE_BW_RAM);
@@ -1228,11 +1185,10 @@ class EInkDisplay : public microreader::IDisplay {
     sendData(kX3LutWbFull, 42);
     sendCommand(CMD_X3_WRITE_LUT_BB);
     sendData(kX3LutBbFull, 42);
-    x3_loaded_luts_ = X3LutSet::FULL;
-
-    x3_red_ram_synced_ = true;
-    x3_first_refresh_ = true;
     x3_loaded_luts_ = X3LutSet::NONE;
+    x3_red_ram_synced_ = false;
+    x3_first_refresh_ = true;
+    x3_initial_syncs_remaining_ = 2;
 
     isScreenOn = false;
 
@@ -1240,11 +1196,11 @@ class EInkDisplay : public microreader::IDisplay {
   }
 
   uint32_t x3SendMirroredPlane_(uint8_t cmd, const uint8_t* data, bool invertBits) {
-    static constexpr size_t kChunk = 4092;
     const uint32_t total = static_cast<uint32_t>(DISPLAY_HEIGHT) * DISPLAY_WIDTH_BYTES;
     uint32_t t0 = millis();
     sendCommand(cmd);
     gpio_set_level(EPD_DC, 1);
+    gpio_set_level(EPD_CS, 0);
     for (uint16_t y = 0; y < DISPLAY_HEIGHT; y++) {
       const uint16_t srcY = static_cast<uint16_t>(DISPLAY_HEIGHT - 1 - y);
       const uint8_t* src = data + static_cast<uint32_t>(srcY) * DISPLAY_WIDTH_BYTES;
@@ -1252,27 +1208,18 @@ class EInkDisplay : public microreader::IDisplay {
         uint8_t row[128];
         for (uint16_t x = 0; x < DISPLAY_WIDTH_BYTES; x++)
           row[x] = static_cast<uint8_t>(~src[x]);
-        size_t offset = 0;
-        while (offset < DISPLAY_WIDTH_BYTES) {
-          const size_t chunk = (DISPLAY_WIDTH_BYTES - offset < kChunk) ? (DISPLAY_WIDTH_BYTES - offset) : kChunk;
-          gpio_set_level(EPD_CS, 0);
-          spi_transaction_t t{}; t.length = chunk * 8; t.tx_buffer = row + offset;
-          spi_device_polling_transmit(spi_, &t);
-          gpio_set_level(EPD_CS, 1);
-          offset += chunk;
-        }
+        spi_transaction_t t{};
+        t.length = static_cast<size_t>(DISPLAY_WIDTH_BYTES) * 8;
+        t.tx_buffer = row;
+        spi_device_polling_transmit(spi_, &t);
       } else {
-        size_t offset = 0;
-        while (offset < DISPLAY_WIDTH_BYTES) {
-          const size_t chunk = (DISPLAY_WIDTH_BYTES - offset < kChunk) ? (DISPLAY_WIDTH_BYTES - offset) : kChunk;
-          gpio_set_level(EPD_CS, 0);
-          spi_transaction_t t{}; t.length = chunk * 8; t.tx_buffer = src + offset;
-          spi_device_polling_transmit(spi_, &t);
-          gpio_set_level(EPD_CS, 1);
-          offset += chunk;
-        }
+        spi_transaction_t t{};
+        t.length = static_cast<size_t>(DISPLAY_WIDTH_BYTES) * 8;
+        t.tx_buffer = src;
+        spi_device_polling_transmit(spi_, &t);
       }
     }
+    gpio_set_level(EPD_CS, 1);
     uint32_t dt = millis() - t0;
     ESP_LOGD("X3", "Plane 0x%02x: %uB in %ums", cmd, (unsigned)total, (unsigned)dt);
     return total;
@@ -1281,35 +1228,60 @@ class EInkDisplay : public microreader::IDisplay {
   void x3SendMirroredRegion_(uint8_t cmd, const uint8_t* buf, int stride, int h) {
     sendCommand(cmd);
     gpio_set_level(EPD_DC, 1);
+    gpio_set_level(EPD_CS, 0);
     for (int y = 0; y < h; y++) {
       const uint8_t* row = buf + static_cast<uint32_t>(h - 1 - y) * stride;
-      gpio_set_level(EPD_CS, 0);
       spi_transaction_t t{};
       t.length = static_cast<size_t>(stride) * 8;
       t.tx_buffer = row;
       spi_device_polling_transmit(spi_, &t);
-      gpio_set_level(EPD_CS, 1);
     }
+    gpio_set_level(EPD_CS, 1);
   }
 
   void x3SendFillPlane_(uint8_t cmd, uint8_t fill) {
-    static constexpr size_t kChunk = 4092;
-    const uint32_t total = static_cast<uint32_t>(DISPLAY_HEIGHT) * DISPLAY_WIDTH_BYTES;
     uint8_t row[128];
     memset(row, fill, DISPLAY_WIDTH_BYTES);
     sendCommand(cmd);
     gpio_set_level(EPD_DC, 1);
+    gpio_set_level(EPD_CS, 0);
     for (uint16_t y = 0; y < DISPLAY_HEIGHT; y++) {
-      size_t offset = 0;
-      while (offset < DISPLAY_WIDTH_BYTES) {
-        const size_t chunk = (DISPLAY_WIDTH_BYTES - offset < kChunk) ? (DISPLAY_WIDTH_BYTES - offset) : kChunk;
-        gpio_set_level(EPD_CS, 0);
-        spi_transaction_t t{}; t.length = chunk * 8; t.tx_buffer = row + offset;
-        spi_device_polling_transmit(spi_, &t);
-        gpio_set_level(EPD_CS, 1);
-        offset += chunk;
-      }
+      spi_transaction_t t{};
+      t.length = static_cast<size_t>(DISPLAY_WIDTH_BYTES) * 8;
+      t.tx_buffer = row;
+      spi_device_polling_transmit(spi_, &t);
     }
+    gpio_set_level(EPD_CS, 1);
+  }
+
+  void x3ConditioningPass_(const uint8_t* pixels) {
+    x3LoadLuts_(X3LutSet::FULL);
+    sendCommand(CMD_X3_VCOM_DI);
+    sendData(0x29);
+    sendData(0x07);
+
+    sendCommand(CMD_X3_PARTIAL_IN);
+    sendCommand(CMD_X3_PARTIAL_WINDOW);
+    sendData(0x00); sendData(0x00);
+    sendData(static_cast<uint8_t>((DISPLAY_WIDTH - 1) >> 8));
+    sendData(static_cast<uint8_t>((DISPLAY_WIDTH - 1) & 0xFF));
+    sendData(0x00); sendData(0x00);
+    sendData(static_cast<uint8_t>((DISPLAY_HEIGHT - 1) >> 8));
+    sendData(static_cast<uint8_t>((DISPLAY_HEIGHT - 1) & 0xFF));
+    sendData(0x01);
+
+    x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+
+    sendCommand(CMD_X3_PARTIAL_OUT);
+
+    x3PowerOn_();
+    sendCommand(CMD_X3_REFRESH);
+    x3WaitBusy_(" X3_CMD12(cond)");
+
+    x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
+    x3_red_ram_synced_ = true;
+
+    ESP_LOGI("X3", "conditioning pass done");
   }
 
   void x3LoadLuts_(X3LutSet set) {

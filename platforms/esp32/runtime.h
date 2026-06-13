@@ -4,7 +4,7 @@
 #include <cmath>
 
 #include "driver/gpio.h"
-#include "driver/i2c_master.h"
+#include "driver/i2c.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -128,37 +128,36 @@ class Esp32Runtime final : public microreader::IRuntime {
 
   // --- X3: BQ27220 on I2C ---
   void init_x3_battery_i2c() {
-    i2c_master_bus_config_t bus_cfg{};
-    bus_cfg.i2c_port = I2C_NUM_0;
-    bus_cfg.sda_io_num = X3_I2C_SDA;
-    bus_cfg.scl_io_num = X3_I2C_SCL;
-    bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
-    bus_cfg.glitch_ignore_cnt = 7;
-    bus_cfg.flags.enable_internal_pullup = 1;
-    if (i2c_new_master_bus(&bus_cfg, &x3_i2c_bus_) != ESP_OK) {
-      ESP_LOGE("batt", "x3: i2c bus init failed");
-      return;
-    }
-
-    i2c_device_config_t dev_cfg{};
-    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    dev_cfg.device_address = BQ27220_ADDR;
-    dev_cfg.scl_speed_hz = X3_I2C_FREQ;
-    if (i2c_master_bus_add_device(x3_i2c_bus_, &dev_cfg, &x3_bq27220_dev_) != ESP_OK) {
-      ESP_LOGE("batt", "x3: bq27220 add device failed");
-      return;
-    }
-
+    // Per papyrix-reader: I2C is brought up and torn down for each read.
+    // Just mark ready; actual init happens in read_bq27220_reg_().
     x3_i2c_initialized_ = true;
-    ESP_LOGI("batt", "x3: bq27220 i2c initialized");
+    ESP_LOGI("batt", "x3: bq27220 i2c ready (per-read init)");
   }
 
+  // Bring up I2C bus, read 2 bytes from reg, tear down.  Matches the
+  // papyrix-reader pattern (Wire.begin+end per read) to avoid bus lock.
   uint16_t read_bq27220_reg_(uint8_t reg) const {
-    if (!x3_i2c_initialized_ || !x3_bq27220_dev_) return 0;
+    if (!x3_i2c_initialized_) return 0;
+
+    i2c_config_t conf{};
+    conf.mode = I2C_MODE_MASTER;
+    conf.sda_io_num = X3_I2C_SDA;
+    conf.scl_io_num = X3_I2C_SCL;
+    conf.sda_pullup_en = GPIO_PULLUP_DISABLE;
+    conf.scl_pullup_en = GPIO_PULLUP_DISABLE;
+    conf.master.clk_speed = X3_I2C_FREQ;
+    if (i2c_param_config(I2C_NUM_0, &conf) != ESP_OK) return 0;
+    if (i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0) != ESP_OK) return 0;
+
     uint8_t wbuf[1] = {reg};
     uint8_t rbuf[2] = {};
-    esp_err_t err = i2c_master_transmit_receive(
-        x3_bq27220_dev_, wbuf, sizeof(wbuf), rbuf, sizeof(rbuf), pdMS_TO_TICKS(10));
+    esp_err_t err = i2c_master_write_read_device(
+        I2C_NUM_0, BQ27220_ADDR, wbuf, sizeof(wbuf), rbuf, sizeof(rbuf), pdMS_TO_TICKS(10));
+
+    i2c_driver_delete(I2C_NUM_0);
+    gpio_set_direction(X3_I2C_SDA, GPIO_MODE_INPUT);
+    gpio_set_direction(X3_I2C_SCL, GPIO_MODE_INPUT);
+
     if (err != ESP_OK) {
       ESP_LOGW("batt", "x3: bq27220 read reg 0x%02x failed: %s", reg, esp_err_to_name(err));
       return 0;
@@ -195,7 +194,5 @@ class Esp32Runtime final : public microreader::IRuntime {
 
   // X3 I2C state
   bool x3_i2c_initialized_ = false;
-  i2c_master_bus_handle_t x3_i2c_bus_ = nullptr;
-  i2c_master_dev_handle_t x3_bq27220_dev_ = nullptr;
   mutable std::optional<uint8_t> x3_last_pct_;
 };
