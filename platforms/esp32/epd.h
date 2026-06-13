@@ -515,7 +515,7 @@ class EInkDisplay : public microreader::IDisplay {
     spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
 
     spi_device_interface_config_t dev{};
-    dev.clock_speed_hz = config_.model == microreader::DeviceModel::X3 ? 20 * 1000 * 1000 : 40 * 1000 * 1000;
+    dev.clock_speed_hz = config_.model == microreader::DeviceModel::X3 ? 10 * 1000 * 1000 : 20 * 1000 * 1000;
     dev.mode = 0;
     dev.spics_io_num = -1;
     dev.queue_size = 1;

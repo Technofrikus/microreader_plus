@@ -131,7 +131,7 @@ extern "C" void app_main(void) {
   asset_blob::g_assets.init();
   static Esp32InputSource input;
   static EInkDisplay epd(device_config);
-  static Esp32Runtime runtime(50, input.get_adc_handle());
+  static Esp32Runtime runtime(50, input.get_adc_handle(), device_config.model);
   static microreader::Application app;
   static microreader::DrawBuffer buf(epd, device_config);
 
