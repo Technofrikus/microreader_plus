@@ -822,7 +822,7 @@ class EInkDisplay : public microreader::IDisplay {
                  (unsigned)(millis() - t_enter));
       }
 
-      x3LoadLuts_(X3LutSet::FULL);
+      x3LoadLuts_(X3LutSet::TURBO);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0x29);
       sendData(0x07);
