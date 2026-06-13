@@ -85,7 +85,32 @@ Includes a desktop SDL2 emulator for development without hardware.
 
 Books (`.epub`) can go anywhere on the SD card — the device scans recursively from the root. Fonts (`.mfb`) go in the `fonts/` folder on the SD card.
 
-Simply copy files to the SD card while it is connected to your computer, then reinsert it into the device.
+There are three ways to transfer content while the device is connected via USB:
+
+### Calibre Plugin
+
+Install the plugin to send books directly from [Calibre](https://calibre-ebook.com):
+
+1. In Calibre: **Preferences → Plugins → Load plugin from file** → select `tools/calibre-plugin/microreader.zip`
+2. Restart Calibre.
+
+The device is detected automatically (VID `0x303A` / PID `0x1001`). Books on the device show checkmarks in the library; you can send, delete, and download books from the Device menu.
+
+> Requires Calibre 5+ and the device connected over USB.
+
+### Browser Manager
+
+Open `tools/microreader-manager.html` in Chrome/Edge/Firefox (Web Serial API). It provides a file browser, EPUB/font/sleep-image upload, and auto-reconnects when the page is refreshed.
+
+### Command Line
+
+```powershell
+# Upload an EPUB
+python tools/serial_cmd.py --port COM4 --upload "path/to/book.epub"
+
+# List books
+python tools/serial_cmd.py --port COM4 --list
+```
 
 ## Sleep Screen
 
@@ -99,6 +124,7 @@ The first time an image is shown it is converted and cached; subsequent sleeps l
 
 ```powershell
 python tools/serial_cmd.py --port COM4 --upload-sleep "path/to/my_image.bmp"
+# or use the browser manager (tools/microreader-manager.html)
 ```
 
 **Desktop emulator:** copy any `.bmp` file into `sd/.sleep/`.
@@ -115,15 +141,17 @@ Open **Settings → Sleep Image**:
 ## Project Structure
 
 ```
-lib/microreader/       shared core (platform-agnostic C++20)
-  content/             EPUB parsing, layout, MRB binary format
-  display/             Canvas, DisplayQueue, Font interfaces
-  screens/             UI screen implementations
-platforms/desktop/     SDL2 emulator
-platforms/esp32/       ESP-IDF + PlatformIO firmware
-test/                  Google Test suite
-tools/                 Python scripts
-resources/             Fonts, sleep images
+lib/microreader/          shared core (platform-agnostic C++20)
+  content/                EPUB parsing, layout, MRB binary format
+  display/                Canvas, DisplayQueue, Font interfaces
+  screens/                UI screen implementations
+platforms/desktop/        SDL2 emulator
+platforms/esp32/          ESP-IDF + PlatformIO firmware
+test/                     Google Test suite
+tools/                    Python scripts and dev tools
+  calibre-plugin/         Calibre device plugin (build.ps1 → microreader.zip)
+  microreader-manager.html  browser-based file manager (Web Serial API)
+resources/                Fonts, sleep images
 ```
 
 ## Building
@@ -237,6 +265,36 @@ To add a new language:
 2. Generate the header: `python tools/generate_trie_header.py tools/hyphenation/<lang>.bin lib/microreader/content/hyphenation/Liang/hyph-<lang>.trie.h <lang>`
 3. Add the new enum value to `HyphenationLang` in `Hyphenation.h`
 4. Add a `#include` + `case` in `Hyphenation.cpp` (`hyphenate_word`) and an `ieq` check in `detect_language`
+
+## Calibre Plugin Development
+
+The plugin source lives in `tools/calibre-plugin/`. It bundles `pyserial` (the `serial/` subfolder) because Calibre's embedded Python doesn't include it.
+
+### Build
+
+```powershell
+cd tools/calibre-plugin
+.\build.ps1   # packages __init__.py + serial/ into microreader.zip
+              # and copies it to %APPDATA%\calibre\plugins\Microreader.zip
+```
+
+### Debug
+
+Launch Calibre in debug mode so plugin output is visible in the terminal:
+
+```powershell
+.\launch-debug.ps1   # equivalent to: calibre-debug -g
+```
+
+All `print()` calls in `__init__.py` appear in that terminal, prefixed with `[Microreader]`.
+
+### Protocol smoke test (no Calibre needed)
+
+```powershell
+& "C:\Program Files\Calibre2\calibre-debug.exe" -e test.py
+```
+
+This opens the serial port directly and verifies device detection and the CMND protocol without starting the full Calibre GUI.
 
 ## QEMU Testing (no hardware needed)
 

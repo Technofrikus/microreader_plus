@@ -16,6 +16,7 @@
 #include "microreader/HeapLog.h"
 #include "microreader/Loop.h"
 #include "microreader/content/Book.h"
+#include "microreader/content/BookIndex.h"
 #include "microreader/content/mrb/MrbConverter.h"
 #include "microreader/display/DeviceConfig.h"
 #include "microreader/firmware/FirmwareMeta.h"
@@ -246,6 +247,12 @@ extern "C" void app_main(void) {
         ESP_LOGE("nvs", "failed to open NVS for model write");
       }
       esp_restart();
+    }
+
+    // Check if a new book was uploaded via serial and update the book index.
+    if (g_book_uploaded) {
+      g_book_uploaded = false;
+      microreader::BookIndex::instance().index_file(g_new_book_path, buf);
     }
 
     // Check if a new grayscale LUT was uploaded via serial.

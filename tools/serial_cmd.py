@@ -321,7 +321,8 @@ def send_list_books_raw(ser: serial.Serial) -> list[str]:
         if line == "END":
             break
         if started:
-            result.append(line)
+            # Format is now "path|title|author"; take the first field as the path.
+            result.append(line.split("|")[0].strip())
     return result
 
 

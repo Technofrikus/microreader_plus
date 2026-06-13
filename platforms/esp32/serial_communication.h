@@ -90,6 +90,11 @@ static volatile bool g_font_uploaded = false;
 static volatile bool g_model_change_pending = false;
 static char g_device_model[4] = {};  // "x3" or "x4"
 
+// Set when an EPUB has been uploaded to /sdcard/books and the book index
+// needs to be updated. Cleared by the main loop after calling index_file().
+static volatile bool g_book_uploaded = false;
+static char g_new_book_path[256];
+
 // Call from the main loop. Returns true (and copies into `out`) when a fresh
 // LUT has been received since the last call.
 // Returns true and sets *type_out if a new LUT is available.
@@ -280,6 +285,11 @@ static void handle_file_upload(const char* target_dir) {
   }
 
   ESP_LOGI(kUpTag, "saved %s (%lu bytes, CRC OK)", path, (unsigned long)file_size);
+  if (strcmp(target_dir, "/sdcard/books") == 0) {
+    strncpy(g_new_book_path, path, sizeof(g_new_book_path) - 1);
+    g_new_book_path[sizeof(g_new_book_path) - 1] = '\0';
+    g_book_uploaded = true;
+  }
   serial_write("OK\n");
 }
 
@@ -410,6 +420,7 @@ static void handle_font_upload() {
 //   'P'                       → render-page benchmark (current page)
 //   'R' + 2B path_len + path  → recursive delete
 //   'S'                       → heap status ("STATUS:free=N,largest=M\n")
+//   'T' + 2B path_len + path  → read file: "READY\n" + 4B size + raw data + 4B CRC32
 //   'W' + 2B path_len + path
 //       + 4B size + data
 //       + 4B CRC32            → write file (chunked + 0x06 ACKs)
@@ -499,34 +510,64 @@ static void handle_serial_cmd() {
       break;
     }
     case 'L': {
+      // Response format: "path|title|author|size|mtime\n" per book.
       serial_write("BOOKS:\n");
-      // Try in-memory index first (populated by main task after boot).
-      // Fall back to reading the index file directly if not loaded yet
-      // (serial task runs concurrently and may arrive before MainMenu::on_start).
-      const auto& entries = microreader::BookIndex::instance().entries();
+      const auto& bidx = microreader::BookIndex::instance();
+      const auto& entries = bidx.entries();
+      const auto& pool = bidx.pool();
       if (!entries.empty()) {
+        char lbuf[800];
         for (const auto& e : entries) {
-          std::string out = "  " + e.path.to_string(microreader::BookIndex::instance().pool()) + "\n";
-          serial_write(out.c_str());
+          auto pv = e.path.view(pool);
+          auto tv = e.title.view(pool);
+          auto av = e.author.view(pool);
+          // Get file size and modification time.
+          struct stat lst = {};
+          char path_c[256];
+          snprintf(path_c, sizeof(path_c), "%.*s", (int)pv.size(), pv.data());
+          stat(path_c, &lst);
+          snprintf(lbuf, sizeof(lbuf), "%.*s|%.*s|%.*s|%lu|%lu\n",
+                   (int)pv.size(), pv.data(),
+                   (int)tv.size(), tv.data(),
+                   (int)av.size(), av.data(),
+                   (unsigned long)lst.st_size,
+                   (unsigned long)lst.st_mtime);
+          serial_write(lbuf);
         }
       } else {
-        FILE* idx = fopen("/sdcard/.microreader/book_index.dat", "r");
-        if (idx) {
+        // Index not yet loaded — fall back to the on-disk file.
+        // File format: path|title|author|last_open_order; emit size/mtime from stat.
+        FILE* fidx = fopen("/sdcard/.microreader/book_index.dat", "r");
+        if (fidx) {
           char line[1024];
-          while (fgets(line, sizeof(line), idx)) {
-            char* sep = strchr(line, '|');
-            if (sep)
-              *sep = '\0';
+          while (fgets(line, sizeof(line), fidx)) {
             size_t len = strlen(line);
             while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
               line[--len] = '\0';
-            if (len == 0)
-              continue;
-            char out[1040];
-            snprintf(out, sizeof(out), "  %s\n", line);
+            if (len == 0) continue;
+            // Keep only the first 3 fields (drop last_open_order).
+            int fields = 0;
+            char* path_end = nullptr;
+            for (char* p = line; *p; ++p) {
+              if (*p == '|') {
+                ++fields;
+                if (fields == 1) path_end = p;
+                if (fields == 3) { *p = '\0'; break; }
+              }
+            }
+            char fpath[256] = {};
+            if (path_end) {
+              int n = (int)(path_end - line);
+              snprintf(fpath, sizeof(fpath), "%.*s", n, line);
+            }
+            struct stat lst = {};
+            stat(fpath, &lst);
+            char out[1060];
+            snprintf(out, sizeof(out), "%s|%lu|%lu\n", line,
+                     (unsigned long)lst.st_size, (unsigned long)lst.st_mtime);
             serial_write(out);
           }
-          fclose(idx);
+          fclose(fidx);
         }
       }
       serial_write("END\n");
@@ -623,6 +664,9 @@ static void handle_serial_cmd() {
       struct stat rm_st;
       if (stat(g_cmd_path, &rm_st) != 0) {
         ESP_LOGI(kCmdTag, "removed: %s", g_cmd_path);
+        auto& bidx = microreader::BookIndex::instance();
+        bidx.remove_entry(g_cmd_path);
+        bidx.save("/sdcard/.microreader/book_index.dat");
         serial_write("OK\n");
       } else {
         ESP_LOGE(kCmdTag, "remove failed: %s (errno=%d)", g_cmd_path, errno);
@@ -804,6 +848,35 @@ static void handle_serial_cmd() {
         ESP_LOGE(kCmdTag, "rename failed: %s -> %s (errno=%d)", nsrc, g_cmd_path, errno);
         serial_write("ERR:rename_failed\n");
       }
+      break;
+    }
+    case 'T': {
+      // Read file: host receives "READY\n" + 4B size LE + raw data + 4B CRC32 LE.
+      if (!read_cmd_path("read"))
+        return;
+      FILE* tf = fopen(g_cmd_path, "rb");
+      if (!tf) {
+        ESP_LOGE(kCmdTag, "read: fopen failed: %s (errno=%d)", g_cmd_path, errno);
+        serial_write("ERR:fopen\n");
+        return;
+      }
+      struct stat tst;
+      fstat(fileno(tf), &tst);
+      const uint32_t tfsize = (uint32_t)tst.st_size;
+      serial_write("READY\n");
+      uint8_t tszb[4] = {(uint8_t)tfsize, (uint8_t)(tfsize>>8), (uint8_t)(tfsize>>16), (uint8_t)(tfsize>>24)};
+      serial_write_raw(tszb, 4);
+      uint32_t tcrc = 0;
+      uint8_t tchunk[2048];
+      size_t tn;
+      while ((tn = fread(tchunk, 1, sizeof(tchunk), tf)) > 0) {
+        serial_write_raw(tchunk, tn);
+        tcrc = esp_rom_crc32_le(tcrc, tchunk, tn);
+      }
+      fclose(tf);
+      uint8_t tcrb[4] = {(uint8_t)tcrc, (uint8_t)(tcrc>>8), (uint8_t)(tcrc>>16), (uint8_t)(tcrc>>24)};
+      serial_write_raw(tcrb, 4);
+      ESP_LOGI(kCmdTag, "read: sent %s (%lu bytes, CRC 0x%08lx)", g_cmd_path, (unsigned long)tfsize, (unsigned long)tcrc);
       break;
     }
     default:
