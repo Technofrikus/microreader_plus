@@ -541,13 +541,27 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
     }
   }
 
-  // Hold-down: advance one page per frame while a nav button is held,
-  // but only if no fresh press event arrived this frame (avoids double-counting
-  // the initial press).
-  if (!had_next_press && (buttons.is_down(logical_next_front) || buttons.is_down(logical_next_side)))
-    ++page_delta;
-  if (!had_prev_press && (buttons.is_down(logical_prev_front) || buttons.is_down(logical_prev_side)))
-    --page_delta;
+  // Hold-down: 3-frame threshold (~200ms), then 1 page every 2 frames (~100ms).
+  if (!had_next_press && (buttons.is_down(logical_next_front) || buttons.is_down(logical_next_side))) {
+    if (hold_next_frames_ >= 3) {
+      if ((hold_next_frames_ - 3) % 2 == 0) ++page_delta;
+      ++hold_next_frames_;
+    } else {
+      ++hold_next_frames_;
+    }
+  } else {
+    hold_next_frames_ = 0;
+  }
+  if (!had_prev_press && (buttons.is_down(logical_prev_front) || buttons.is_down(logical_prev_side))) {
+    if (hold_prev_frames_ >= 3) {
+      if ((hold_prev_frames_ - 3) % 2 == 0) --page_delta;
+      ++hold_prev_frames_;
+    } else {
+      ++hold_prev_frames_;
+    }
+  } else {
+    hold_prev_frames_ = 0;
+  }
 
   bool changed = false;
   if (page_delta > 0) {

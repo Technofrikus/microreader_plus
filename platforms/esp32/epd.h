@@ -476,6 +476,7 @@ class EInkDisplay : public microreader::IDisplay {
   const uint8_t* x3_old_sync_data_ = nullptr;
   bool x3_partial_mode_active_ = false;
   bool x3_first_refresh_ = false;
+  int x3_cmd12_in_flight_ = 0;
   enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2, ULTRAFAST };
   X3LutSet x3_loaded_luts_ = X3LutSet::NONE;
 
@@ -630,6 +631,7 @@ class EInkDisplay : public microreader::IDisplay {
       // Fire CMD12 in background — no wait.
       x3PowerOn_();
       sendCommand(CMD_X3_REFRESH);
+      ++x3_cmd12_in_flight_;
 
       // Defer OLD sync to next call (can't touch RAM during refresh).
       x3_needs_old_sync_ = true;
@@ -824,6 +826,7 @@ class EInkDisplay : public microreader::IDisplay {
 
       x3PowerOn_();
       sendCommand(CMD_X3_REFRESH);
+      ++x3_cmd12_in_flight_;
 
       x3_partial_mode_active_ = true;
       x3_red_ram_synced_ = false;
@@ -918,20 +921,17 @@ class EInkDisplay : public microreader::IDisplay {
   void waitWhileBusy(const char* comment = nullptr) {
     uint32_t start = millis();
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3: HIGH→LOW→HIGH pattern during refresh
-      bool sawLow = false;
-      while (gpio_get_level(EPD_BUSY) == 1) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-        if (millis() - start > 1000) break;
-      }
+      // No pending fire-and-forget CMD12 → BUSY is idle HIGH, skip wait.
+      if (x3_cmd12_in_flight_ == 0)
+        return;
+      // CMD12 in flight. If BUSY is LOW → wait for HIGH; if HIGH → already done.
       if (gpio_get_level(EPD_BUSY) == 0) {
-        sawLow = true;
         while (gpio_get_level(EPD_BUSY) == 0) {
           vTaskDelay(pdMS_TO_TICKS(10));
           if (millis() - start > 30000) break;
         }
       }
-      if (!sawLow) return;
+      --x3_cmd12_in_flight_;
     } else {
       while (gpio_get_level(EPD_BUSY) == 1) {
         vTaskDelay(pdMS_TO_TICKS(10));

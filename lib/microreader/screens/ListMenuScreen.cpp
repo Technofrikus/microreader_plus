@@ -508,9 +508,12 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
     }
   }
 
-  // Hold-down acceleration: when a nav button is held (no fresh press this frame),
-  // step size grows by 1 each frame: frame 0 = 1, frame 1 = 2, frame 2 = 3, …
-  auto hold_step = [](int frames) -> int { return frames + 1; };
+  // Hold-down acceleration: auto-repeat starts after 6 frames (~300ms) of
+  // continuous hold, then step size grows by 1 each frame.
+  auto hold_step = [](int frames) -> int {
+    if (frames < 2) return 0;
+    return frames - 1;
+  };
 
   const bool up_held = !had_up_press && !back_held_ && (buttons.is_down(logical_up_front) || buttons.is_down(logical_up_side));
   const bool down_held = !had_down_press && !back_held_ && (buttons.is_down(logical_down_front) || buttons.is_down(logical_down_side));

@@ -149,6 +149,8 @@ class ReaderScreen final : public IScreen {
   ImageSizeQuery image_size_fn_;
   bool grayscale_pending_ = false;
   bool grayscale_active_ = false;
+  uint8_t hold_next_frames_ = 0;
+  uint8_t hold_prev_frames_ = 0;
   std::vector<PageLink> page_links_;
 
   bool decode_image_to_buffer_(uint16_t img_key, uint32_t offset, DrawBuffer& buf, int dest_x, int dest_y,
