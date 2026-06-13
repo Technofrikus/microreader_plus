@@ -554,12 +554,12 @@ class EInkDisplay : public microreader::IDisplay {
 
       uint32_t t0 = millis();
 
-      x3LoadLuts_(X3LutSet::IMG);
+      x3LoadLuts_(X3LutSet::FULL);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0xA9);
       sendData(0x07);
 
-      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, true);
+      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
       x3Refresh_(false);
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
@@ -569,7 +569,7 @@ class EInkDisplay : public microreader::IDisplay {
         x3PowerOff_();
 
       x3_first_refresh_ = false;
-      ESP_LOGI("X3", "full_refresh: IMG sync total=%ums", (unsigned)(millis() - t0));
+      ESP_LOGI("X3", "full_refresh: FULL diff total=%ums", (unsigned)(millis() - t0));
       return;
     }
 
@@ -1188,7 +1188,7 @@ class EInkDisplay : public microreader::IDisplay {
     x3_loaded_luts_ = X3LutSet::NONE;
     x3_red_ram_synced_ = false;
     x3_first_refresh_ = true;
-    x3_initial_syncs_remaining_ = 2;
+    x3_initial_syncs_remaining_ = 0;
 
     isScreenOn = false;
 
