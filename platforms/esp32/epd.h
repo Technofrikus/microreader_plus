@@ -558,26 +558,28 @@ class EInkDisplay : public microreader::IDisplay {
 
       uint32_t t0 = millis();
 
-      // IMG LUT with forced differential: NEW = content, OLD = ~content.
+      // FULL LUT with forced differential: NEW = content, OLD = ~content.
       // Every pixel transitions BW or WB → maximum VDH/VDL drive on ALL pixels.
-      // IMG has TP=(10,0,0,0) RP=15 = 1500ms drive (vs FULL's 260ms).
-      x3LoadLuts_(X3LutSet::IMG);
+      // Two passes (2×260ms drive) to clear image retention from previous screen.
+      x3LoadLuts_(X3LutSet::FULL);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0xA9);
       sendData(0x07);
-      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
-      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
-      x3Refresh_(false);
 
-      // Sync OLD = content for next differential update
-      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
+      for (int pass = 0; pass < 2; pass++) {
+        x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
+        x3Refresh_(false);
+        x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
+      }
+
       x3_red_ram_synced_ = true;
 
       if (turnOffScreen)
         x3PowerOff_();
 
       x3_first_refresh_ = false;
-      ESP_LOGI("X3", "full_refresh: FULL diff total=%ums", (unsigned)(millis() - t0));
+      ESP_LOGI("X3", "full_refresh: FULL diff x2 total=%ums", (unsigned)(millis() - t0));
       return;
     }
 
