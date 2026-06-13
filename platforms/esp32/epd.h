@@ -558,10 +558,10 @@ class EInkDisplay : public microreader::IDisplay {
 
       uint32_t t0 = millis();
 
-      // FULL LUT with forced differential: NEW = content, OLD = ~content.
+      // IMG LUT with forced differential: NEW = content, OLD = ~content.
       // Every pixel transitions BW or WB → maximum VDH/VDL drive on ALL pixels.
-      // Stronger than WW/BB-only (same data both RAMs) — clears progress bar ghost.
-      x3LoadLuts_(X3LutSet::FULL);
+      // IMG has TP=(10,0,0,0) RP=15 = 1500ms drive (vs FULL's 260ms).
+      x3LoadLuts_(X3LutSet::IMG);
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0xA9);
       sendData(0x07);

@@ -451,9 +451,7 @@ class DrawBuffer {
   int bar_y() const { return (height() - kLoadLogH) + kLoadLogH - kBarH - 4; }
 
   void show_loading(const char* text, int progress_pct) {
-    if (config_.model == DeviceModel::X3)
-      return;
-    if (display_.is_busy())
+    if (config_.model != DeviceModel::X3 && display_.is_busy())
       return;
     uint8_t new_buf[kLoadBufBytes];
     render_loading_box_(new_buf, text, progress_pct);
