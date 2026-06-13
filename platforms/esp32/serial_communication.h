@@ -1,27 +1,23 @@
 #pragma once
 
-// Receives frames over USB Serial/JTAG:
-//   - LUT frames (magic 0xDEADBEEF) → applied to the EPD
-//   - EPUB uploads (magic "EPUB")    → written to /sdcard/books/
+// Receives frames over USB Serial/JTAG and dispatches them.
 //
-// LUT frame format (little-endian):
-//   [0xDE 0xAD 0xBE 0xEF]  magic (4 bytes)
-//   [length]                payload length (4 bytes LE)
-//   [payload]               LUT bytes (112 bytes)
-//   [crc32]                 CRC-32 of payload (4 bytes LE)
+// Frame types (matched by magic prefix):
+//   0xDEADBEEF  LUT frame     → applied to the EPD
+//   "EPUB"      file upload   → /sdcard/books/
+//   "SIMG"      file upload   → /sdcard/sleep/
+//   "SDFN"      file upload   → /sdcard/fonts/
+//   "FONT"      font upload   → raw spiffs partition
+//   "CMND"      command frame → see handle_serial_cmd()
 //
-// EPUB upload format (little-endian):
-//   [0x45 0x50 0x55 0x42]  magic "EPUB" (4 bytes)
-//   [name_len]             filename length (2 bytes LE)
-//   [filename]             UTF-8 filename (N bytes)
-//   [file_size]            payload size (4 bytes LE)
-//   [payload]              file data (S bytes)
-//   [crc32]                CRC-32 of payload (4 bytes LE)
-//
-// Device responses for EPUB upload:
-//   "READY\n"  after parsing header
-//   "OK\n"     on success
-//   "ERR:...\n" on failure
+// File upload format (EPUB/SIMG/SDFN):
+//   [4B] magic
+//   [2B LE] filename length
+//   [N B]   filename
+//   [4B LE] payload size
+//   [data]  in 2 KB chunks; each chunk ACKed with 0x06
+//   [4B LE] CRC-32 of full payload
+//   Response: "READY\n" → 0x06 per chunk → "OK\n" or "ERR:...\n"
 //
 // Call serial_start() once from app_main.
 // Poll serial_lut_take(buf) each loop for LUT data.
@@ -59,9 +55,9 @@ static constexpr uint8_t kSimgMagic[4] = {'S', 'I', 'M', 'G'};
 static constexpr uint8_t kSdFntMagic[4] = {'S', 'D', 'F', 'N'};
 static constexpr uint8_t kCmdMagic[4] = {'C', 'M', 'N', 'D'};
 static constexpr uint8_t kFontMagic[4] = {'F', 'O', 'N', 'T'};
-static constexpr uint32_t kMaxPayload = 256;
 static constexpr uint32_t kLutSize = 112;
 static constexpr uint32_t kLutFrameSize = 113;  // 1 byte type + 112 bytes LUT
+static constexpr uint8_t kAck = 0x06;           // flow-control ACK between chunks
 
 // LUT state: shared between receiver task and main loop.
 static uint8_t g_lut_buf[kLutSize];
@@ -252,7 +248,6 @@ static void handle_file_upload(const char* target_dir) {
   uint32_t crc = 0;
   uint32_t remaining = file_size;
   uint8_t chunk[2048];
-  static constexpr uint8_t kAck = 0x06;
   while (remaining > 0) {
     size_t want = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
     if (!serial_read_exact(chunk, want, 30000)) {
@@ -265,7 +260,6 @@ static void handle_file_upload(const char* target_dir) {
     fwrite(chunk, 1, want, f);
     crc = esp_rom_crc32_le(crc, chunk, want);
     remaining -= want;
-    // Flow-control ACK — tell host to send next chunk.
     serial_write_raw(&kAck, 1);
   }
   fclose(f);
@@ -359,7 +353,6 @@ static void handle_font_upload() {
   uint32_t remaining = file_size;
   uint32_t flash_offset = kFontPartHeaderSize;
   uint8_t chunk[2048];
-  static constexpr uint8_t kAck = 0x06;
 
   while (remaining > 0) {
     size_t want = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
@@ -401,11 +394,28 @@ static void handle_font_upload() {
 // Handle a serial command (after "CMND" magic has been matched).
 //
 // Sub-commands (1 byte after magic):
-//   'B' + 1 byte button_mask  → inject button press(es)
-//   'O' + 2 byte path_len LE + path  → open book by path
-//   'S'                       → status query (responds with heap + screen info)
-//   'L'                       → list books in /sdcard/books/
-//   'F'                       → invalidate font partition (force re-provisioning on next book open)
+//   'A' + 2B path_len + path  → dir listing: "DIR:<p>\n" + "d|name\n" /
+//                                "f|name|size|mtime\n" lines + "END\n"
+//   'B' + 1B mask             → inject button press(es)
+//   'C'                       → clear .mrb cache in /sdcard/.microreader/cache/
+//   'D' + 2B path_len + path  → image-decode benchmark
+//   'F'                       → invalidate font partition
+//   'G'                       → flash erase+write benchmark
+//   'I' + 2B path_len + path  → image-size benchmark
+//   'K' + 2B path_len + path  → mkdir
+//   'L'                       → list books in /sdcard/books/ ("BOOKS:\n" … "END\n")
+//   'N' + 2B src_len + src
+//       + 2B dst_len + dst    → rename / move
+//   'O' + 2B path_len + path  → open book
+//   'P'                       → render-page benchmark (current page)
+//   'R' + 2B path_len + path  → recursive delete
+//   'S'                       → heap status ("STATUS:free=N,largest=M\n")
+//   'W' + 2B path_len + path
+//       + 4B size + data
+//       + 4B CRC32            → write file (chunked + 0x06 ACKs)
+//   'X' + 2B path_len + path  → EPUB conversion benchmark
+//   'Y'                       → clear /sdcard/fonts/
+//   'Z'                       → clear /sdcard/sleep/
 // ---------------------------------------------------------------------------
 static constexpr const char* kCmdTag = "cmd";
 
@@ -429,6 +439,30 @@ static bool read_cmd_path(const char* log_label) {
   g_cmd_path[path_len] = '\0';
   ESP_LOGI(kCmdTag, "%s: %s", log_label, g_cmd_path);
   return true;
+}
+
+// Recursively delete a file or directory tree. Best-effort: deletes as much as
+// possible, does not abort on partial failures.
+static void remove_recursive(const char* path) {
+  DIR* d = opendir(path);
+  if (!d) {
+    // Not a directory (or doesn't exist) — try plain remove.
+    remove(path);
+    return;
+  }
+  struct dirent* ent;
+  char child[300];
+  while ((ent = readdir(d)) != nullptr) {
+    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+    snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+    if (ent->d_type == DT_DIR) {
+      remove_recursive(child);
+    } else {
+      remove(child);
+    }
+  }
+  closedir(d);
+  rmdir(path);
 }
 
 static void handle_serial_cmd() {
@@ -585,13 +619,14 @@ static void handle_serial_cmd() {
     case 'R': {
       if (!read_cmd_path("rm"))
         return;
-      if (remove(g_cmd_path) == 0) {
+      remove_recursive(g_cmd_path);
+      struct stat rm_st;
+      if (stat(g_cmd_path, &rm_st) != 0) {
         ESP_LOGI(kCmdTag, "removed: %s", g_cmd_path);
         serial_write("OK\n");
       } else {
-        char buf[300];
-        snprintf(buf, sizeof(buf), "ERR:remove_failed:%s\n", g_cmd_path);
-        serial_write(buf);
+        ESP_LOGE(kCmdTag, "remove failed: %s (errno=%d)", g_cmd_path, errno);
+        serial_write("ERR:remove_failed\n");
       }
       break;
     }
@@ -650,6 +685,124 @@ static void handle_serial_cmd() {
         ESP_LOGI(kCmdTag, "device_model set to %s, will reboot", g_device_model);
       } else {
         serial_write("ERR:invalid_model\n");
+      }
+      break;
+    }
+    case 'A': {
+      // Directory listing: responds with "DIR:<path>\n", then per-entry lines, then "END\n".
+      // File entries: "f|name|size_bytes|mtime_unix\n"
+      // Dir entries:  "d|name\n"
+      if (!read_cmd_path("ls"))
+        return;
+      DIR* ldir = opendir(g_cmd_path);
+      if (!ldir) {
+        ESP_LOGW(kCmdTag, "ls: opendir failed: %s (errno=%d)", g_cmd_path, errno);
+        serial_write("ERR:opendir\n");
+        return;
+      }
+      char lline[400];
+      snprintf(lline, sizeof(lline), "DIR:%s\n", g_cmd_path);
+      serial_write(lline);
+      struct dirent* lent;
+      while ((lent = readdir(ldir)) != nullptr) {
+        if (strcmp(lent->d_name, ".") == 0 || strcmp(lent->d_name, "..") == 0)
+          continue;
+        char lfull[300];
+        snprintf(lfull, sizeof(lfull), "%s/%s", g_cmd_path, lent->d_name);
+        struct stat lst;
+        bool lis_dir = (lent->d_type == DT_DIR);
+        unsigned long lsize = 0;
+        long lmtime = 0;
+        if (stat(lfull, &lst) == 0) {
+          lis_dir = S_ISDIR(lst.st_mode);
+          lsize = (unsigned long)lst.st_size;
+          lmtime = (long)lst.st_mtime;
+        }
+        if (lis_dir) {
+          snprintf(lline, sizeof(lline), "d|%s\n", lent->d_name);
+        } else {
+          snprintf(lline, sizeof(lline), "f|%s|%lu|%ld\n", lent->d_name, lsize, lmtime);
+        }
+        serial_write(lline);
+      }
+      closedir(ldir);
+      serial_write("END\n");
+      break;
+    }
+    case 'W': {
+      // Write file to arbitrary /sdcard/ path.
+      // Format after 'W': 2-byte LE path_len + path + 4-byte LE size + [2KB chunks + 0x06 ACK] + 4-byte CRC32
+      if (!read_cmd_path("write"))
+        return;
+      if (strncmp(g_cmd_path, "/sdcard/", 8) != 0) {
+        serial_write("ERR:invalid_path\n");
+        return;
+      }
+      uint8_t wsz[4];
+      if (!serial_read_exact(wsz, 4, 2000)) { serial_write("ERR:size\n"); return; }
+      const uint32_t wfsize = wsz[0] | (wsz[1] << 8) | (wsz[2] << 16) | (wsz[3] << 24);
+      FILE* wf = fopen(g_cmd_path, "wb");
+      if (!wf) {
+        ESP_LOGE(kCmdTag, "write: fopen failed: %s (errno=%d)", g_cmd_path, errno);
+        serial_write("ERR:fopen\n");
+        return;
+      }
+      ESP_LOGI(kCmdTag, "write: '%s' (%lu bytes)", g_cmd_path, (unsigned long)wfsize);
+      serial_write("READY\n");
+      uint32_t wcrc = 0, wrem = wfsize;
+      uint8_t wchunk[2048];
+      while (wrem > 0) {
+        const size_t wwant = wrem < sizeof(wchunk) ? wrem : sizeof(wchunk);
+        if (!serial_read_exact(wchunk, wwant, 30000)) {
+          ESP_LOGE(kCmdTag, "write: timeout, %lu remaining", (unsigned long)wrem);
+          fclose(wf); remove(g_cmd_path);
+          serial_write("ERR:timeout\n"); return;
+        }
+        fwrite(wchunk, 1, wwant, wf);
+        wcrc = esp_rom_crc32_le(wcrc, wchunk, wwant);
+        wrem -= wwant;
+        serial_write_raw(&kAck, 1);
+      }
+      fclose(wf);
+      uint8_t wcb[4];
+      if (!serial_read_exact(wcb, 4, 2000)) { remove(g_cmd_path); serial_write("ERR:crc_missing\n"); return; }
+      const uint32_t wexp = wcb[0] | (wcb[1] << 8) | (wcb[2] << 16) | (wcb[3] << 24);
+      if (wcrc != wexp) {
+        ESP_LOGE(kCmdTag, "write: CRC mismatch: got 0x%08lx expected 0x%08lx", (unsigned long)wcrc, (unsigned long)wexp);
+        remove(g_cmd_path); serial_write("ERR:crc\n"); return;
+      }
+      ESP_LOGI(kCmdTag, "write: saved %s (%lu bytes, CRC OK)", g_cmd_path, (unsigned long)wfsize);
+      serial_write("OK\n");
+      break;
+    }
+    case 'K': {
+      // Make directory: 'K' + 2-byte LE path_len + path
+      if (!read_cmd_path("mkdir"))
+        return;
+      if (mkdir(g_cmd_path, 0775) == 0 || errno == EEXIST) {
+        ESP_LOGI(kCmdTag, "mkdir: %s", g_cmd_path);
+        serial_write("OK\n");
+      } else {
+        ESP_LOGE(kCmdTag, "mkdir failed: %s (errno=%d)", g_cmd_path, errno);
+        serial_write("ERR:mkdir_failed\n");
+      }
+      break;
+    }
+    case 'N': {
+      // Rename/move: 'N' + 2-byte LE src_len + src + 2-byte LE dst_len + dst
+      if (!read_cmd_path("rename_src"))
+        return;
+      char nsrc[256];
+      strncpy(nsrc, g_cmd_path, sizeof(nsrc) - 1);
+      nsrc[sizeof(nsrc) - 1] = '\0';
+      if (!read_cmd_path("rename_dst"))
+        return;
+      if (rename(nsrc, g_cmd_path) == 0) {
+        ESP_LOGI(kCmdTag, "renamed: %s -> %s", nsrc, g_cmd_path);
+        serial_write("OK\n");
+      } else {
+        ESP_LOGE(kCmdTag, "rename failed: %s -> %s (errno=%d)", nsrc, g_cmd_path, errno);
+        serial_write("ERR:rename_failed\n");
       }
       break;
     }
