@@ -481,6 +481,9 @@ class EInkDisplay : public microreader::IDisplay {
   bool x3_region_needs_sync_ = false;
   static constexpr int kX3RegionSyncBufMax = 1024;
   uint8_t x3_region_sync_buf_[kX3RegionSyncBufMax];
+  int x3_region_sync_x_ = 0;
+  int x3_region_sync_y_ = 0;
+  int x3_region_sync_w_ = 0;
   int x3_region_sync_h_ = 0;
   int x3_region_sync_stride_ = 0;
   enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2, ULTRAFAST };
@@ -784,19 +787,39 @@ class EInkDisplay : public microreader::IDisplay {
   void partial_refresh_region(int phys_x, int phys_y, int phys_w, int phys_h, const uint8_t* new_buf,
                               int stride_bytes) override {
     if (config_.model == microreader::DeviceModel::X3) {
+      uint32_t t_enter = millis();
       wakeIfNeeded();
       waitWhileBusy();
 
-      if (x3_region_needs_sync_) {
-        x3SendMirroredRegion_(CMD_X3_WRITE_NEW, x3_region_sync_buf_,
-                              x3_region_sync_stride_, x3_region_sync_h_);
-        x3SendMirroredRegion_(CMD_X3_WRITE_OLD, x3_region_sync_buf_,
-                              x3_region_sync_stride_, x3_region_sync_h_);
-        x3_region_needs_sync_ = false;
-      }
-
       if (x3_partial_mode_active_) {
         sendCommand(CMD_X3_PARTIAL_OUT);
+        x3_partial_mode_active_ = false;
+      }
+
+      if (x3_region_needs_sync_) {
+        const uint16_t sx_end = static_cast<uint16_t>(x3_region_sync_x_ + x3_region_sync_w_);
+        const int sy_start = DISPLAY_HEIGHT - x3_region_sync_y_ - x3_region_sync_h_;
+        const int sy_end = DISPLAY_HEIGHT - x3_region_sync_y_;
+
+        sendCommand(CMD_X3_PARTIAL_IN);
+        sendCommand(CMD_X3_PARTIAL_WINDOW);
+        sendData(static_cast<uint8_t>(x3_region_sync_x_ >> 8));
+        sendData(static_cast<uint8_t>(x3_region_sync_x_ & 0xFF));
+        sendData(static_cast<uint8_t>((sx_end - 1) >> 8));
+        sendData(static_cast<uint8_t>((sx_end - 1) & 0xFF));
+        sendData(static_cast<uint8_t>(sy_start >> 8));
+        sendData(static_cast<uint8_t>(sy_start & 0xFF));
+        sendData(static_cast<uint8_t>((sy_end - 1) >> 8));
+        sendData(static_cast<uint8_t>((sy_end - 1) & 0xFF));
+        sendData(0x01);
+
+        x3SendMirroredRegion_(CMD_X3_WRITE_OLD, x3_region_sync_buf_,
+                              x3_region_sync_stride_, x3_region_sync_h_);
+        sendCommand(CMD_X3_PARTIAL_OUT);
+        x3_region_needs_sync_ = false;
+        ESP_LOGI("X3", "region sync OLD: x=%d y=%d w=%d h=%d (%ums)",
+                 x3_region_sync_x_, x3_region_sync_y_, x3_region_sync_w_, x3_region_sync_h_,
+                 (unsigned)(millis() - t_enter));
       }
 
       x3LoadLuts_(X3LutSet::TURBO);
@@ -826,6 +849,9 @@ class EInkDisplay : public microreader::IDisplay {
       const int copy_bytes = stride_bytes * phys_h;
       if (copy_bytes <= kX3RegionSyncBufMax) {
         memcpy(x3_region_sync_buf_, new_buf, static_cast<size_t>(copy_bytes));
+        x3_region_sync_x_ = phys_x;
+        x3_region_sync_y_ = phys_y;
+        x3_region_sync_w_ = phys_w;
         x3_region_sync_h_ = phys_h;
         x3_region_sync_stride_ = stride_bytes;
         x3_region_needs_sync_ = true;
@@ -838,8 +864,8 @@ class EInkDisplay : public microreader::IDisplay {
       x3_partial_mode_active_ = true;
       x3_red_ram_synced_ = false;
 
-      ESP_LOGD("X3", "partial_refresh_region: x=%d y=%d w=%d h=%d fired",
-               phys_x, phys_y, phys_w, phys_h);
+      ESP_LOGI("X3", "partial_refresh_region: x=%d y=%d w=%d h=%d fired (%ums total)",
+               phys_x, phys_y, phys_w, phys_h, (unsigned)(millis() - t_enter));
       return;
     }
 
