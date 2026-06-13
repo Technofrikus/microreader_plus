@@ -458,6 +458,9 @@ void SettingsScreen::on_select(int index) {
         free(work);
 
         buf_->show_loading("Done!", 100);
+
+        buf_->fill(true);
+        buf_->full_refresh(microreader::RefreshMode::Full, false);
       }
     }
     esp_restart();
