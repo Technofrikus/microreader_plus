@@ -136,9 +136,9 @@ extern "C" void app_main(void) {
   static microreader::DrawBuffer buf(epd, device_config);
 
 #ifndef QEMU_BUILD
-  // After a software reset (post-flash) wait briefly for the serial monitor.
+  // After a software reset give the serial monitor a brief moment to reattach.
   if (esp_reset_reason() == ESP_RST_SW) {
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
 #endif
 

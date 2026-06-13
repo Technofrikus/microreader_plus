@@ -555,21 +555,28 @@ class EInkDisplay : public microreader::IDisplay {
       uint32_t t0 = millis();
 
       x3LoadLuts_(X3LutSet::FULL);
+      uint32_t t_lut = millis();
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0xA9);
       sendData(0x07);
 
       x3SendMirroredPlane_(CMD_X3_WRITE_NEW, pixels, false);
+      uint32_t t_new = millis();
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, true);
+      uint32_t t_old = millis();
       x3Refresh_(false);
+      uint32_t t_cmd12 = millis();
       x3SendMirroredPlane_(CMD_X3_WRITE_OLD, pixels, false);
+      uint32_t t_post = millis();
       x3_red_ram_synced_ = true;
 
       if (turnOffScreen)
         x3PowerOff_();
 
       x3_first_refresh_ = false;
-      ESP_LOGI("X3", "full_refresh: FULL diff total=%ums", (unsigned)(millis() - t0));
+      ESP_LOGI("X3", "full_refresh: FULL diff total=%ums (lut=%u new=%u old=%u cmd12=%u post=%u)",
+               (unsigned)(millis() - t0), (unsigned)(t_lut - t0), (unsigned)(t_new - t_lut),
+               (unsigned)(t_old - t_new), (unsigned)(t_cmd12 - t_old), (unsigned)(t_post - t_cmd12));
       return;
     }
 
@@ -1338,7 +1345,9 @@ class EInkDisplay : public microreader::IDisplay {
   void x3PowerOn_() {
     if (isScreenOn) return;
     sendCommand(CMD_X3_POWER_ON);
-    x3WaitBusy_(" X3_CMD04");
+    vTaskDelay(pdMS_TO_TICKS(2));
+    if (gpio_get_level(EPD_BUSY) == 0)
+      x3WaitBusy_(" X3_CMD04");
     isScreenOn = true;
   }
 

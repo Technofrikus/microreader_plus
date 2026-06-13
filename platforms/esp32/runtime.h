@@ -4,15 +4,17 @@
 #include <cmath>
 
 #include "driver/gpio.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hal/adc_types.h"
+
 #include "microreader/Input.h"
 #include "microreader/Runtime.h"
 #include "microreader/display/DeviceConfig.h"
@@ -23,7 +25,6 @@ static constexpr uint8_t BQ27220_SOC_REG = 0x2C;
 static constexpr uint8_t BQ27220_VOLT_REG = 0x08;
 static constexpr gpio_num_t X3_I2C_SDA = GPIO_NUM_20;
 static constexpr gpio_num_t X3_I2C_SCL = GPIO_NUM_0;
-static constexpr uint32_t X3_I2C_FREQ = 400000;
 
 class Esp32Runtime final : public microreader::IRuntime {
  public:
@@ -126,53 +127,96 @@ class Esp32Runtime final : public microreader::IRuntime {
     return last_pct_;
   }
 
-  // --- X3: BQ27220 on I2C ---
-  void init_x3_battery_i2c() {
-    // Per papyrix-reader: I2C is brought up and torn down for each read.
-    // Just mark ready; actual init happens in read_bq27220_reg_().
-    x3_i2c_initialized_ = true;
-    ESP_LOGI("batt", "x3: bq27220 i2c ready (per-read init)");
+  // --- X3: BQ27220 on I2C (new i2c_master.h — handles GPIO matrix & clock stretch) ---
+
+  static bool init_bq27220_bus_(i2c_master_bus_handle_t *bus, i2c_master_dev_handle_t *dev) {
+    i2c_master_bus_config_t bus_cfg = {};
+    bus_cfg.i2c_port = -1;
+    bus_cfg.sda_io_num = X3_I2C_SDA;
+    bus_cfg.scl_io_num = X3_I2C_SCL;
+    bus_cfg.clk_source = I2C_CLK_SRC_DEFAULT;
+    bus_cfg.glitch_ignore_cnt = 7;
+    bus_cfg.flags.enable_internal_pullup = 1;
+    if (i2c_new_master_bus(&bus_cfg, bus) != ESP_OK) {
+      ESP_LOGE("batt", "x3: bus init failed");
+      return false;
+    }
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address = BQ27220_ADDR;
+    dev_cfg.scl_speed_hz = 400000;
+    dev_cfg.scl_wait_us = 10000;
+    if (i2c_master_bus_add_device(*bus, &dev_cfg, dev) != ESP_OK) {
+      i2c_del_master_bus(*bus);
+      ESP_LOGE("batt", "x3: add dev failed");
+      return false;
+    }
+    return true;
   }
 
-  // Bring up I2C bus, read 2 bytes from reg, tear down.  Matches the
-  // papyrix-reader pattern (Wire.begin+end per read) to avoid bus lock.
+  static void deinit_bq27220_bus_(i2c_master_bus_handle_t bus, i2c_master_dev_handle_t dev) {
+    i2c_master_bus_rm_device(dev);
+    i2c_del_master_bus(bus);
+    gpio_set_direction(X3_I2C_SDA, GPIO_MODE_INPUT);
+    gpio_set_direction(X3_I2C_SCL, GPIO_MODE_INPUT);
+  }
+
+  void init_x3_battery_i2c() {
+    x3_i2c_initialized_ = true;
+    ESP_LOGI("batt", "x3: HW I2C master (SDA=%d SCL=%d)", X3_I2C_SDA, X3_I2C_SCL);
+  }
+
   uint16_t read_bq27220_reg_(uint8_t reg) const {
     if (!x3_i2c_initialized_) return 0;
 
-    i2c_config_t conf{};
-    conf.mode = I2C_MODE_MASTER;
-    conf.sda_io_num = X3_I2C_SDA;
-    conf.scl_io_num = X3_I2C_SCL;
-    conf.sda_pullup_en = GPIO_PULLUP_DISABLE;
-    conf.scl_pullup_en = GPIO_PULLUP_DISABLE;
-    conf.master.clk_speed = X3_I2C_FREQ;
-    if (i2c_param_config(I2C_NUM_0, &conf) != ESP_OK) return 0;
-    if (i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0) != ESP_OK) return 0;
+    i2c_master_bus_handle_t bus = NULL;
+    i2c_master_dev_handle_t dev = NULL;
+    if (!init_bq27220_bus_(&bus, &dev)) return 0;
 
-    uint8_t wbuf[1] = {reg};
-    uint8_t rbuf[2] = {};
-    esp_err_t err = i2c_master_write_read_device(
-        I2C_NUM_0, BQ27220_ADDR, wbuf, sizeof(wbuf), rbuf, sizeof(rbuf), pdMS_TO_TICKS(10));
+    // Wake-up: write 1 dummy byte (BQ27220 enters low-power between polls)
+    uint8_t dummy[1] = {0};
+    i2c_master_transmit(dev, dummy, 1, 100);
+    esp_rom_delay_us(10000);
 
-    i2c_driver_delete(I2C_NUM_0);
-    gpio_set_direction(X3_I2C_SDA, GPIO_MODE_INPUT);
-    gpio_set_direction(X3_I2C_SCL, GPIO_MODE_INPUT);
+    // Combined format read: write reg, then repeated START + read 2 bytes
+    uint8_t reg_byte = reg;
+    uint8_t buf[2] = {0};
+    esp_err_t ret = i2c_master_transmit_receive(dev, &reg_byte, 1, buf, 2, 100);
 
-    if (err != ESP_OK) {
-      ESP_LOGW("batt", "x3: bq27220 read reg 0x%02x failed: %s", reg, esp_err_to_name(err));
+    deinit_bq27220_bus_(bus, dev);
+
+    if (ret != ESP_OK) {
+      if (!x3_bq_warned_) {
+        ESP_LOGW("batt", "x3: bq27220 NACK reg=0x%02x ret=%d", reg, ret);
+        x3_bq_warned_ = true;
+      }
       return 0;
     }
-    return (uint16_t)(rbuf[1] << 8) | rbuf[0];
+    x3_bq_warned_ = false;
+    return (uint16_t)((buf[1] << 8) | buf[0]);  // big-endian
   }
 
   std::optional<uint8_t> read_x3_battery_pct_() const {
-    const uint16_t soc = read_bq27220_reg_(BQ27220_SOC_REG);
-    if (soc > 100) return std::nullopt;
+    const uint32_t now = millis();
+    if (x3_i2c_initialized_ && (now - x3_last_poll_ms_) >= kBqPollIntervalMs) {
+      x3_last_poll_ms_ = now;
+      const uint16_t soc = read_bq27220_reg_(BQ27220_SOC_REG);
+      const uint16_t mv = read_bq27220_reg_(BQ27220_VOLT_REG);
+      if (soc <= 100) {
+        x3_last_good_soc_ = soc;
+        x3_have_reading_ = true;
+      }
+      if (mv >= 2500 && mv <= 5000) {
+        x3_last_good_mv_ = mv;
+        x3_have_reading_ = true;
+      }
+      ESP_LOGI("batt", "x3: soc=%u mv=%u", (unsigned)x3_last_good_soc_, (unsigned)x3_last_good_mv_);
+    }
 
-    const uint16_t mv = read_bq27220_reg_(BQ27220_VOLT_REG);
-    ESP_LOGI("batt", "x3: soc=%u mv=%u", (unsigned)soc, (unsigned)mv);
+    if (!x3_have_reading_)
+      return std::nullopt;
 
-    const int new_pct = static_cast<int>(soc);
+    const int new_pct = static_cast<int>(x3_last_good_soc_);
     if (!x3_last_pct_.has_value() || std::abs(new_pct - static_cast<int>(x3_last_pct_.value())) >= kHysteresisPercent) {
       x3_last_pct_ = static_cast<uint8_t>(new_pct);
     }
@@ -184,6 +228,7 @@ class Esp32Runtime final : public microreader::IRuntime {
   }
 
   static constexpr int kHysteresisPercent = 3;
+  static constexpr uint32_t kBqPollIntervalMs = 1000;
 
   uint32_t frame_time_ms_;
   uint32_t frame_start_ms_;
@@ -195,4 +240,9 @@ class Esp32Runtime final : public microreader::IRuntime {
   // X3 I2C state
   bool x3_i2c_initialized_ = false;
   mutable std::optional<uint8_t> x3_last_pct_;
+  mutable uint32_t x3_last_poll_ms_ = 0;
+  mutable uint16_t x3_last_good_soc_ = 0;
+  mutable uint16_t x3_last_good_mv_ = 0;
+  mutable bool x3_have_reading_ = false;
+  mutable bool x3_bq_warned_ = false;
 };
