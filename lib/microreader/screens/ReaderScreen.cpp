@@ -982,30 +982,12 @@ void ReaderScreen::apply_grayscale_(DrawBuffer& buf) {
   if (!fset || !fset->has_grayscale())
     return;
 
-  // LSB plane (light gray + black) → NEW RAM
   buf.fill(false);
   render_text_(buf, *fset, GrayPlane::LSB, true, reader_settings_.h_padding());
-
-  const bool suppress_dark = buf.config().model == DeviceModel::X3;
-  std::vector<uint8_t> lsb_save;
-  if (suppress_dark) {
-    lsb_save.resize(buf.config().pixel_bytes);
-    memcpy(lsb_save.data(), buf.render_buf(), lsb_save.size());
-  }
-
   buf.write_ram_bw();
 
-  // MSB plane (dark gray + black) → OLD RAM
   buf.fill(false);
   render_text_(buf, *fset, GrayPlane::MSB, true, reader_settings_.h_padding());
-
-  if (suppress_dark) {
-    // AND with saved LSB: clear MSB where LSB=0 → removes dark gray
-    uint8_t* msb = buf.render_buf();
-    for (size_t i = 0; i < lsb_save.size(); i++)
-      msb[i] &= lsb_save[i];
-  }
-
   buf.write_ram_red();
 
   if (buf.config().model == DeviceModel::X3)
