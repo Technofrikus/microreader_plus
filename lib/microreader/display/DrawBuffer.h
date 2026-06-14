@@ -650,10 +650,8 @@ class DrawBuffer {
 
   void show_mgr2_sleep_(Mgr2Source_& src, bool deep_sleep_after) {
     if (config_.model == DeviceModel::X3) {
-      // X3: render MGR2 as 1-bit B&W via dual-phase IMG+FULL.
-      // Pre-inverted: Phase 1 (invertBits=true) flips bits → correct on screen.
-      // Phase 2 (FULL, weaker) can't overcome Phase 1 result.
-      fill(false);
+      // X3: render MGR2 as 4-level grayscale via dual-plane (NEW=LSB, OLD=MSB).
+      // IMG LUTs drive all 4 transitions to distinct gray levels (~908ms).
       const int src_w = static_cast<int>(src.w);
       const int src_h = static_cast<int>(src.h);
       const int disp_w = config_.physical_width;
@@ -663,25 +661,29 @@ class DrawBuffer {
       const int draw_w = std::min(src_w, disp_w);
       const int draw_h = std::min(src_h, disp_h);
 
-      // Fill padding areas (top/bottom) with 0xFF so Phase 1 invert →
-      // 0x00 → white on display (X3: 0=white). Content area stays 0x00
-      // from fill(false) and we set bits for background (state < 2).
-      memset(inactive_(), 0xFF, static_cast<size_t>(y_offset) * config_.stride);
-      for (int y = 0; y < draw_h; ++y) {
-        const uint8_t* src_row = src.get_row(static_cast<uint16_t>(y));
-        uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
-        for (int x = 0; x < draw_w; x++) {
-          const int src_x = x + x_offset;
-          int state = (src_row[src_x / 4] >> (6 - (src_x % 4) * 2)) & 0x3;
-          if (state < 2)
-            dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+      auto decode_plane = [&](bool msb) {
+        fill(false);
+        for (int y = 0; y < draw_h; ++y) {
+          const uint8_t* src_row = src.get_row(static_cast<uint16_t>(y));
+          uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
+          for (int x = 0; x < draw_w; x++) {
+            const int src_x = x + x_offset;
+            int state = (src_row[src_x / 4] >> (6 - (src_x % 4) * 2)) & 0x3;
+            if (msb ? (state >> 1) : (state & 1))
+              dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+          }
         }
-      }
-      memset(inactive_() + static_cast<size_t>(y_offset + draw_h) * config_.stride,
-             0xFF, static_cast<size_t>(disp_h - y_offset - draw_h) * config_.stride);
+      };
 
-      draw_text_centered(width() / 2, height() - 24, "sleeping...", true, false);
-      display_.full_refresh(inactive_(), RefreshMode::Full, true);
+      decode_plane(false);
+      draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
+      display_.write_ram_bw(inactive_());
+
+      decode_plane(true);
+      draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
+      display_.write_ram_red(inactive_());
+
+      display_.grayscale_refresh(/*turnOffScreen=*/true);
       if (deep_sleep_after)
         display_.deep_sleep();
       return;

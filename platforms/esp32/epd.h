@@ -674,11 +674,11 @@ class EInkDisplay : public microreader::IDisplay {
   void grayscale_refresh(bool turnOffScreen = false) override {
     in_grayscale_mode_ = true;
     if (config_.model == microreader::DeviceModel::X3) {
-      x3LoadLuts_(X3LutSet::GRAY);
+      x3LoadLuts_(X3LutSet::IMG);
       sendCommand(CMD_X3_VCOM_DI);
-      sendData(0x29);
+      sendData(0xA9);
       sendData(0x07);
-      x3Refresh_(turnOffScreen, true, "GRAY");
+      x3Refresh_(turnOffScreen, true, "IMG-GRAY");
       x3_red_ram_synced_ = false;
       x3_loaded_luts_ = X3LutSet::NONE;
       return;
