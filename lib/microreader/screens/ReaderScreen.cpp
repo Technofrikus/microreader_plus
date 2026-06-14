@@ -759,7 +759,7 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
     }
   }
 
-  grayscale_pending_ = (fset && fset->has_grayscale());
+  grayscale_pending_ = (fset && fset->has_grayscale() && reader_settings_.antialias_enabled);
 
   // ── BW rendering
   // ────────────────────────────────────────────────────────

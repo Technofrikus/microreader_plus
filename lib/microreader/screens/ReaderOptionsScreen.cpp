@@ -239,6 +239,9 @@ void ReaderOptionsScreen::on_start() {
       add_item(fmt_setting(tmp, sizeof(tmp), "Font Size", ReaderSettings::kFontSizeNames[settings_->font_size_idx]));
     }
 
+    idx_antialias_ = count();
+    add_item(fmt_setting(tmp, sizeof(tmp), "Antialiasing", settings_->antialias_enabled ? "On" : "Off"));
+
     idx_pub_fonts_ = count();
     add_item(fmt_setting(tmp, sizeof(tmp), "Publisher Sizes", settings_->override_publisher_fonts ? "Off" : "On"));
 
@@ -331,6 +334,11 @@ void ReaderOptionsScreen::on_select(int index) {
         max_idx = static_cast<uint8_t>(fonts->num_fonts());
     }
     settings_->font_size_idx = static_cast<uint8_t>((settings_->font_size_idx + 1) % max_idx);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_antialias_) {
+    settings_->antialias_enabled = !settings_->antialias_enabled;
     refresh_items_(index);
     return;
   }
