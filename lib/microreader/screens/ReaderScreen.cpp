@@ -758,10 +758,7 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
     }
   }
 
-  // Track whether grayscale pass is needed (deferred to update()).
-  // Skip on X3: grayscale mode causes 440ms revert per page turn.
-  grayscale_pending_ = (fset && fset->has_grayscale()) &&
-                       buf.config().model != DeviceModel::X3;
+  grayscale_pending_ = (fset && fset->has_grayscale());
 
   // ── BW rendering
   // ────────────────────────────────────────────────────────
@@ -984,17 +981,16 @@ void ReaderScreen::apply_grayscale_(DrawBuffer& buf) {
   if (!fset || !fset->has_grayscale())
     return;
 
-  // LSB plane → BW RAM (no refresh)
   buf.fill(false);
   render_text_(buf, *fset, GrayPlane::LSB, true, reader_settings_.h_padding());
   buf.write_ram_bw();
 
-  // MSB plane → RED RAM (no refresh)
   buf.fill(false);
   render_text_(buf, *fset, GrayPlane::MSB, true, reader_settings_.h_padding());
   buf.write_ram_red();
 
-  // Trigger grayscale refresh with custom LUT
+  if (buf.config().model == DeviceModel::X3)
+    buf.set_grayscale_1p(true);
   buf.grayscale_refresh();
 }
 

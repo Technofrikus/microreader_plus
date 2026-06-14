@@ -95,6 +95,8 @@ class DesktopEmulatorDisplay final : public microreader::IDisplay {
     render_();
   }
 
+  void set_grayscale_1p(bool /*v*/) override {}
+
   void grayscale_refresh_1pass(bool /*turnOffScreen*/ = false) override {
     if (gray_bw_.empty() || gray_red_.empty())
       return;

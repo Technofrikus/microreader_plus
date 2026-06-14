@@ -477,6 +477,12 @@ class EInkDisplay : public microreader::IDisplay {
   int x3_cmd12_in_flight_ = 0;
   uint8_t x3_initial_syncs_remaining_ = 0;
 
+  bool x3_grayscale_1p_ = false;
+
+  void set_grayscale_1p(bool v) override {
+    x3_grayscale_1p_ = v;
+  }
+
   bool x3_region_needs_sync_ = false;
   static constexpr int kX3RegionSyncBufMax = 1024;
   uint8_t x3_region_sync_buf_[kX3RegionSyncBufMax];
@@ -674,7 +680,12 @@ class EInkDisplay : public microreader::IDisplay {
   void grayscale_refresh(bool turnOffScreen = false) override {
     in_grayscale_mode_ = true;
     if (config_.model == microreader::DeviceModel::X3) {
-      x3LoadLuts_(X3LutSet::IMG);
+      if (x3_grayscale_1p_) {
+        x3_grayscale_1p_ = false;
+        x3Load1PhaseImgLuts_();
+      } else {
+        x3LoadLuts_(X3LutSet::IMG);
+      }
       sendCommand(CMD_X3_VCOM_DI);
       sendData(0xA9);
       sendData(0x07);
@@ -1269,6 +1280,20 @@ class EInkDisplay : public microreader::IDisplay {
     x3_red_ram_synced_ = true;
 
     ESP_LOGI("X3", "conditioning pass done");
+  }
+
+  void x3Load1PhaseImgLuts_() {
+    uint8_t buf[42];
+    auto load = [&](uint8_t cmd, const uint8_t* src) {
+      memcpy(buf, src, 42);
+      memset(buf + 6, 0, 12);  // zero phases 1-2
+      sendCommand(cmd); sendData(buf, 42);
+    };
+    load(CMD_X3_WRITE_LUT_VCOM, kX3LutVcomImg);
+    load(CMD_X3_WRITE_LUT_WW,   kX3LutWwImg);
+    load(CMD_X3_WRITE_LUT_BW,   kX3LutBwImg);
+    load(CMD_X3_WRITE_LUT_WB,   kX3LutWbImg);
+    load(CMD_X3_WRITE_LUT_BB,   kX3LutBbImg);
   }
 
   void x3LoadLuts_(X3LutSet set) {

@@ -43,6 +43,8 @@ class IDisplay {
 
   virtual void grayscale_refresh_1pass(bool turnOffScreen = false) {}
 
+  virtual void set_grayscale_1p(bool /*v*/) {}
+
   virtual void revert_grayscale(const uint8_t* prev_pixels) {
     (void)prev_pixels;
   }
@@ -333,6 +335,10 @@ class DrawBuffer {
 
   void grayscale_refresh(bool turnOffScreen = false) {
     display_.grayscale_refresh(turnOffScreen);
+  }
+
+  void set_grayscale_1p(bool v) {
+    display_.set_grayscale_1p(v);
   }
 
   void revert_grayscale() {
