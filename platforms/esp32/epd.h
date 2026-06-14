@@ -831,7 +831,7 @@ class EInkDisplay : public microreader::IDisplay {
 
       x3PowerOn_();
       sendCommand(CMD_X3_REFRESH);
-      ++x3_cmd12_in_flight_;
+      x3WaitBusy_(" X3_CMD12");
 
       x3_partial_mode_active_ = true;
       x3_red_ram_synced_ = false;
