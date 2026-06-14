@@ -3,14 +3,6 @@
 #include <algorithm>
 #include <cstring>
 
-#ifdef ESP_PLATFORM
-#include "esp_log.h"
-#include "esp_timer.h"
-#define MENU_LOG(...) ESP_LOGI("menu", __VA_ARGS__)
-#else
-#define MENU_LOG(...)
-#endif
-
 #include "../Application.h"
 #include "../display/ui_font_header.h"
 #include "../display/ui_font_large.h"
@@ -456,7 +448,6 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
   int press_count = 0;
   while (buttons.next_press(btn)) {
     ++press_count;
-    MENU_LOG("press[%d] btn=%d sel=%d t=%lld", press_count, (int)btn, (int)selected_, esp_timer_get_time() / 1000);
     if (btn == logical_up_front || btn == logical_up_side) {
       if (n > 0 && !back_held_) {
         move_up();
@@ -567,7 +558,6 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
   }
 
   if (moved || needs_draw || force_redraw_) {
-    MENU_LOG("draw_all_ t=%lld moved=%d needs=%d force=%d", esp_timer_get_time() / 1000, (int)moved, (int)needs_draw, (int)force_redraw_);
     draw_all_(buf, runtime.battery_percentage());
     buf.refresh();
     force_redraw_ = false;

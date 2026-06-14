@@ -114,8 +114,6 @@ class Esp32Runtime final : public microreader::IRuntime {
     float millivolts = voltage_mv * 2.0f;
     double volts = millivolts / 1000.0;
     double y = -144.9390 * volts * volts * volts + 1655.8629 * volts * volts - 6158.8520 * volts + 7501.3202;
-    ESP_LOGI("batt", "x4: raw=%d cal_mv=%d bat_v=%.3f pct=%.0f", adc_raw, voltage_mv, volts, y);
-
     y = std::max(y, 0.0);
     y = std::min(y, 100.0);
     y = std::round(y);
@@ -210,7 +208,6 @@ class Esp32Runtime final : public microreader::IRuntime {
         x3_last_good_mv_ = mv;
         x3_have_reading_ = true;
       }
-      ESP_LOGI("batt", "x3: soc=%u mv=%u", (unsigned)x3_last_good_soc_, (unsigned)x3_last_good_mv_);
     }
 
     if (!x3_have_reading_)
