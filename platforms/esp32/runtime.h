@@ -198,7 +198,7 @@ class Esp32Runtime final : public microreader::IRuntime {
 
   std::optional<uint8_t> read_x3_battery_pct_() const {
     const uint32_t now = millis();
-    if (x3_i2c_initialized_ && (now - x3_last_poll_ms_) >= kBqPollIntervalMs) {
+    if (x3_i2c_initialized_ && (x3_last_poll_ms_ == UINT32_MAX || (now - x3_last_poll_ms_) >= kBqPollIntervalMs)) {
       x3_last_poll_ms_ = now;
       const uint16_t soc = read_bq27220_reg_(BQ27220_SOC_REG);
       const uint16_t mv = read_bq27220_reg_(BQ27220_VOLT_REG);
@@ -240,7 +240,7 @@ class Esp32Runtime final : public microreader::IRuntime {
   // X3 I2C state
   bool x3_i2c_initialized_ = false;
   mutable std::optional<uint8_t> x3_last_pct_;
-  mutable uint32_t x3_last_poll_ms_ = 0;
+  mutable uint32_t x3_last_poll_ms_ = UINT32_MAX; // sentinel: first call always polls
   mutable uint16_t x3_last_good_soc_ = 0;
   mutable uint16_t x3_last_good_mv_ = 0;
   mutable bool x3_have_reading_ = false;
