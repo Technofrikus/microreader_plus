@@ -112,6 +112,7 @@ void ListMenuScreen::draw_all_(DrawBuffer& buf, std::optional<uint8_t> battery_p
   const int W = buf.width();
   const int H = buf.height();
   buf.fill(true);
+
   const int header_h = draw_header_(buf, W, H);
   const int bottom_h = draw_bottom_(buf, W, H, battery_pct);  // == kBottomAreaH
   draw_list_(buf, W, H, header_h, bottom_h);

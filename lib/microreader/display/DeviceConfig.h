@@ -23,11 +23,11 @@ struct DeviceConfig {
   constexpr int logical_height() const { return physical_width; }
 
   static constexpr DeviceConfig x4() {
-    return {DeviceModel::X4, 786, 10, 800, 480, 100, 48000};
+    return {DeviceModel::X4, 788, 10, 800, 480, 100, 48000};
   }
 
   static constexpr DeviceConfig x3() {
-    return {DeviceModel::X3, 792, 0, 792, 528, 99, 52272};
+    return {DeviceModel::X3, 790, 0, 792, 528, 99, 52272};
   }
 };
 

@@ -851,10 +851,11 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape) {
       snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
       buf.draw_text_centered(W / 2, landscape ? H - 18 : H - 16, pct_str, true);
     } else {
-      // Progress bar: a thin filled line at the very bottom of the screen.
-      // Move it up 2px in landscape mode because of the screen edges being partially hidden.
-      const int kBarY = landscape ? H - 4 : H - 2;
-      constexpr int kBarH = 2;
+      // Progress bar: a thick line near the bottom of the screen.
+      // Extended outward (toward the edge) so bezel misalignment is hidden
+      // under the bar rather than leaving a visible white gap.
+      const int kBarH = landscape ? 5 : 4;
+      const int kBarY = H - kBarH;
       const int bar_w = pct * W / 100;
       buf.fill_rect(0, kBarY, bar_w, kBarH, false);         // filled portion (black)
       buf.fill_rect(bar_w, kBarY, W - bar_w, kBarH, true);  // unfilled portion (white)
