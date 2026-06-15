@@ -1,4 +1,68 @@
-# Microreader
+# <sup>micro</sup>reader<sup>+</sup>
+
+Minimal EPUB reader, **compatible only with Xteink X4. Not recommended for locked devices** — fork of [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader)
+
+## Fork Features
+
+### Controls
+- Simplified configuration for Menu and Reader with **4 control modes** (Default, Side Inverted, Front Inverted and Inverted).
+
+### Content management
+- **Delete book** with long-press back
+- **Remove from Recents** with long-press back from Last Opened list
+
+### Reader Options
+- Antialising On/Off
+
+### Support for X3 (WIP).
+- 2-bit sleep screen
+- Fast page rendering
+- Battery level detection
+
+<img width="488" height="695" alt="Screenshot_2026-06-15-08-56-09-48_99c04817c0de5652397fc8b56c3b3817" src="https://github.com/user-attachments/assets/3b57a53e-4c3d-48b5-b600-4c290dddcf38" />
+
+
+### Firmware Update via SD
+based on https://github.com/crosspoint-reader/crosspoint-reader/pull/1786
+- ESP32 image validation (magic 0xE9, segment walk, XOR, CRC32)
+- Chip/revision guard + SHA256 + battery check
+- OTA rollback via ESP_IMG_PENDING_VERIFY
+- Force switch via otadata direct write as fallback
+
+### UI
+- **Custom Logo**
+
+### System
+- **Auto-migration** of settings (bool invert → ControlMode)
+- **Button state cleanup** post-transition (prevents ghost presses)
+  
+---
+
+## Features merged upstream
+
+https://github.com/CidVonHighwind/microreader/pull/25
+- Horizontal rule: centered at 1/3 width, 2px thickness
+- CSS `width: XX%` parsing for `<hr>`
+
+https://github.com/CidVonHighwind/microreader/pull/26
+- Drop caps from `<span style="float: left; font-size: ...">`
+
+https://github.com/CidVonHighwind/microreader/pull/30
+- `--upload-dir` for batch EPUB upload via serial
+
+https://github.com/CidVonHighwind/microreader/pull/33
+- ReaderOptions: book title as header
+- Toast feedback on actions
+
+https://github.com/CidVonHighwind/microreader/pull/40
+- Add case-insensitive alphabetical sort
+- Add secondary alphabetical sort for unopened books in LastOpened mode
+- Add visual separator between opened/unopened books
+- Preserve last_open_order during index rebuild
+
+---
+
+## Original README
 
 Minimal EPUB reader for the [Xteink X4](https://xteink.com) device (ESP32-C3 + SSD1677 e-ink display, 480×800 portrait).
 Includes a desktop SDL2 emulator for development without hardware.
