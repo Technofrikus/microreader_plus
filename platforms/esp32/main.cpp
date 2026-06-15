@@ -23,26 +23,44 @@
 #include "runtime.h"
 #include "sdcard.h"
 #include "serial_communication.h"
+#include "device_detect.h"
 
-// Load the device model from NVS.  Defaults to X4 (backward compatible).
+// Load the device model from NVS.  Auto-detect via I2C when NVS is empty.
 // The NVS namespace "microreader" key "device_model" stores "x3" or "x4".
 static microreader::DeviceConfig load_device_config() {
   nvs_handle_t nvs;
   esp_err_t err = nvs_open("microreader", NVS_READONLY, &nvs);
-  if (err != ESP_OK) {
-    ESP_LOGI("nvs", "NVS open failed (%s), defaulting to X4", esp_err_to_name(err));
-    return microreader::DeviceConfig::x4();
+  if (err == ESP_OK) {
+    char model[4] = {};
+    size_t len = sizeof(model);
+    err = nvs_get_str(nvs, "device_model", model, &len);
+    nvs_close(nvs);
+    if (err == ESP_OK) {
+      ESP_LOGI("nvs", "NVS device_model = %s", model);
+      if (strcmp(model, "x3") == 0) return microreader::DeviceConfig::x3();
+      if (strcmp(model, "x4") == 0) return microreader::DeviceConfig::x4();
+    }
   }
-  char model[4] = {};
-  size_t len = sizeof(model);
-  err = nvs_get_str(nvs, "device_model", model, &len);
-  nvs_close(nvs);
-  if (err == ESP_OK && strcmp(model, "x3") == 0) {
-    ESP_LOGI("nvs", "NVS device_model = x3");
-    return microreader::DeviceConfig::x3();
+
+  // NVS empty, corrupted, or unknown model → auto-detect via hardware.
+  ESP_LOGI("nvs", "No model in NVS, auto-detecting...");
+#ifndef QEMU_BUILD
+  microreader::DeviceModel detected = detect_device_model();
+#else
+  microreader::DeviceModel detected = microreader::DeviceModel::X4;
+#endif
+  const char* model_str = (detected == microreader::DeviceModel::X3) ? "x3" : "x4";
+  ESP_LOGI("nvs", "Auto-detected: %s", model_str);
+
+  if (nvs_open("microreader", NVS_READWRITE, &nvs) == ESP_OK) {
+    nvs_set_str(nvs, "device_model", model_str);
+    nvs_commit(nvs);
+    nvs_close(nvs);
   }
-  ESP_LOGI("nvs", "NVS device_model = %s (defaulting to X4)", err == ESP_OK ? model : "(not set)");
-  return microreader::DeviceConfig::x4();
+
+  return (detected == microreader::DeviceModel::X3)
+             ? microreader::DeviceConfig::x3()
+             : microreader::DeviceConfig::x4();
 }
 
 static void verify_ota() {
