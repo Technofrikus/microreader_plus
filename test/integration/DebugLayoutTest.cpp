@@ -56,7 +56,7 @@ TEST(DebugLayoutTest, AliceIllustrated) {
 
   out << "Book: " << epub_path.filename().string() << '\n';
   out << "Total chapters: " << mrb.chapter_count() << '\n';
-  out << "Page size: " << DrawBuffer::kWidth << "x" << DrawBuffer::kHeight << '\n';
+  out << "Page size: " << DeviceConfig::x4().logical_width() << "x" << DeviceConfig::x4().logical_height() << '\n';
   out << "Padding: top=" << ReaderScreen::kPaddingTop << " right=" << ReaderScreen::kPaddingRight
       << " bottom=" << ReaderScreen::kPaddingBottom << " left=" << ReaderScreen::kPaddingLeft
       << "  para_spacing=" << ReaderScreen::kParaSpacing << '\n';
@@ -137,7 +137,7 @@ TEST(DebugLayoutTest, AliceIllustrated) {
         }
 
         const int last_bottom = items.back().y + items.back().h;
-        const int usable_bottom = DrawBuffer::kHeight - ReaderScreen::kPaddingBottom;
+        const int usable_bottom = DeviceConfig::x4().logical_height() - ReaderScreen::kPaddingBottom;
         out << "  [tail gap to usable bottom: " << (usable_bottom - last_bottom) << "px"
             << " | usable area: " << (usable_bottom - ReaderScreen::kPaddingTop) << "px]\n";
       }

@@ -112,6 +112,7 @@ void ListMenuScreen::draw_all_(DrawBuffer& buf, std::optional<uint8_t> battery_p
   const int W = buf.width();
   const int H = buf.height();
   buf.fill(true);
+
   const int header_h = draw_header_(buf, W, H);
   const int bottom_h = draw_bottom_(buf, W, H, battery_pct);  // == kBottomAreaH
   draw_list_(buf, W, H, header_h, bottom_h);
@@ -445,7 +446,9 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
   Button logical_down_side = side_inv ? Button::Up : Button::Down;
 
   Button btn;
+  int press_count = 0;
   while (buttons.next_press(btn)) {
+    ++press_count;
     if (btn == logical_up_front || btn == logical_up_side) {
       if (n > 0 && !back_held_) {
         move_up();
@@ -497,9 +500,12 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
     }
   }
 
-  // Hold-down acceleration: when a nav button is held (no fresh press this frame),
-  // step size grows by 1 each frame: frame 0 = 1, frame 1 = 2, frame 2 = 3, …
-  auto hold_step = [](int frames) -> int { return frames + 1; };
+  // Hold-down acceleration: auto-repeat starts after 6 frames (~300ms) of
+  // continuous hold, then step size grows by 1 each frame.
+  auto hold_step = [](int frames) -> int {
+    if (frames < 2) return 0;
+    return frames - 1;
+  };
 
   const bool up_held = !had_up_press && !back_held_ && (buttons.is_down(logical_up_front) || buttons.is_down(logical_up_side));
   const bool down_held = !had_down_press && !back_held_ && (buttons.is_down(logical_down_front) || buttons.is_down(logical_down_side));

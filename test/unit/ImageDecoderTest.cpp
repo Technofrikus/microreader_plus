@@ -590,10 +590,10 @@ TEST_F(ImageFixtureTest, ScaleToFill_False_Jpeg_NaturalSize) {
   ASSERT_NE(entry, nullptr);
 
   DecodedImage natural, large_target;
-  ASSERT_EQ(decode_jpeg_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, natural, nullptr, 0, false),
+  ASSERT_EQ(decode_jpeg_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), natural, nullptr, 0, false),
             ImageError::Ok);
   ASSERT_EQ(
-      decode_jpeg_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, large_target, nullptr, 0, false),
+      decode_jpeg_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), large_target, nullptr, 0, false),
       ImageError::Ok);
 
   // Both calls with scale_to_fill=false should yield the same (natural) dims.
@@ -614,7 +614,7 @@ TEST_F(ImageFixtureTest, ScaleToFill_True_Jpeg_FillsTarget) {
 
   // First determine natural size so we can pick a larger target.
   DecodedImage natural;
-  ASSERT_EQ(decode_jpeg_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, natural, nullptr, 0, false),
+  ASSERT_EQ(decode_jpeg_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), natural, nullptr, 0, false),
             ImageError::Ok);
   ASSERT_GT(natural.width, 0);
   ASSERT_GT(natural.height, 0);
@@ -651,7 +651,7 @@ TEST_F(ImageFixtureTest, ScaleToFill_True_Png_FillsTarget) {
   ASSERT_NE(entry, nullptr);
 
   DecodedImage natural;
-  ASSERT_EQ(decode_png_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, natural, nullptr, 0, false),
+  ASSERT_EQ(decode_png_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), natural, nullptr, 0, false),
             ImageError::Ok);
   ASSERT_GT(natural.width, 0);
   ASSERT_GT(natural.height, 0);
@@ -723,7 +723,7 @@ TEST_F(ImageFixtureTest, DecodeFromLocalEntry_Jpeg_WithSink) {
   auto s = collector.sink();
   DecodedImage dims;
   auto err =
-      decode_image_from_entry(zf, local_entry, DrawBuffer::kWidth, DrawBuffer::kHeight, dims, nullptr, 0, false, &s);
+      decode_image_from_entry(zf, local_entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), dims, nullptr, 0, false, &s);
   ASSERT_EQ(err, ImageError::Ok) << "decode_image_from_entry failed for local entry with empty name — "
                                     "this is the black squares bug";
   EXPECT_GT(dims.width, 0);
@@ -747,7 +747,7 @@ TEST_F(ImageFixtureTest, DecodeFromLocalEntry_Png_WithSink) {
   auto s = collector.sink();
   DecodedImage dims;
   auto err =
-      decode_image_from_entry(zf, local_entry, DrawBuffer::kWidth, DrawBuffer::kHeight, dims, nullptr, 0, false, &s);
+      decode_image_from_entry(zf, local_entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), dims, nullptr, 0, false, &s);
   ASSERT_EQ(err, ImageError::Ok) << "decode_image_from_entry failed for PNG local entry with empty name";
   EXPECT_GT(dims.width, 0);
   EXPECT_GT(dims.height, 0);
@@ -764,7 +764,7 @@ TEST_F(ImageFixtureTest, SinkOutput_MatchesBufferOutput_Jpeg) {
   ASSERT_NE(entry, nullptr);
 
   DecodedImage buf_img;
-  ASSERT_EQ(decode_jpeg_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, buf_img), ImageError::Ok);
+  ASSERT_EQ(decode_jpeg_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), buf_img), ImageError::Ok);
   ASSERT_GT(buf_img.width, 0);
   ASSERT_FALSE(buf_img.data.empty());
 
@@ -772,7 +772,7 @@ TEST_F(ImageFixtureTest, SinkOutput_MatchesBufferOutput_Jpeg) {
   auto s = collector.sink();
   DecodedImage sink_dims;
   ASSERT_EQ(
-      decode_jpeg_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, sink_dims, nullptr, 0, false, &s),
+      decode_jpeg_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), sink_dims, nullptr, 0, false, &s),
       ImageError::Ok);
 
   EXPECT_EQ(sink_dims.width, buf_img.width);
@@ -798,7 +798,7 @@ TEST_F(ImageFixtureTest, SinkOutput_MatchesBufferOutput_Png) {
   ASSERT_NE(entry, nullptr);
 
   DecodedImage buf_img;
-  ASSERT_EQ(decode_png_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, buf_img), ImageError::Ok);
+  ASSERT_EQ(decode_png_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), buf_img), ImageError::Ok);
   ASSERT_GT(buf_img.width, 0);
   ASSERT_FALSE(buf_img.data.empty());
 
@@ -806,7 +806,7 @@ TEST_F(ImageFixtureTest, SinkOutput_MatchesBufferOutput_Png) {
   auto s = collector.sink();
   DecodedImage sink_dims;
   ASSERT_EQ(
-      decode_png_from_entry(zf, *entry, DrawBuffer::kWidth, DrawBuffer::kHeight, sink_dims, nullptr, 0, false, &s),
+      decode_png_from_entry(zf, *entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), sink_dims, nullptr, 0, false, &s),
       ImageError::Ok);
 
   EXPECT_EQ(sink_dims.width, buf_img.width);
@@ -857,7 +857,7 @@ TEST(DecodeImage, DeflatedJpeg_LocalEntry_NoFilename) {
   auto s = collector.sink();
   DecodedImage dims;
   auto err =
-      decode_image_from_entry(zf, local_entry, DrawBuffer::kWidth, DrawBuffer::kHeight, dims, nullptr, 0, false, &s);
+      decode_image_from_entry(zf, local_entry, DeviceConfig::x4().logical_width(), DeviceConfig::x4().logical_height(), dims, nullptr, 0, false, &s);
   ASSERT_EQ(err, ImageError::Ok) << "Deflated JPEG with empty filename should decode via magic peek — "
                                     "this was the black squares bug (err="
                                  << (int)err << ")";

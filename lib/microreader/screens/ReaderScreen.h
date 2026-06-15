@@ -9,6 +9,7 @@
 #include "../content/TextLayout.h"
 #include "../content/mrb/MrbConverter.h"
 #include "../content/mrb/MrbReader.h"
+#include "../display/DeviceConfig.h"
 #include "../display/DrawBuffer.h"
 #include "IScreen.h"
 #include "ReaderOptionsScreen.h"
@@ -96,8 +97,9 @@ class ReaderScreen final : public IScreen {
 
   // Build PageOptions matching the reader's layout configuration.
   // Pass settings to get the correct bottom padding for the active progress style.
-  static PageOptions make_page_opts(const ReaderSettings* settings = nullptr, int width = DrawBuffer::kWidth,
-                                    int height = DrawBuffer::kHeight) {
+  static PageOptions make_page_opts(const ReaderSettings* settings = nullptr,
+                                     int width = DeviceConfig::x4().logical_width(),
+                                     int height = DeviceConfig::x4().logical_height()) {
     PageOptions opts(static_cast<uint16_t>(width), static_cast<uint16_t>(height), kPaddingTop, kParaSpacing,
                      Alignment::Start);
     opts.padding_right = kPaddingRight;
@@ -147,6 +149,8 @@ class ReaderScreen final : public IScreen {
   ImageSizeQuery image_size_fn_;
   bool grayscale_pending_ = false;
   bool grayscale_active_ = false;
+  uint8_t hold_next_frames_ = 0;
+  uint8_t hold_prev_frames_ = 0;
   std::vector<PageLink> page_links_;
 
   bool decode_image_to_buffer_(uint16_t img_key, uint32_t offset, DrawBuffer& buf, int dest_x, int dest_y,

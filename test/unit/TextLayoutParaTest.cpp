@@ -351,7 +351,7 @@ TEST(TextLayout, GermanTextRenderingPipeline) {
                                                    "1945"),                        // 1945
                                        FontStyle::Regular, false));
 
-  LayoutOptions opts{DrawBuffer::kWidth, Alignment::Start};
+  LayoutOptions opts{DeviceConfig::x4().logical_width(), Alignment::Start};
   auto lines = TextLayout(font16).layout_paragraph(opts, para);
 
   ASSERT_GE(lines.size(), 1u);

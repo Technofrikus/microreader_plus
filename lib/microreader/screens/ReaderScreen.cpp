@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "../Application.h"
 #include "../HeapLog.h"
@@ -541,13 +542,27 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
     }
   }
 
-  // Hold-down: advance one page per frame while a nav button is held,
-  // but only if no fresh press event arrived this frame (avoids double-counting
-  // the initial press).
-  if (!had_next_press && (buttons.is_down(logical_next_front) || buttons.is_down(logical_next_side)))
-    ++page_delta;
-  if (!had_prev_press && (buttons.is_down(logical_prev_front) || buttons.is_down(logical_prev_side)))
-    --page_delta;
+  // Hold-down: 3-frame threshold (~200ms), then 1 page every 2 frames (~100ms).
+  if (!had_next_press && (buttons.is_down(logical_next_front) || buttons.is_down(logical_next_side))) {
+    if (hold_next_frames_ >= 3) {
+      if ((hold_next_frames_ - 3) % 2 == 0) ++page_delta;
+      ++hold_next_frames_;
+    } else {
+      ++hold_next_frames_;
+    }
+  } else {
+    hold_next_frames_ = 0;
+  }
+  if (!had_prev_press && (buttons.is_down(logical_prev_front) || buttons.is_down(logical_prev_side))) {
+    if (hold_prev_frames_ >= 3) {
+      if ((hold_prev_frames_ - 3) % 2 == 0) --page_delta;
+      ++hold_prev_frames_;
+    } else {
+      ++hold_prev_frames_;
+    }
+  } else {
+    hold_prev_frames_ = 0;
+  }
 
   bool changed = false;
   if (page_delta > 0) {
@@ -744,8 +759,7 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
     }
   }
 
-  // Track whether grayscale pass is needed (deferred to update()).
-  grayscale_pending_ = fset && fset->has_grayscale();
+  grayscale_pending_ = (fset && fset->has_grayscale() && reader_settings_.antialias_enabled);
 
   // ── BW rendering
   // ────────────────────────────────────────────────────────
@@ -837,10 +851,11 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape) {
       snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
       buf.draw_text_centered(W / 2, landscape ? H - 18 : H - 16, pct_str, true);
     } else {
-      // Progress bar: a thin filled line at the very bottom of the screen.
-      // Move it up 2px in landscape mode because of the screen edges being partially hidden.
-      const int kBarY = landscape ? H - 4 : H - 2;
-      constexpr int kBarH = 2;
+      // Progress bar: a thick line near the bottom of the screen.
+      // Extended outward (toward the edge) so bezel misalignment is hidden
+      // under the bar rather than leaving a visible white gap.
+      const int kBarH = landscape ? 5 : 4;
+      const int kBarY = H - kBarH;
       const int bar_w = pct * W / 100;
       buf.fill_rect(0, kBarY, bar_w, kBarH, false);         // filled portion (black)
       buf.fill_rect(bar_w, kBarY, W - bar_w, kBarH, true);  // unfilled portion (white)
@@ -968,17 +983,16 @@ void ReaderScreen::apply_grayscale_(DrawBuffer& buf) {
   if (!fset || !fset->has_grayscale())
     return;
 
-  // LSB plane → BW RAM (no refresh)
   buf.fill(false);
   render_text_(buf, *fset, GrayPlane::LSB, true, reader_settings_.h_padding());
   buf.write_ram_bw();
 
-  // MSB plane → RED RAM (no refresh)
   buf.fill(false);
   render_text_(buf, *fset, GrayPlane::MSB, true, reader_settings_.h_padding());
   buf.write_ram_red();
 
-  // Trigger grayscale refresh with custom LUT
+  if (buf.config().model == DeviceModel::X3)
+    buf.set_grayscale_1p(true);
   buf.grayscale_refresh();
 }
 

@@ -50,6 +50,7 @@ struct ReaderSettings {
   ProgressStyle progress_style = ProgressStyle::Bar;   // reading progress indicator style
   ProgressScope progress_scope = ProgressScope::Book;  // progress scope: whole book or current chapter
   bool override_publisher_fonts = false;               // ignore publisher's font sizes
+  bool antialias_enabled = true;                       // grayscale anti-aliasing on text
 
   static constexpr uint16_t kHPaddingPresets[] = {4, 12, 24, 40};
   static constexpr uint16_t kVPaddingPresets[] = {0, 4, 12, 20};
@@ -162,6 +163,7 @@ class ReaderOptionsScreen final : public ListMenuScreen {
   int idx_chapters_ = -1;
   int idx_rotate_display_ = -1;
   int idx_links_ = -1;
+  int idx_antialias_ = -1;
 
   // Page links set by ReaderScreen before pushing this screen.
   std::vector<PageLink> page_links_;
