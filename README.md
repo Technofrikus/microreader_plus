@@ -12,7 +12,7 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 - **Remove from Recents** with long-press back from Last Opened list
 
 ### Reader Options
-- Antialiasing On/Off (grayscale rendering, supported on both X4 and X3)
+- Antialiasing On/Off
 
 ### Support for X3
 - **Auto-detect** X3 vs X4 at boot via I2C hardware fingerprint
@@ -31,6 +31,7 @@ based on https://github.com/crosspoint-reader/crosspoint-reader/pull/1786
 - Chip/revision guard + SHA256 + battery check
 - OTA rollback via ESP_IMG_PENDING_VERIFY
 - Force switch via otadata direct write as fallback
+- **Device-model compatibility gate**: firmware may declare supported models (X4/X3) via an embedded marker. On X3, explicitly incompatible firmware is blocked and unverified firmware warns before flashing.
 
 ### UI
 - **Custom Logo**
