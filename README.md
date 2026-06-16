@@ -1,6 +1,6 @@
 # <sup>micro</sup>reader<sup>+</sup>
 
-Minimal EPUB reader, **compatible only with Xteink X4. Not recommended for locked devices** — fork of [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader)
+Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devices** — fork of [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader)
 
 ## Fork Features
 
@@ -12,12 +12,15 @@ Minimal EPUB reader, **compatible only with Xteink X4. Not recommended for locke
 - **Remove from Recents** with long-press back from Last Opened list
 
 ### Reader Options
-- Antialising On/Off
+- Antialiasing On/Off (grayscale rendering, supported on both X4 and X3)
 
-### Support for X3 (WIP).
-- 2-bit sleep screen
+### Support for X3
+- **Auto-detect** X3 vs X4 at boot via I2C hardware fingerprint
+- Grayscale sleep screen images
 - Fast page rendering
-- Battery level detection
+- BQ27220 I2C battery gauge
+- SPI at 10 MHz (X4 runs at 20 MHz)
+- Automatic EPD cleanup before restart to prevent controller corruption
 
 <img width="488" height="695" alt="Screenshot_2026-06-15-08-56-09-48_99c04817c0de5652397fc8b56c3b3817" src="https://github.com/user-attachments/assets/3b57a53e-4c3d-48b5-b600-4c290dddcf38" />
 
