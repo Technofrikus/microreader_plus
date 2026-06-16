@@ -87,6 +87,10 @@ Books (`.epub`) can go anywhere on the SD card — the device scans recursively 
 
 There are three ways to transfer content while the device is connected via USB:
 
+### Browser Manager
+
+Open the [browser manager](https://cidvonhighwind.github.io/microreader/) in Chrome, Edge, or Firefox (Web Serial API), or open `docs/index.html` locally. It provides a file browser, EPUB/font/sleep-image upload, and auto-reconnects when the page is refreshed.
+
 ### Calibre Plugin
 
 Install the plugin to send books directly from [Calibre](https://calibre-ebook.com):
@@ -97,10 +101,6 @@ Install the plugin to send books directly from [Calibre](https://calibre-ebook.c
 The device is detected automatically (VID `0x303A` / PID `0x1001`). Books on the device show checkmarks in the library; you can send, delete, and download books from the Device menu.
 
 > Requires Calibre 5+ and the device connected over USB.
-
-### Browser Manager
-
-Open the [browser manager](https://cidvonhighwind.github.io/microreader/) in Chrome, Edge, or Firefox (Web Serial API), or open `docs/index.html` locally. It provides a file browser, EPUB/font/sleep-image upload, and auto-reconnects when the page is refreshed.
 
 ### Command Line
 
