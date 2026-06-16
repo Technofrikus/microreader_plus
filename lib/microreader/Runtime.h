@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "Input.h"
+#include "display/DeviceConfig.h"
 
 namespace microreader {
 
@@ -18,6 +19,12 @@ class IRuntime {
   // Read battery level (0-100 percentage).
   // Returns empty optional if the platform does not have a battery.
   virtual std::optional<uint8_t> battery_percentage() const = 0;
+
+  // The device model this runtime is running on (X3 or X4).
+  // Default returns X4; platform runtimes override with the detected model.
+  virtual DeviceModel device_model() const {
+    return DeviceModel::X4;
+  }
 
   // Optional step-mode support for debugging.
   // step_mode() returns true when the loop should pause between ticks.

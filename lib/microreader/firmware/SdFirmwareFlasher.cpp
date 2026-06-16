@@ -1,5 +1,7 @@
 #include "SdFirmwareFlasher.h"
 
+#include "FirmwareMeta.h"
+
 #ifdef ESP_PLATFORM
 
 #include <algorithm>
@@ -28,6 +30,50 @@ constexpr size_t kChunk = 4096;
 constexpr uint8_t kChecksumSeed = 0xEF;
 constexpr size_t kHeaderSize = 24;
 constexpr size_t kSegHeaderSize = 8;
+
+constexpr size_t kFwMagicLen = sizeof(kFirmwareMetaMagic);
+constexpr size_t kFwMarkerLen = sizeof(FirmwareMeta);
+
+// Scan the whole image for the FirmwareMeta marker.  Reads the file from the
+// start in kChunk windows carrying (kFwMarkerLen-1) bytes between reads so a
+// marker straddling a window boundary is never missed.  Returns true and fills
+// *out_models when a marker with a recognised struct version is found.
+// (Adds one sequential read of the image; negligible against the erase+write
+// of the OTA partition that follows a successful validation.)
+bool scan_firmware_meta(FILE* file, size_t file_size, uint16_t* out_models) {
+  const size_t kCarry = kFwMarkerLen - 1;
+  auto wbuf = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[kChunk + kCarry]);
+  if (!wbuf) return false;
+
+  std::fseek(file, 0, SEEK_SET);
+  size_t carry = 0;
+  size_t pos = 0;
+  while (pos < file_size) {
+    const size_t want = std::min<size_t>(kChunk, file_size - pos);
+    const size_t got = std::fread(wbuf.get() + carry, 1, want, file);
+    if (got != want) return false;
+    const size_t total = carry + got;
+
+    for (size_t b = 0; b + kFwMagicLen <= total; b++) {
+      if (std::memcmp(wbuf.get() + b, kFirmwareMetaMagic, kFwMagicLen) == 0 &&
+          b + kFwMarkerLen <= total) {
+        uint16_t version;
+        std::memcpy(&version, wbuf.get() + b + kFwMagicLen, sizeof(version));
+        if (version == kFirmwareMetaStructVersion) {
+          std::memcpy(out_models, wbuf.get() + b + kFwMagicLen + sizeof(version),
+                      sizeof(*out_models));
+          return true;
+        }
+      }
+    }
+
+    const size_t new_carry = std::min<size_t>(kCarry, total);
+    std::memmove(wbuf.get(), wbuf.get() + total - new_carry, new_carry);
+    carry = new_carry;
+    pos += got;
+  }
+  return false;
+}
 }  // namespace
 
 const char* flash_result_name(FlashResult r) {
@@ -187,6 +233,8 @@ FlashResult sd_firmware_validate(const char* path, size_t partition_size, Firmwa
     info->chip_id = fw_chip_id;
     info->min_chip_rev = fw_min_rev;
     info->segment_crc32 = UINT32_MAX;
+    info->has_marker = false;
+    info->declared_models = 0;
   }
 
   {
@@ -278,6 +326,17 @@ FlashResult sd_firmware_validate(const char* path, size_t partition_size, Firmwa
   }
 
   if (info) info->segment_crc32 = crc_accum ^ UINT32_MAX;
+
+  if (info) {
+    uint16_t models = 0;
+    if (scan_firmware_meta(file, file_size, &models)) {
+      info->has_marker = true;
+      info->declared_models = models;
+      ESP_LOGI("FLASH", "firmware marker: supported_models=0x%04X", models);
+    } else {
+      ESP_LOGI("FLASH", "firmware marker: not found");
+    }
+  }
 
   std::fclose(file);
   return FlashResult::OK;

@@ -24,7 +24,7 @@ class FirmwareUpdateScreen final : public ListMenuScreen {
   void on_back() override;
 
  private:
-  enum class Phase { None, Confirming, Failed };
+  enum class Phase { None, Confirming, Warning, Failed };
 
   Phase phase_ = Phase::None;
   size_t firmware_size_ = 0;
@@ -33,6 +33,7 @@ class FirmwareUpdateScreen final : public ListMenuScreen {
 #endif
   int last_pct_ = -1;
   std::string error_message_;
+  std::string failed_title_;
   std::string sha256_hex_;
   int confirm_idx_ = -1;
 #ifdef ESP_PLATFORM
@@ -41,8 +42,9 @@ class FirmwareUpdateScreen final : public ListMenuScreen {
 
   void do_validate_();
   void do_flash_();
-  void show_failed_(const char* error, const char* detail);
+  void show_failed_(const char* error, const char* detail, const char* title = nullptr);
   void build_confirm_items_();
+  void build_warning_items_();
   void build_failed_items_();
 
   static void flash_progress_cb_(size_t written, size_t total, void* ctx);

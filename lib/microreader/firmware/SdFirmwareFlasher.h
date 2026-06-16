@@ -27,9 +27,13 @@ enum class FlashResult {
 };
 
 struct FirmwareInfo {
-  uint8_t chip_id;
-  uint8_t min_chip_rev;
-  uint32_t segment_crc32;
+  uint8_t chip_id = 0;
+  uint8_t min_chip_rev = 0;
+  uint32_t segment_crc32 = 0;
+  // Whether a FirmwareMeta marker was found in the image and its declared
+  // device-model support (bitmask of kModelBitX3 / kModelBitX4).
+  bool has_marker = false;
+  uint16_t declared_models = 0;
 };
 
 using FlashProgressCb = void (*)(size_t written, size_t total, void* ctx);

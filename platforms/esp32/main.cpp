@@ -18,6 +18,7 @@
 #include "microreader/content/Book.h"
 #include "microreader/content/mrb/MrbConverter.h"
 #include "microreader/display/DeviceConfig.h"
+#include "microreader/firmware/FirmwareMeta.h"
 #include "microreader/display/DrawBuffer.h"
 #include "nvs_flash.h"
 #include "runtime.h"
@@ -143,6 +144,12 @@ extern "C" void app_main(void) {
 
   // Load device config from NVS (defaults to X4).
   static const microreader::DeviceConfig device_config = load_device_config();
+
+  // Log the firmware's declared device-model support.  Also serves to retain
+  // g_firmware_meta in the binary against --gc-sections so SD-flash validation
+  // can locate it when inspecting this image.
+  ESP_LOGI("main", "firmware supported_models: 0x%04x",
+           microreader::firmware_meta()->supported_models);
 
   // Initialise the appended asset blob (fonts, sleep images, ...).
   // Must happen before FontManager::init() and any sleep-image rendering.

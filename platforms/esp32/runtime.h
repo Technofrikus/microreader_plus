@@ -69,6 +69,10 @@ class Esp32Runtime final : public microreader::IRuntime {
     return read_x4_battery_pct_();
   }
 
+  microreader::DeviceModel device_model() const override {
+    return is_x3_ ? microreader::DeviceModel::X3 : microreader::DeviceModel::X4;
+  }
+
   void yield() override {
     vTaskDelay(1);
   }

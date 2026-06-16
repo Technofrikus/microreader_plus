@@ -2,12 +2,15 @@
 
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 #include "../Application.h"
 #include "../HeapLog.h"
 
 #ifdef ESP_PLATFORM
+#include "../firmware/FirmwareMeta.h"
 #include "../firmware/SdFirmwareFlasher.h"
+#include "../display/DeviceConfig.h"
 #include <esp_log.h>
 #include <esp_ota_ops.h>
 #include <esp_system.h>
@@ -20,6 +23,48 @@
 namespace microreader {
 
 static constexpr const char* kFirmwarePath = "/sdcard/firmware.bin";
+
+static std::vector<std::string> wrap_text(const std::string& text,
+                                           const BitmapFont& font,
+                                           int max_w) {
+  std::vector<std::string> lines;
+  if (text.empty() || max_w <= 0 || !font.valid())
+    return lines;
+
+  const char* p = text.c_str();
+  const char* start = p;
+  const char* last_break = nullptr;
+  int line_w = 0;
+
+  while (*p) {
+    const uint8_t b = static_cast<uint8_t>(*p);
+    const size_t cb = b < 0x80 ? 1u : b < 0xE0 ? 2u : b < 0xF0 ? 3u : 4u;
+    const int char_w = font.word_width(p, cb, FontStyle::Regular);
+
+    if (line_w + char_w > max_w && p > start) {
+      const char* break_at = (last_break && last_break > start) ? last_break : p;
+      lines.push_back(std::string(start, break_at - start));
+      start = break_at;
+      line_w = 0;
+      last_break = nullptr;
+      if (break_at < p) {
+        p = break_at;
+        continue;
+      }
+    }
+
+    if (cb == 1 && (*p == ' ' || *p == '-' || *p == '_' || *p == '.'))
+      last_break = p + cb;
+
+    line_w += char_w;
+    p += cb;
+  }
+
+  if (p > start)
+    lines.push_back(std::string(start, p - start));
+
+  return lines;
+}
 
 void FirmwareUpdateScreen::on_start() {
   MR_LOGI("FW", "screen started, checking %s", kFirmwarePath);
@@ -40,13 +85,20 @@ void FirmwareUpdateScreen::on_select(int index) {
       app_->pop_screen();
     return;
   }
+  if (phase_ == Phase::Warning) {
+    if (index == confirm_idx_)
+      do_flash_();
+    else
+      app_->pop_screen();
+    return;
+  }
   if (phase_ == Phase::Failed) {
     app_->pop_screen();
   }
 }
 
 void FirmwareUpdateScreen::on_back() {
-  if (phase_ == Phase::Confirming || phase_ == Phase::Failed) {
+  if (phase_ == Phase::Confirming || phase_ == Phase::Warning || phase_ == Phase::Failed) {
     app_->pop_screen();
   }
 }
@@ -57,15 +109,23 @@ void FirmwareUpdateScreen::build_confirm_items_() {
   title_ = "Update Firmware?";
 
   char line[48];
+  add_separator("firmware.bin");
   std::snprintf(line, sizeof(line), "Size: %u KB",
                 static_cast<unsigned>(firmware_size_ / 1024));
-  add_separator("firmware.bin");
   add_separator(line);
 
   if (!sha256_hex_.empty()) {
     std::snprintf(line, sizeof(line), "sha256: %.7s...", sha256_hex_.c_str());
     add_separator(line);
   }
+
+#ifdef ESP_PLATFORM
+  if (runtime()->device_model() == DeviceModel::X3 && firmware_info_.has_marker &&
+      (firmware_info_.declared_models & kModelBitX3)) {
+    add_separator("");
+    add_separator("Verified for X3");
+  }
+#endif
 
   add_separator("");
   add_item("Update");
@@ -74,10 +134,41 @@ void FirmwareUpdateScreen::build_confirm_items_() {
   set_selected(count() - 1);
 }
 
+void FirmwareUpdateScreen::build_warning_items_() {
+  phase_ = Phase::Warning;
+  clear_items();
+  title_ = "Compatibility Check";
+
+  char line[48];
+  add_separator("firmware.bin");
+  std::snprintf(line, sizeof(line), "Size: %u KB",
+                static_cast<unsigned>(firmware_size_ / 1024));
+  add_separator(line);
+
+  if (!sha256_hex_.empty()) {
+    std::snprintf(line, sizeof(line), "sha256: %.7s...", sha256_hex_.c_str());
+    add_separator(line);
+  }
+  add_separator("");
+
+  const int max_w = buffer_width() - 32;
+  const std::string msg =
+      "This firmware's X3 support could not be verified. "
+      "Flashing it may leave the device unusable.";
+  for (const auto& w : wrap_text(msg, ui_font_, max_w))
+    add_separator(w);
+
+  add_separator("");
+  add_item("Flash anyway");
+  confirm_idx_ = count() - 1;
+  add_item("Cancel");
+  set_selected(count() - 1);
+}
+
 void FirmwareUpdateScreen::build_failed_items_() {
   phase_ = Phase::Failed;
   clear_items();
-  title_ = "Update Failed";
+  title_ = failed_title_.empty() ? "Update Failed" : failed_title_.c_str();
 
   if (!error_message_.empty()) add_separator(error_message_);
   add_separator("");
@@ -85,11 +176,10 @@ void FirmwareUpdateScreen::build_failed_items_() {
   set_selected(count() - 1);
 }
 
-void FirmwareUpdateScreen::show_failed_(const char* error, const char* detail) {
+void FirmwareUpdateScreen::show_failed_(const char* error, const char* detail, const char* title) {
   show_hints_ = true;
-  error_message_ = error;
-  if (detail) error_message_ = detail;
-  ESP_LOGE("FW", "%s", error);
+  error_message_ = detail ? detail : error;
+  failed_title_ = title ? title : "Update Failed";
   build_failed_items_();
 }
 
@@ -200,6 +290,28 @@ void FirmwareUpdateScreen::do_validate_() {
 skip_sha:;
   if (!sha256_hex_.empty())
     MR_LOGI("FW", "sha256: %s", sha256_hex_.c_str());
+
+  // Device-model compatibility policy (X3 safety gate).
+  // - X4 device: every microreader firmware supports X4 → no gate.
+  // - X3 device + marker declaring X3 → trusted (proceed).
+  // - X3 device + marker WITHOUT X3 → explicitly incompatible → BLOCK.
+  // - X3 device + no marker → unknown → WARN, let the user decide.
+  if (runtime()->device_model() == DeviceModel::X3) {
+    if (firmware_info_.has_marker) {
+      if ((firmware_info_.declared_models & kModelBitX3) == 0) {
+        MR_LOGI("FW", "BLOCKED: marker declares no X3 support (models=0x%04X)",
+                firmware_info_.declared_models);
+        show_failed_("Incompatible with X3", "This firmware does not support the X3.", "Incompatible Firmware");
+        return;
+      }
+      MR_LOGI("FW", "X3 support verified by marker (models=0x%04X)",
+              firmware_info_.declared_models);
+    } else {
+      MR_LOGI("FW", "WARN: no firmware marker; X3 compatibility unknown");
+      build_warning_items_();
+      return;
+    }
+  }
 
   MR_LOGI("FW", "firmware ready for update");
   build_confirm_items_();
