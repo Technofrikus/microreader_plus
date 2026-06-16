@@ -100,7 +100,7 @@ The device is detected automatically (VID `0x303A` / PID `0x1001`). Books on the
 
 ### Browser Manager
 
-Open `tools/microreader-manager.html` in Chrome/Edge/Firefox (Web Serial API). It provides a file browser, EPUB/font/sleep-image upload, and auto-reconnects when the page is refreshed.
+Open the [browser manager](https://cidvonhighwind.github.io/microreader/) in Chrome, Edge, or Firefox (Web Serial API), or open `docs/index.html` locally. It provides a file browser, EPUB/font/sleep-image upload, and auto-reconnects when the page is refreshed.
 
 ### Command Line
 
@@ -124,7 +124,7 @@ The first time an image is shown it is converted and cached; subsequent sleeps l
 
 ```powershell
 python tools/serial_cmd.py --port COM4 --upload-sleep "path/to/my_image.bmp"
-# or use the browser manager (tools/microreader-manager.html)
+# or use the browser manager (https://cidvonhighwind.github.io/microreader/)
 ```
 
 **Desktop emulator:** copy any `.bmp` file into `sd/.sleep/`.
@@ -150,7 +150,7 @@ platforms/esp32/          ESP-IDF + PlatformIO firmware
 test/                     Google Test suite
 tools/                    Python scripts and dev tools
   calibre-plugin/         Calibre device plugin (build.ps1 → microreader.zip)
-  microreader-manager.html  browser-based file manager (Web Serial API)
+docs/                     browser-based file manager (Web Serial API) — GitHub Pages
 resources/                Fonts, sleep images
 ```
 
