@@ -440,16 +440,24 @@ class DrawBuffer {
 
   static constexpr int kLoadLogW = 256;
   static constexpr int kLoadLogH = 32;
+  static constexpr int kLoadBufBytes = ((kLoadLogW + 7) / 8) * kLoadLogH;
 
   int load_phys_x() const {
-    int raw = height() - kLoadLogH;
+    if (rotation_ != Rotation::Deg0) {
+      int raw = height() - kLoadLogH;
+      return ((raw + config_.panel_offset_x + 7) & ~7) - config_.panel_offset_x;
+    }
+    int raw = (width() - kLoadLogW) / 2;
     return ((raw + config_.panel_offset_x) & ~7) - config_.panel_offset_x;
   }
-  int load_phys_y() const { return config_.physical_height - (width() - kLoadLogW) / 2 - kLoadLogW; }
-  static constexpr int kLoadPhysW = kLoadLogH;
-  static constexpr int kLoadPhysH = kLoadLogW;
-  static constexpr int kLoadStride = (kLoadPhysW + 7) / 8;
-  static constexpr int kLoadBufBytes = kLoadStride * kLoadPhysH;
+  int load_phys_y() const {
+    if (rotation_ == Rotation::Deg0)
+      return height() - kLoadLogH;
+    return config_.physical_height - (width() - kLoadLogW) / 2 - kLoadLogW;
+  }
+  int load_phys_w() const { return rotation_ == Rotation::Deg0 ? kLoadLogW : kLoadLogH; }
+  int load_phys_h() const { return rotation_ == Rotation::Deg0 ? kLoadLogH : kLoadLogW; }
+  int load_stride() const { return (load_phys_w() + 7) / 8; }
 
   static constexpr int kBarW = 160;
   static constexpr int kBarH = 7;
@@ -461,8 +469,8 @@ class DrawBuffer {
       return;
     uint8_t new_buf[kLoadBufBytes];
     render_loading_box_(new_buf, text, progress_pct);
-    display_.partial_refresh_region(load_phys_x() + config_.panel_offset_x, load_phys_y(), kLoadPhysW, kLoadPhysH,
-                                    new_buf, kLoadStride);
+    display_.partial_refresh_region(load_phys_x() + config_.panel_offset_x, load_phys_y(), load_phys_w(), load_phys_h(),
+                                    new_buf, load_stride());
   }
 
  private:
@@ -732,7 +740,7 @@ class DrawBuffer {
   }
 
   RenderTarget mini_target_(uint8_t* buf) const {
-    return {buf, kLoadStride, load_phys_x(), load_phys_y(), kLoadPhysW, kLoadPhysH, load_phys_x(),
+    return {buf, load_stride(), load_phys_x(), load_phys_y(), load_phys_w(), load_phys_h(), load_phys_x(),
             config_.physical_height};
   }
 
@@ -807,8 +815,13 @@ class DrawBuffer {
     const RenderTarget t = mini_target_(mini);
     memset(mini, 0xFF, kLoadBufBytes);
 
+    const bool deg0 = (rotation_ == Rotation::Deg0);
+
     auto fill = [&](int lx, int ly, int lw, int lh) {
-      fill_rect_physical_(t, ly, config_.physical_height - lx - lw, lh, lw, /*white=*/false);
+      if (deg0)
+        fill_rect_physical_(t, lx, ly, lw, lh, /*white=*/false);
+      else
+        fill_rect_physical_(t, ly, config_.physical_height - lx - lw, lh, lw, /*white=*/false);
     };
 
     const BitmapFont& font = ui_font_();
@@ -816,7 +829,7 @@ class DrawBuffer {
       const int tw = static_cast<int>(font.word_width(text, strlen(text), FontStyle::Regular));
       const int text_lx = width() / 2 - tw / 2;
       const int baseline_ly = (height() - kLoadLogH) + 3 + static_cast<int>(font.baseline());
-      draw_text_impl_(t, text_lx, baseline_ly, text, strlen(text), font, GrayPlane::BW, false, FontStyle::Regular);
+      draw_text_impl_(t, text_lx, baseline_ly, text, strlen(text), font, GrayPlane::BW, false, FontStyle::Regular, rotation_);
     }
 
     fill(bar_x() + 1, bar_y(), kBarW - 2, 1);
