@@ -465,6 +465,7 @@ class DrawBuffer {
   int bar_y() const { return (height() - kLoadLogH) + kLoadLogH - kBarH - 4; }
 
   void show_loading(const char* text, int progress_pct) {
+    loading_shown_ = true;
     if (config_.model != DeviceModel::X3 && display_.is_busy())
       return;
     uint8_t new_buf[kLoadBufBytes];
@@ -473,8 +474,12 @@ class DrawBuffer {
                                     new_buf, load_stride());
   }
 
- private:
-  struct RenderTarget {
+  bool loading_shown() const { return loading_shown_; }
+  void clear_loading_flag() { loading_shown_ = false; }
+
+  private:
+   bool loading_shown_ = false;
+   struct RenderTarget {
     uint8_t* buf;
     int stride;
     int phys_x0;
