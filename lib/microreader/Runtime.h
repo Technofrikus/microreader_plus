@@ -19,6 +19,10 @@ class IRuntime {
   // Returns empty optional if the platform does not have a battery.
   virtual std::optional<uint8_t> battery_percentage() const = 0;
 
+  // Read raw battery voltage in millivolts (no hysteresis, always fresh).
+  // Returns empty optional if the platform does not have a battery ADC.
+  virtual std::optional<int> battery_voltage_mv() const { return std::nullopt; }
+
   // Optional step-mode support for debugging.
   // step_mode() returns true when the loop should pause between ticks.
   // consume_step() returns true (exactly once per press) when the user
