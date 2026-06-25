@@ -322,6 +322,9 @@ class EInkDisplay : public microreader::IDisplay {
   }
 
   void deep_sleep() override {
+    if (inDeepSleep_)
+      return;
+    waitWhileBusy("deep_sleep");
     sendCommand(CMD_DEEP_SLEEP);
     sendData(0x03);
     isScreenOn = false;

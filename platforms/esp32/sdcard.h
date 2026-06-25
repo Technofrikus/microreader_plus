@@ -94,3 +94,20 @@ inline bool sd_mounted() {
 }
 
 #endif  // QEMU_BUILD
+
+// Unmount SD card and release CS pin before deep sleep to minimise leakage.
+inline void sd_deinit() {
+#ifdef QEMU_BUILD
+  if (s_wl_handle != WL_INVALID_HANDLE) {
+    esp_vfs_fat_spiflash_unmount_rw_wl(SD_MOUNT, s_wl_handle);
+    s_wl_handle = WL_INVALID_HANDLE;
+  }
+#else
+  if (sd_card_) {
+    esp_vfs_fat_sdcard_unmount(SD_MOUNT, sd_card_);  // best-effort
+    sd_card_ = nullptr;
+  }
+  // Set CS to input so we don't drive the SD card's CS pin during sleep.
+  gpio_set_direction(SD_CS, GPIO_MODE_INPUT);
+#endif
+}

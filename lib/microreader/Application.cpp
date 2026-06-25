@@ -175,8 +175,10 @@ void Application::do_sleep_(DrawBuffer& buf) {
       shown = buf.show_sleep_image(sleep_image_path_.c_str());
     }
     MR_LOGI("sleep", "show result: %d", (int)shown);
-    if (!shown && !buf.show_sleep_image_embedded(0))
-      buf.deep_sleep();
+    if (!shown && !buf.show_sleep_image_embedded(0)) {
+      // Both show attempts failed — display will just deep_sleep without image.
+    }
+    buf.deep_sleep();
     running_ = false;
     return;
   }
@@ -240,8 +242,10 @@ void Application::do_sleep_(DrawBuffer& buf) {
   }
 
   MR_LOGI("sleep", "show result: %d", (int)sleep_shown);
-  if (!sleep_shown && !buf.show_sleep_image_embedded(0))
-    buf.deep_sleep();
+  if (!sleep_shown && !buf.show_sleep_image_embedded(0)) {
+    // Both show attempts failed — display will just deep_sleep without image.
+  }
+  buf.deep_sleep();
 
   running_ = false;
 }
