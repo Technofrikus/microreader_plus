@@ -268,7 +268,7 @@ void ReaderOptionsScreen::on_start() {
     const char* bar_name = (settings_->progress_bar_mode == ProgressBarMode::None)    ? "None"
                            : (settings_->progress_bar_mode == ProgressBarMode::Chapter) ? "Chapter"
                                                                                         : "Book";
-    add_item(fmt_setting(tmp, sizeof(tmp), "ProgressBar", bar_name));
+    add_item(fmt_setting(tmp, sizeof(tmp), "Progress Bar", bar_name));
 
     // Progress mode (None, ETA Chapter, ETA Book, Percent, Percent+ETA Chapter, Percent+ETA Book)
     idx_progress_ = count();
@@ -276,8 +276,8 @@ void ReaderOptionsScreen::on_start() {
                             : settings_->progress_mode == ProgressMode::EtaChapter         ? "ETA(Ch)"
                             : settings_->progress_mode == ProgressMode::EtaBook            ? "ETA(Book)"
                             : settings_->progress_mode == ProgressMode::Percent              ? "Percent"
-                            : settings_->progress_mode == ProgressMode::PercentChapter     ? "Percent+ETA(Ch)"
-                                                                                                       : "Percent+ETA(Book)";
+                            : settings_->progress_mode == ProgressMode::PercentChapter     ? "Percent + ETA (Chapter)"
+                                                                                                       : "Percent + ETA (Book)";
     add_item(fmt_setting(tmp, sizeof(tmp), "Progress", prog_name));
 
     idx_rotate_display_ = count();
