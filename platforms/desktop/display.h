@@ -14,7 +14,7 @@ class DesktopEmulatorDisplay final : public microreader::IDisplay {
   explicit DesktopEmulatorDisplay(DesktopRuntime& rt, const microreader::DeviceConfig& cfg = microreader::DeviceConfig::x4())
       : rt_(rt), cfg_(cfg) {}
 
-  DeviceConfig device_config() const override {
+  microreader::DeviceConfig device_config() const override {
     return cfg_;
   }
 
@@ -23,7 +23,7 @@ class DesktopEmulatorDisplay final : public microreader::IDisplay {
     rt_.apply_rotation(r);
   }
 
-  void full_refresh(const uint8_t* pixels, microreader::RefreshMode /*mode*/, bool /*turnOffScreen*/) override {
+  void full_refresh(const uint8_t* pixels, microreader::RefreshMode /*mode*/, bool /*turnOffScreen*/ = false, bool /*singlePhase*/ = false) override {
     in_grayscale_mode_ = false;
     pre_gray_sim_.clear();
     for (int i = 0; i < pixel_count(); ++i) {

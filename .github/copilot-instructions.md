@@ -92,7 +92,7 @@ All inherit from `IScreen` (`lib/microreader/screens/IScreen.h`): `name()`, `sta
 
 | Screen | File | Description |
 |--------|------|-------------|
-| `MainMenu` | `MainMenu.h/.cpp` | Main navigation menu. Owns all child screens. |
+| `MainMenu` | `MainMenu.h/.cpp` | Main book list/browser screen. Displays books and subfolders in a hierarchical folder tree structure on the SD card with left-aligned items. Prefixes folders with `/`. Uses `BookIndex` for title/author metadata formatting. |
 | `ReaderScreen` | `ReaderScreen.h/.cpp` | EPUB page viewer. 2×-scaled 8×8 bitmap font (16×16 glyphs). Next/prev page, chapter transitions. |
 | `BouncingBallDemo` | `BouncingBallDemo.h/.cpp` | Bouncing ball + random shapes. |
 

@@ -38,6 +38,8 @@ class BookIndex {
     return pool_;
   }
 
+  const BookIndexEntry* find_entry(std::string_view path) const;
+
   // Add an entry; uses the pool to store strings.
   void add_entry(std::string_view path, std::string_view title, std::string_view author, uint32_t last_open_order = 0);
 

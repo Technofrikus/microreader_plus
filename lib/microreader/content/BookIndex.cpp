@@ -26,6 +26,14 @@ BookIndex& BookIndex::instance() {
   return instance;
 }
 
+const BookIndexEntry* BookIndex::find_entry(std::string_view path) const {
+  for (const auto& entry : entries_) {
+    if (entry.path.view(pool_) == path)
+      return &entry;
+  }
+  return nullptr;
+}
+
 void BookIndex::add_entry(std::string_view path, std::string_view title, std::string_view author,
                           uint32_t last_open_order) {
   BookIndexEntry entry;
