@@ -127,7 +127,9 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
     try { fs::create_directories(cache_dir); } catch (...) {}
 #endif
     MR_LOGI("sleep", "converting BMP: %s", bmp_path);
-    cached = convert_bmp_to_mgr2(bmp_path, cache_path);
+    // Use auto-size (0,0) to preserve source aspect ratio after rotation.
+    // This prevents white borders on X3 (792x528) and other non-800x480 displays.
+    cached = convert_bmp_to_mgr2(bmp_path, cache_path, 0, 0);
     MR_LOGI("sleep", "BMP convert result: %d cache=%s", (int)cached, cache_path);
   }
   return cached && buf.show_sleep_image(cache_path);

@@ -74,8 +74,12 @@ static uint16_t le16(const uint8_t* p)  { return (uint16_t)p[0] | ((uint16_t)p[1
 namespace microreader {
 
 bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
-                          int OUT_W, int OUT_H) {
-    const int OUT_STRIDE = (OUT_W + 3) / 4;  // bytes per row
+                          int out_w, int out_h) {
+    // If out_w or out_h is 0, use the source image dimensions after rotation.
+    const bool auto_size = (out_w <= 0 || out_h <= 0);
+    const int OUT_W = auto_size ? 0 : out_w;  // Will be set after reading source
+    const int OUT_H = auto_size ? 0 : out_h;
+    const int OUT_STRIDE = auto_size ? 0 : (OUT_W + 3) / 4;
 
     FILE* f = std::fopen(bmp_path, "rb");
     if (!f) return false;
@@ -109,7 +113,22 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
     const bool top_down = (height < 0);
     if (top_down) height = -height;
 
-    // 16bpp BI_BITFIELDS: detect RGB565 vs BGR555 by reading the red channel mask.
+    // Determine output dimensions
+    int final_out_w = OUT_W;
+    int final_out_h = OUT_H;
+    if (auto_size) {
+        // Use source dimensions after rotation
+        if (height > width) {
+            // Portrait source: rotate 90° CCW, so output is height x width
+            final_out_w = (int)height;
+            final_out_h = (int)width;
+        } else {
+            // Landscape source: no rotation needed
+            final_out_w = (int)width;
+            final_out_h = (int)height;
+        }
+    }
+    const int FINAL_STRIDE = (final_out_w + 3) / 4;
     bool is_rgb565 = false;
     if (bpp == 16 && (compr == 3 || compr == 6)) {
         uint8_t masks[12] = {};
@@ -135,7 +154,7 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
     if (!out) { std::free(row_buf); std::fclose(f); return false; }
 
     // MGR2 header
-    const uint16_t ow = OUT_W, oh = OUT_H;
+    const uint16_t ow = (uint16_t)final_out_w, oh = (uint16_t)final_out_h;
     std::fwrite("MGR2", 1, 4, out);
     std::fwrite(&ow, 2, 1, out);
     std::fwrite(&oh, 2, 1, out);
@@ -145,53 +164,53 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
 
     if (!portrait) {
         // ── Landscape path: row-by-row, O(1) extra memory ───────────────────
-        uint8_t out_row[OUT_STRIDE];
-        for (int out_y = 0; out_y < OUT_H && ok; ++out_y) {
-            const int src_log_y  = out_y * (int)height / OUT_H;
+        uint8_t out_row[FINAL_STRIDE];
+        for (int out_y = 0; out_y < final_out_h && ok; ++out_y) {
+            const int src_log_y  = out_y * (int)height / final_out_h;
             const int src_file_y = top_down ? src_log_y : ((int)height - 1 - src_log_y);
             const long row_pos   = (long)data_offset + (long)src_file_y * src_stride;
             if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
                 std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) {
                 ok = false; break;
             }
-            std::memset(out_row, 0, OUT_STRIDE);
-            for (int out_x = 0; out_x < OUT_W; ++out_x) {
-                const int sx    = out_x * (int)width / OUT_W;
+            std::memset(out_row, 0, FINAL_STRIDE);
+            for (int out_x = 0; out_x < final_out_w; ++out_x) {
+                const int sx    = out_x * (int)width / final_out_w;
                 const uint8_t g = decode_pixel(row_buf, sx, bpp, palette, is_rgb565);
                 out_row[out_x / 4] |= (uint8_t)(quantize(g, out_x, out_y) << (6 - (out_x % 4) * 2));
             }
-            if (std::fwrite(out_row, 1, OUT_STRIDE, out) != OUT_STRIDE)
+            if (std::fwrite(out_row, 1, FINAL_STRIDE, out) != FINAL_STRIDE)
                 ok = false;
         }
     } else {
         // ── Portrait path: CCW 90° rotation (matches Python ROTATE_90) ───────
         // Derivation: new[out_y][out_x] = old[out_x * H / 800][W-1 - out_y * W / 480]
         // For a fixed out_x, the source row is constant → one seek per output column.
-        // Accumulate the 96 KB output array, then write all rows.
-        uint8_t* output = (uint8_t*)std::malloc(OUT_H * OUT_STRIDE);
+        // Accumulate the output array, then write all rows.
+        uint8_t* output = (uint8_t*)std::malloc(final_out_h * FINAL_STRIDE);
         if (!output) {
             ok = false;
         } else {
-            std::memset(output, 0, OUT_H * OUT_STRIDE);
-            for (int out_x = 0; out_x < OUT_W && ok; ++out_x) {
-                const int src_log_y  = out_x * (int)height / OUT_W;
+            std::memset(output, 0, final_out_h * FINAL_STRIDE);
+            for (int out_x = 0; out_x < final_out_w && ok; ++out_x) {
+                const int src_log_y  = out_x * (int)height / final_out_w;
                 const int src_file_y = top_down ? src_log_y : ((int)height - 1 - src_log_y);
                 const long row_pos   = (long)data_offset + (long)src_file_y * src_stride;
                 if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
                     std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) {
                     ok = false; break;
                 }
-                for (int out_y = 0; out_y < OUT_H; ++out_y) {
-                    const int sx    = (int)width - 1 - out_y * (int)width / OUT_H;
+                for (int out_y = 0; out_y < final_out_h; ++out_y) {
+                    const int sx    = (int)width - 1 - out_y * (int)width / final_out_h;
                     const uint8_t g = decode_pixel(row_buf, sx, bpp, palette, is_rgb565);
                     const uint8_t s = quantize(g, out_x, out_y);
-                    output[out_y * OUT_STRIDE + out_x / 4] |=
+                    output[out_y * FINAL_STRIDE + out_x / 4] |=
                         (uint8_t)(s << (6 - (out_x % 4) * 2));
                 }
             }
             if (ok) {
-                for (int out_y = 0; out_y < OUT_H && ok; ++out_y) {
-                    if (std::fwrite(output + out_y * OUT_STRIDE, 1, OUT_STRIDE, out) != OUT_STRIDE)
+                for (int out_y = 0; out_y < final_out_h && ok; ++out_y) {
+                    if (std::fwrite(output + out_y * FINAL_STRIDE, 1, FINAL_STRIDE, out) != FINAL_STRIDE)
                         ok = false;
                 }
             }

@@ -582,3 +582,29 @@ TEST_F(BmpConverterTest, Format2bppPortrait) {
     EXPECT_EQ(m.w, 800);
     EXPECT_EQ(m.h, 480);
 }
+
+TEST_F(BmpConverterTest, AutoSizePortrait2bpp) {
+    // Portrait 2bpp image with auto-size (0,0) should output 200x100 (rotated from 100x200)
+    auto src = bmp("auto_2bpp_pt.bmp", make_bmp_2(100, 200, 1, 64, 64, 64));
+    auto dst = mgr("auto_2bpp_pt.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str(), 0, 0));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    // After 90° CCW rotation: 100x200 becomes 200x100
+    EXPECT_EQ(m.w, 200);
+    EXPECT_EQ(m.h, 100);
+}
+
+TEST_F(BmpConverterTest, AutoSizeLandscape2bpp) {
+    // Landscape 2bpp image with auto-size (0,0) should output 200x100 (no rotation)
+    auto src = bmp("auto_2bpp_ls.bmp", make_bmp_2(200, 100, 1, 64, 64, 64));
+    auto dst = mgr("auto_2bpp_ls.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str(), 0, 0));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    // Landscape: no rotation, output should be 200x100
+    EXPECT_EQ(m.w, 200);
+    EXPECT_EQ(m.h, 100);
+}
+
+// namespace microreader not closed - will be closed by compiler?
