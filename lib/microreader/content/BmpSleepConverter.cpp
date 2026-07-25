@@ -1,10 +1,9 @@
 #include "BmpSleepConverter.h"
 
-#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cstdint>
 
 namespace {
 
@@ -119,17 +118,25 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
     int crop_w = (int)width, crop_h = (int)height;
 
     if (out_w > 0 && out_h > 0) {
-        // COVER mode.
+        // COVER mode — pure integer math, no FPU needed.
         // After rotation (if portrait), the effective source aspect is swapped.
         // Effective source W/H (post-rotation):
         const int eff_src_w = portrait ? (int)height : (int)width;
         const int eff_src_h = portrait ? (int)width  : (int)height;
-        // Scale factor needed to cover the target:
-        const float scale = std::max((float)out_w / eff_src_w,
-                                     (float)out_h / eff_src_h);
-        // Cropped source size (post-rotation) that maps exactly to out_w×out_h:
-        const int crop_eff_w = (int)((float)out_w / scale);
-        const int crop_eff_h = (int)((float)out_h / scale);
+        // Find the largest crop of the effective source that matches out_w:out_h.
+        // Cross-multiply to avoid floats: if eff_src_w * out_h >= eff_src_h * out_w
+        // the source is wider (or equal), so crop width, keep full height.
+        // Otherwise the source is taller, so crop height, keep full width.
+        int crop_eff_w, crop_eff_h;
+        if ((int64_t)eff_src_w * out_h >= (int64_t)eff_src_h * out_w) {
+            // Source is wider (or exact match) → crop width, keep full height
+            crop_eff_w = eff_src_h * out_w / out_h;
+            crop_eff_h = eff_src_h;
+        } else {
+            // Source is taller → crop height, keep full width
+            crop_eff_w = eff_src_w;
+            crop_eff_h = eff_src_w * out_h / out_w;
+        }
         // Center the crop within the effective source:
         const int off_eff_x = (eff_src_w - crop_eff_w) / 2;
         const int off_eff_y = (eff_src_h - crop_eff_h) / 2;
