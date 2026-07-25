@@ -1,21 +1,26 @@
 # Creating a Release
 
-This project uses **GitHub Actions** to build and publish releases automatically.
-You only need to tag a commit — the workflow does the rest.
+Two different GitHub Actions workflows exist:
 
-## Step-by-step
+| Workflow | File | When it runs | What it does |
+|----------|------|-------------|--------------|
+| **CI** | `ci.yml` | Every push/PR to `main` | Builds firmware + Calibre plugin, uploads as **temporary build artifacts** (visible in the Actions run, not on Releases page) |
+| **Release** | `release.yml` | Only when you push a `v*` tag | Builds firmware + Calibre plugin, **creates a GitHub Release** with files attached |
 
-### 1. Make sure `main` is in the state you want
+The CI run you saw was the first one — it's just a sanity check.
+
+## Step-by-step to create a real release
+
+### 1. Make sure `main` has everything you want
 
 ```bash
 git checkout main
 git pull
 ```
 
-### 2. (Optional) Bump the version number
+### 2. (Optional) Bump the version
 
-The version shown in the firmware comes from `version.txt` plus the git commit
-count. If you want a new base version, edit `version.txt`:
+Edit `version.txt` if you want a new base version (otherwise it keeps the current value):
 
 ```bash
 echo "2.1.0" > version.txt
@@ -24,39 +29,34 @@ git commit -m "bump version to 2.1.0"
 git push
 ```
 
-If you skip this step, the release will use whatever is currently in
-`version.txt` (e.g. `2.0-dev.412`).
-
-### 3. Tag the commit and push
+### 3. Tag and push
 
 ```bash
 git tag v2.1.0
 git push origin v2.1.0
 ```
 
-The tag **must start with `v`** — that's what triggers the release workflow.
+The tag **must start with `v`** — that's what triggers the `Release` workflow.
 
-### 4. Wait for the workflow to finish
+### 4. Watch it run
 
-Go to **Actions** tab in the repo → look for the running `Release` workflow.
-It takes about 3–4 minutes.
+Go to **Actions** tab → look for the `Release` workflow. It takes ~3–4 minutes.
 
 ### 5. Find the release
 
-Once done, go to the **Releases** page — the new release will be there with:
+Go to **Releases** page (right sidebar on the repo home, or `https://github.com/yourname/microreader-plus/releases`).
 
+You'll see:
 - `firmware.bin` — flash this to your Xteink X4
-- `microreader.zip` — Calibre plugin (install via Preferences → Plugins)
+- `microreader.zip` — Calibre plugin
 
-## What the workflow does
+## Troubleshooting
 
-1. Builds the ESP32 firmware (`pio run`)
-2. Packages the Calibre plugin (`python build.py`)
-3. Creates a GitHub Release with auto-generated notes from recent commits
-4. Attaches both files to the release
+**"I pushed a tag but nothing happened"**
+Make sure the tag starts with `v` (e.g. `v2.0.42`, not `2.0.42`).
 
-## What it does NOT do
+**"Build fails on Actions but works on my machine"**
+Check if you're on Windows and the CI runs Linux — most issues are path separator or SDK config related. If the CI fails, fix and retag.
 
-- Build desktop binaries (run `cmake -S platforms/desktop -B build` locally)
-- Run tests (run `cd test && cmake -B build2 && cmake --build build2` locally)
-- Flash the device (use esptool or the Crosspoint web flasher)
+**"Node.js 20 is deprecated" warning**
+Harmless for now — GitHub Actions runners still support Node.js 20. This will be fixed when action maintainers release updates.
