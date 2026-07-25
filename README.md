@@ -2,6 +2,24 @@
 
 Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devices** — fork of [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader)
 
+## Changes vs upstream (microreader)
+
+| # | Change | Commit / PR |
+|---|--------|-------------|
+| 1 | Removed the "sleeping..." text drawn on the sleep screen in `DrawBuffer::show_mgr2_sleep_()` | — |
+
+### Tips for merging upstream changes
+
+This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/microreader) repo. To keep merges easy:
+
+- **Keep changes localized.** Each fork feature lives in its own files or clearly marked sections — avoid editing shared `lib/microreader/` code unless the change is intended for both.
+- **Use descriptive commits.** Each commit should describe a single logical change so `git log --oneline upstream/...` is readable.
+- **Frequent rebases onto upstream.** Run `git fetch upstream && git rebase upstream/main` regularly; resolve conflicts while the change is still fresh in your mind.
+- **Prefer additions over modifications.** When adding a feature, add new files/functions rather than editing existing shared code. This makes `git diff upstream/...` clean and conflict-free.
+- **Track what's merged upstream.** The "Features merged upstream" section below this list is manually kept up to date — update it whenever an upstream PR is accepted so you know what to drop or rebase.
+
+---
+
 ## Fork Features
 
 ### Controls

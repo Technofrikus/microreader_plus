@@ -690,11 +690,9 @@ class DrawBuffer {
       };
 
       decode_plane(false);
-      draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
       display_.write_ram_bw(inactive_());
 
       decode_plane(true);
-      draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
       display_.write_ram_red(inactive_());
 
       display_.grayscale_refresh(/*turnOffScreen=*/true);
@@ -718,10 +716,8 @@ class DrawBuffer {
       }
     };
     decode_pass(false);
-    draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
     display_.write_ram_bw(inactive_());
     decode_pass(true);
-    draw_text_centered(width() / 2, height() - 24, "sleeping...", false, false);
     display_.write_ram_red(inactive_());
     display_.grayscale_refresh_1pass(/*turnOffScreen=*/true);
     if (deep_sleep_after)
