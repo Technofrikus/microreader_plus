@@ -127,7 +127,12 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
     try { fs::create_directories(cache_dir); } catch (...) {}
 #endif
     MR_LOGI("sleep", "converting BMP: %s", bmp_path);
-    cached = convert_bmp_to_mgr2(bmp_path, cache_path);
+    // Convert to the device's native physical resolution using COVER mode
+    // (scale to fill, then crop excess) so there are no white borders on
+    // either X3 (792x528) or X4 (800x480).
+    cached = convert_bmp_to_mgr2(bmp_path, cache_path,
+                                 buf.config().physical_width,
+                                 buf.config().physical_height);
     MR_LOGI("sleep", "BMP convert result: %d cache=%s", (int)cached, cache_path);
   }
   return cached && buf.show_sleep_image(cache_path);
