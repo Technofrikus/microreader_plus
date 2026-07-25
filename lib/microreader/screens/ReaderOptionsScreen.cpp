@@ -389,4 +389,70 @@ void ReaderOptionsScreen::on_select(int index) {
   return;
 }
 
+void ReaderOptionsScreen::on_long_select(int index) {
+  if (!settings_) return;
+
+  if (index == idx_justify_) {
+    settings_->align_override = static_cast<AlignOverride>((static_cast<uint8_t>(settings_->align_override) + ReaderSettings::kNumAlignPresets - 1) % ReaderSettings::kNumAlignPresets);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_pub_fonts_) {
+    settings_->override_publisher_fonts = !settings_->override_publisher_fonts;
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_font_size_) {
+    uint8_t max_idx = ReaderSettings::kNumFontSizePresets;
+    if (app_ && app_->font_manager() && app_->font_manager()->valid()) {
+      auto* fonts = app_->font_manager()->font_set();
+      if (fonts && fonts->num_fonts() > 0)
+        max_idx = static_cast<uint8_t>(fonts->num_fonts());
+    }
+    settings_->font_size_idx = static_cast<uint8_t>((settings_->font_size_idx + max_idx - 1) % max_idx);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_antialias_) {
+    settings_->antialias_enabled = !settings_->antialias_enabled;
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_padding_h_) {
+    settings_->padding_h_idx = static_cast<uint8_t>((settings_->padding_h_idx + ReaderSettings::kNumPresets - 1) % ReaderSettings::kNumPresets);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_padding_v_) {
+    settings_->padding_v_idx = static_cast<uint8_t>((settings_->padding_v_idx + ReaderSettings::kNumPresets - 1) % ReaderSettings::kNumPresets);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_line_spacing_) {
+    settings_->spacing_override = static_cast<SpacingOverride>((static_cast<uint8_t>(settings_->spacing_override) + ReaderSettings::kNumSpacingPresets - 1) % ReaderSettings::kNumSpacingPresets);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_progress_) {
+    settings_->progress_style = static_cast<ProgressStyle>((static_cast<uint8_t>(settings_->progress_style) + 2) % 3);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_progress_scope_) {
+    settings_->progress_scope = settings_->progress_scope == ProgressScope::Book ? ProgressScope::Chapter : ProgressScope::Book;
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_rotate_display_) {
+    if (app_ && buf_) {
+      bool v = !app_->rotate_display();
+      app_->set_rotate_display(v);
+      buf_->set_rotation(v ? Rotation::Deg0 : Rotation::Deg90);
+      refresh_items_(index);
+    }
+    return;
+  }
+  // Chapters, Links — no-op (navigation items, not settings).
+}
+
 }  // namespace microreader

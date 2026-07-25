@@ -478,6 +478,86 @@ void SettingsScreen::on_select(int index) {
   return;
 }
 
+void SettingsScreen::on_long_select(int index) {
+  // Reverse-cycle: mirror on_select() but step backward.
+  if (index == idx_sort_order_) {
+    if (app_) {
+      BookSortOrder order = (app_->sort_order() == BookSortOrder::Alphabetical) ? BookSortOrder::LastOpened : BookSortOrder::Alphabetical;
+      app_->set_sort_order(order);
+      set_item_label(idx_sort_order_, get_sort_order_label(order));
+    }
+    return;
+  }
+  if (index == idx_list_format_) {
+    if (app_->main_menu()) {
+      auto fmt = app_->main_menu()->list_format();
+      if (fmt == BookListFormat::TitleOnly) {
+        fmt = BookListFormat::Filename;
+      } else if (fmt == BookListFormat::Filename) {
+        fmt = BookListFormat::TitleAndAuthor;
+      } else {
+        fmt = BookListFormat::TitleOnly;
+      }
+      app_->main_menu()->set_list_format(fmt);
+      set_item_label(idx_list_format_, get_list_format_label(fmt));
+    }
+    app_->save_settings_();
+    return;
+  }
+  if (index == idx_reader_controls_) {
+    if (app_) {
+      ControlMode v = static_cast<ControlMode>((static_cast<int>(app_->reader_controls()) + 3) % 4);
+      app_->set_reader_controls(v);
+      set_item_label(idx_reader_controls_, get_reader_controls_label(v));
+    }
+    return;
+  }
+  if (index == idx_menu_controls_) {
+    if (app_) {
+      ControlMode v = static_cast<ControlMode>((static_cast<int>(app_->menu_controls()) + 3) % 4);
+      app_->set_menu_controls(v);
+      set_item_label(idx_menu_controls_, get_menu_controls_label(v));
+    }
+    return;
+  }
+  if (index == idx_rotate_display_) {
+    if (app_ && buf_) {
+      bool v = !app_->rotate_display();
+      app_->set_rotate_display(v);
+      set_item_label(idx_rotate_display_, get_rotate_display_label(v));
+      buf_->set_rotation(v ? Rotation::Deg0 : Rotation::Deg90);
+    }
+    return;
+  }
+  if (index == idx_menu_font_) {
+    if (app_) {
+      int v = (app_->menu_font_size() + 2) % 3;
+      app_->set_menu_font_size(v);
+      restart();
+    }
+    return;
+  }
+  if (index == idx_font_) {
+    if (app_ && !sd_fonts_.empty()) {
+      size_t n = sd_fonts_.size();
+      font_sel_idx_ = static_cast<int>((static_cast<size_t>(font_sel_idx_) + n - 1) % n);
+      app_->set_custom_font_path(sd_fonts_[font_sel_idx_]);
+      set_item_label(idx_font_, get_font_label(sd_fonts_[font_sel_idx_]));
+    }
+    return;
+  }
+  if (index == idx_sleep_image_) {
+    if (app_ && !sleep_images_.empty()) {
+      size_t n = sleep_images_.size();
+      sleep_image_sel_idx_ = static_cast<int>((static_cast<size_t>(sleep_image_sel_idx_) + n - 1) % n);
+      app_->set_sleep_image_path(sleep_images_[sleep_image_sel_idx_]);
+      set_item_label(idx_sleep_image_, get_sleep_image_label(sleep_images_[sleep_image_sel_idx_]));
+    }
+    return;
+  }
+  // All other items (actions, demos, OTA, etc.) — no-op.
+}
+
 #ifdef ESP_PLATFORM
 // Fallback: write the otadata partition directly, bypassing esp_image_verify.
 // Mirrors what tools/switch_partition.py does from the host side.

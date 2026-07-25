@@ -134,11 +134,20 @@ class ListMenuScreen : public IScreen {
   // Called when user holds back for long_back_threshold_ frames (0 = disabled).
   virtual void on_long_back(int index) {}
 
+  // Called when user holds select for long_select_threshold_ ms (0 = disabled).
+  virtual void on_long_select(int index) {}
+
   void set_long_back_threshold(int frames) {
     long_back_threshold_ = frames;
   }
   int long_back_threshold() const {
     return long_back_threshold_;
+  }
+  void set_long_select_threshold_ms(uint32_t ms) {
+    long_select_threshold_ms_ = ms;
+  }
+  uint32_t long_select_threshold_ms() const {
+    return long_select_threshold_ms_;
   }
 
  protected:
@@ -179,6 +188,12 @@ class ListMenuScreen : public IScreen {
   int long_back_threshold_ = 0;
   int back_hold_frames_ = 0;
   bool back_held_ = false;
+
+  // Select-button long-press state (mirrors UP long-press pattern).
+  uint32_t hold_ms_select_ = 0;
+  bool long_select_triggered_ = false;
+  bool select_press_pending_ = false;
+  uint32_t long_select_threshold_ms_ = 500;
 
   bool align_left_ = false;
   bool on_start_set_selection_ = false;
