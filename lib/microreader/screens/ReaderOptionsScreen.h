@@ -13,15 +13,13 @@ namespace microreader {
 // ReaderSettings — user-adjustable reader preferences
 // Stored in ReaderScreen; mutated inline by ReaderOptionsScreen.
 // ---------------------------------------------------------------------------
-enum class ProgressStyle : uint8_t {
+enum class ProgressMode : uint8_t {
   None = 0,
-  Percentage = 1,
-  Bar = 2,
-};
-
-enum class ProgressScope : uint8_t {
-  Book = 0,
-  Chapter = 1,
+  EtaChapter = 1,      // ETA only (chapter)
+  EtaBook = 2,         // ETA only (book)
+  Percent = 3,
+  PercentChapter = 4,  // Percent + ETA chapter
+  PercentBook = 5,     // Percent + ETA book
 };
 
 enum class AlignOverride : uint8_t {
@@ -41,14 +39,20 @@ enum class SpacingOverride : uint8_t {
   Spacing_1_2x,
 };
 
+enum class ProgressBarMode : uint8_t {
+  None = 0,
+  Chapter = 1,
+  Book = 2,
+};
+
 struct ReaderSettings {
   AlignOverride align_override = AlignOverride::Book;
   SpacingOverride spacing_override = SpacingOverride::Spacing_1_0x;
   uint8_t padding_h_idx = 1;                           // horizontal padding preset index (left & right)
   uint8_t padding_v_idx = 1;                           // vertical top padding preset index
   uint8_t font_size_idx = 1;                           // base font size preset index (1 = Normal/24px)
-  ProgressStyle progress_style = ProgressStyle::Bar;   // reading progress indicator style
-  ProgressScope progress_scope = ProgressScope::Book;  // progress scope: whole book or current chapter
+  ProgressMode progress_mode = ProgressMode::None;  // reading progress indicator mode (percentage display)
+  ProgressBarMode progress_bar_mode = ProgressBarMode::None; // New setting
   bool override_publisher_fonts = false;               // ignore publisher's font sizes
   bool antialias_enabled = true;                       // grayscale anti-aliasing on text
 
@@ -79,15 +83,23 @@ struct ReaderSettings {
   }
   // Bottom padding reserved for the progress indicator.
   uint16_t progress_bottom() const {
-    switch (progress_style) {
-      case ProgressStyle::Percentage:
-        return 18;
-      case ProgressStyle::Bar:
-        return 8;
-      default:
-        return 6;
-    }
+    if (progress_mode != ProgressMode::None && progress_mode != ProgressMode::EtaChapter && progress_mode != ProgressMode::EtaBook)
+      return 18;  // Percentage with optional ETA
+    if (progress_mode == ProgressMode::EtaChapter || progress_mode == ProgressMode::EtaBook)
+      return 16;  // ETA only (shorter text)
+    if (progress_bar_mode != ProgressBarMode::None)
+      return 8;  // Bar only
+    return 6;
   }
+
+  // Check if ETA is shown and which scope
+  bool has_eta() const {
+    return progress_mode == ProgressMode::PercentChapter || progress_mode == ProgressMode::PercentBook;
+  }
+  bool eta_chapter_scope() const {
+    return progress_mode == ProgressMode::PercentChapter;
+  }
+  uint32_t avg_page_time_ms = 0; // Global average page time in ms
 };
 
 // A hyperlink found on the current reader page.
@@ -158,8 +170,8 @@ class ReaderOptionsScreen final : public ListMenuScreen {
   int idx_padding_v_ = -1;
   int idx_line_spacing_ = -1;
   int idx_font_size_ = -1;
-  int idx_progress_ = -1;
-  int idx_progress_scope_ = -1;
+  int idx_progress_bar_ = -1;  // ProgressBar On/Off toggle
+  int idx_progress_ = -1;      // Progress mode (None, Percent, Percent+ETA)
   int idx_pub_fonts_ = -1;
   int idx_chapters_ = -1;
   int idx_rotate_display_ = -1;

@@ -255,6 +255,48 @@ static std::string make_book_key_legacy(const EpubMetadata& meta, const char* ep
   return std::string(name, len);
 }
 
+// ---------------------------------------------------------------------------
+// ETA tracking
+// ---------------------------------------------------------------------------
+
+void ReaderScreen::track_page_time_() {
+  if (page_display_frames_ == 0)
+    return;
+
+  // Estimate time based on frames (assuming ~100ms per frame on desktop, ~200ms on ESP32)
+  // Use an average of 150ms per frame for estimation
+  uint32_t elapsed_ms = static_cast<uint32_t>(page_display_frames_ * 150u);
+
+  // Apply safeguards: only count if within valid range
+  if (elapsed_ms >= kMinPageTimeMs && elapsed_ms <= kMaxPageTimeMs) {
+    // Add to circular buffer
+    page_times_[page_time_count_ % kMaxPageTimes] = elapsed_ms;
+    if (page_time_count_ < kMaxPageTimes)
+      ++page_time_count_;
+    has_valid_eta_ = true;
+    // Update global average
+    uint64_t total_time = 0;
+    for (int i = 0; i < page_time_count_; ++i)
+      total_time += page_times_[i];
+    reader_settings_.avg_page_time_ms = static_cast<uint32_t>(total_time / page_time_count_);
+  }
+  // Reset frame counter for next page
+  page_display_frames_ = 0;
+}
+
+void ReaderScreen::reset_eta_() {
+  page_time_count_ = 0;
+  has_valid_eta_ = false;
+  page_display_frames_ = 0;
+  // Load persisted average if available
+  if (reader_settings_.avg_page_time_ms > 0) {
+    for (int i = 0; i < kMaxPageTimes; ++i)
+      page_times_[i] = reader_settings_.avg_page_time_ms;
+    page_time_count_ = kMaxPageTimes;
+    has_valid_eta_ = true;
+  }
+}
+
 void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   buf_ = &buf;
   book_key_.clear();
@@ -382,6 +424,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   layout_engine_.set_source(*chapter_src_);
   layout_engine_.set_image_size_fn(image_size_fn_);
   layout_engine_.set_hyphenation_lang(detect_language(mrb_.metadata().language));
+  reset_eta_();  // Reset ETA tracking for new book/session
   render_page_(buf);
 #ifdef ESP_PLATFORM
   ESP_LOGI("reader", "BOOK_OK: %s", path_.c_str());
@@ -453,6 +496,7 @@ void ReaderScreen::stop() {
   book_key_.clear();
   book_key_.shrink_to_fit();
   nav_history_.clear();
+  reset_eta_();
   open_ok_ = false;
   // saved_chapter_idx_ / saved_page_pos_ are intentionally NOT reset here —
   // resume() uses them as the nav-history origin when a link jump is pending.
@@ -566,11 +610,22 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
 
   bool changed = false;
   if (page_delta > 0) {
-    for (int i = 0; i < page_delta; ++i)
+    for (int i = 0; i < page_delta; ++i) {
+      // Track time before page change
+      track_page_time_();
       changed = next_page_() || changed;
+    }
   } else if (page_delta < 0) {
-    for (int i = 0; i > page_delta; --i)
+    for (int i = 0; i > page_delta; --i) {
+      // Track time before page change
+      track_page_time_();
       changed = prev_page_() || changed;
+    }
+  }
+
+  // Increment frame counter for current page display
+  if (!changed) {
+    ++page_display_frames_;
   }
 
   if (changed) {
@@ -697,7 +752,7 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
   if (landscape && !nav_history_.empty()) {
     // Hints are drawn in portrait coords; portrait Y=pct_top..800 maps to landscape X=pct_top..800.
     // Ensure padding_right clears that strip so text doesn't overlap the hints.
-    const uint16_t hint_strip = (reader_settings_.progress_style == ProgressStyle::Bar) ? 18u : 16u;
+    const uint16_t hint_strip = (reader_settings_.progress_bar_mode != ProgressBarMode::None) ? 18u : 16u;
     opts.padding_right = std::max(opts.padding_right, hint_strip);
   }
   opts.padding_bottom = bottom_padding_(landscape);
@@ -830,35 +885,123 @@ uint16_t ReaderScreen::bottom_padding_(bool landscape) const {
   const uint16_t base =
       static_cast<uint16_t>(reader_settings_.progress_bottom() + reader_settings_.v_padding() + (landscape ? 2 : 0));
   if (nav_history_.empty() || landscape)
-    return base;  // landscape hints go on the right edge, not bottom — no extra bottom padding needed
-  // Portrait: hints share the bottom margin. Need at least as much room as the percentage indicator, plus 2px for bar.
-  const uint16_t pct_base = static_cast<uint16_t>(16 + reader_settings_.v_padding() + 2);
-  if (reader_settings_.progress_style == ProgressStyle::Bar)
-    return std::max(base, static_cast<uint16_t>(pct_base + 2));
-  if (reader_settings_.progress_style == ProgressStyle::None)
-    return std::max(base, pct_base);
-  return base;  // Percentage already reserves enough
+    return base;
+  const uint16_t kBarH = landscape ? 5 : 4;
+  // Text is 16px tall, drawn at kBarY - 20 (kBarY = H - kBarH).
+  // Total reserved from bottom = kBarH (bar) + 20 (text offset above bar).
+  const uint16_t text_reserve = static_cast<uint16_t>(kBarH + 20);
+  if (reader_settings_.progress_mode == ProgressMode::None && reader_settings_.progress_bar_mode == ProgressBarMode::None)
+    return std::max(base, static_cast<uint16_t>(16 + reader_settings_.v_padding() + 2));
+  if (reader_settings_.progress_bar_mode != ProgressBarMode::None)
+    return std::max(base, static_cast<uint16_t>(text_reserve + reader_settings_.v_padding()));
+  return base;
 }
 
 void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape) {
   const int W = buf.width();
   const int H = buf.height();
 
-  if (mrb_.paragraph_count() > 0 && reader_settings_.progress_style != ProgressStyle::None) {
-    int pct = reader_settings_.progress_scope == ProgressScope::Chapter ? chapter_progress_pct() : progress_pct();
-    if (reader_settings_.progress_style == ProgressStyle::Percentage) {
-      char pct_str[8];
-      snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
-      buf.draw_text_centered(W / 2, landscape ? H - 18 : H - 16, pct_str, true);
-    } else {
-      // Progress bar: a thick line near the bottom of the screen.
-      // Extended outward (toward the edge) so bezel misalignment is hidden
-      // under the bar rather than leaving a visible white gap.
-      const int kBarH = landscape ? 5 : 4;
-      const int kBarY = H - kBarH;
+  if (mrb_.paragraph_count() > 0) {
+    // Calculate bar dimensions
+    const int kBarH = landscape ? 5 : 4;
+    const int kBarY = H - kBarH;
+
+    // Draw progress bar if enabled
+    if (reader_settings_.progress_bar_mode != ProgressBarMode::None) {
+      int pct = (reader_settings_.progress_bar_mode == ProgressBarMode::Chapter)
+                    ? chapter_progress_pct()
+                    : progress_pct();
       const int bar_w = pct * W / 100;
       buf.fill_rect(0, kBarY, bar_w, kBarH, false);         // filled portion (black)
       buf.fill_rect(bar_w, kBarY, W - bar_w, kBarH, true);  // unfilled portion (white)
+    }
+
+    // Draw percentage with optional ETA if mode is not None
+    if (reader_settings_.progress_mode != ProgressMode::None) {
+      // Use scope-appropriate percentage: chapter for chapter ETA, book for book ETA
+      int pct = (reader_settings_.progress_mode == ProgressMode::PercentChapter ||
+                 reader_settings_.progress_mode == ProgressMode::EtaChapter)
+                    ? chapter_progress_pct()
+                    : progress_pct();
+
+      // Text position: above the bar with margin to avoid overlap
+      // Text is 16px tall, bar is at kBarY. Move text up by 20px.
+      const int text_y = (reader_settings_.progress_bar_mode != ProgressBarMode::None) ? kBarY - 14 : (landscape ? H - 18 : H - 16);
+
+      // Format ETA: >60min shows as hours and minutes
+      // Percentage with optional ETA
+      char pct_str[32];
+      if (reader_settings_.progress_mode == ProgressMode::Percent) {
+        snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+      } else if (reader_settings_.progress_mode == ProgressMode::PercentChapter) {
+        int eta = eta_minutes_chapter();
+        if (eta > 0) {
+          if (eta >= 60) {
+            int hrs = eta / 60;
+            int mins = eta % 60;
+            if (mins > 0)
+              snprintf(pct_str, sizeof(pct_str), "%d%% %dh %dm", pct, hrs, mins);
+            else
+              snprintf(pct_str, sizeof(pct_str), "%d%% %dh", pct, hrs);
+          } else {
+            snprintf(pct_str, sizeof(pct_str), "%d%% %dmin", pct, eta);
+          }
+        } else {
+          snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+        }
+      } else if (reader_settings_.progress_mode == ProgressMode::PercentBook) {
+        int eta = eta_minutes_book();
+        if (eta > 0) {
+          if (eta >= 60) {
+            int hrs = eta / 60;
+            int mins = eta % 60;
+            if (mins > 0)
+              snprintf(pct_str, sizeof(pct_str), "%d%% %dh %dm", pct, hrs, mins);
+            else
+              snprintf(pct_str, sizeof(pct_str), "%d%% %dh", pct, hrs);
+          } else {
+            snprintf(pct_str, sizeof(pct_str), "%d%% %dmin", pct, eta);
+          }
+        } else {
+          snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+        }
+      } else if (reader_settings_.progress_mode == ProgressMode::EtaChapter) {
+        // ETA only (chapter)
+        int eta = eta_minutes_chapter();
+        if (eta > 0) {
+          if (eta >= 60) {
+            int hrs = eta / 60;
+            int mins = eta % 60;
+            if (mins > 0)
+              snprintf(pct_str, sizeof(pct_str), "%dh %dm", hrs, mins);
+            else
+              snprintf(pct_str, sizeof(pct_str), "%dh", hrs);
+          } else {
+            snprintf(pct_str, sizeof(pct_str), "%dmin", eta);
+          }
+        } else {
+          snprintf(pct_str, sizeof(pct_str), "---");
+        }
+      } else { // EtaBook
+        // ETA only (book)
+        int eta = eta_minutes_book();
+        if (eta > 0) {
+          if (eta >= 60) {
+            int hrs = eta / 60;
+            int mins = eta % 60;
+            if (mins > 0)
+              snprintf(pct_str, sizeof(pct_str), "%dh %dm", hrs, mins);
+            else
+              snprintf(pct_str, sizeof(pct_str), "%dh", hrs);
+          } else {
+            snprintf(pct_str, sizeof(pct_str), "%dmin", eta);
+          }
+        } else {
+          snprintf(pct_str, sizeof(pct_str), "---");
+        }
+      }
+      // Draw text without background to avoid white box covering the bar
+      buf.draw_text_centered(W / 2, text_y, pct_str, true, false);
     }
   }
 
@@ -881,7 +1024,7 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape) {
   const int gap = 50;
   const int btn0_pos = pair0 - gap;  // Button0 = back
   const int btn1_pos = pair0 + gap;  // Button1 = stay
-  const int pct_top = (reader_settings_.progress_style == ProgressStyle::Bar) ? H90 - 18 : H90 - 16;
+  const int pct_top = (reader_settings_.progress_bar_mode != ProgressBarMode::None) ? H90 - 18 : H90 - 16;
   const int text_y = pct_top + static_cast<int>(hint_font_.baseline());
 
   const char* kBack = "back";

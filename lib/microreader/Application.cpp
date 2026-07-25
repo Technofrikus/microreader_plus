@@ -355,11 +355,12 @@ void microreader::Application::save_settings_() {
   std::fprintf(f, "padding_h=%u\n", static_cast<unsigned>(rs.padding_h_idx));
   std::fprintf(f, "padding_v=%u\n", static_cast<unsigned>(rs.padding_v_idx));
   std::fprintf(f, "spacing_override=%u\n", static_cast<unsigned>(rs.spacing_override));
-  std::fprintf(f, "progress=%u\n", static_cast<unsigned>(rs.progress_style));
-  std::fprintf(f, "progress_scope=%u\n", static_cast<unsigned>(rs.progress_scope));
+  std::fprintf(f, "progress=%u\n", static_cast<unsigned>(rs.progress_mode));
+  std::fprintf(f, "progress_bar=%u\n", static_cast<unsigned>(rs.progress_bar_mode));
   std::fprintf(f, "override_pub_fonts=%u\n", rs.override_publisher_fonts ? 1u : 0u);
   std::fprintf(f, "font_size=%u\n", static_cast<unsigned>(rs.font_size_idx));
   std::fprintf(f, "antialias_enabled=%u\n", rs.antialias_enabled ? 1u : 0u);
+  std::fprintf(f, "avg_page_time=%lu\n", static_cast<unsigned long>(rs.avg_page_time_ms));
 
   // Menu list format
   std::fprintf(f, "list_format=%u\n", static_cast<unsigned>(menu_.list_format()));
@@ -436,16 +437,24 @@ void microreader::Application::load_settings_() {
                                                                       : SpacingOverride::Spacing_1_0x;
     else if (std::sscanf(line, "line_spacing=%u", &uval) == 1)  // Backwards compatibility
       rs.spacing_override = SpacingOverride::Book;
-    else if (std::sscanf(line, "progress=%u", &uval) == 1)
-      rs.progress_style = uval <= 2 ? static_cast<ProgressStyle>(uval) : ProgressStyle::Bar;
-    else if (std::sscanf(line, "progress_scope=%u", &uval) == 1)
-      rs.progress_scope = uval <= 1 ? static_cast<ProgressScope>(uval) : ProgressScope::Book;
+    else if (std::sscanf(line, "progress=%u", &uval) == 1) {
+      // New progress_mode values: 0=None, 1=EtaChapter, 2=EtaBook, 3=Percent, 4=PercentChapter, 5=PercentBook
+      if (uval <= 5)
+        rs.progress_mode = static_cast<ProgressMode>(uval);
+      else
+        rs.progress_mode = ProgressMode::None;
+    }
+    // progress_scope is now encoded in progress_mode (2=Chapter, 3=Book), ignore old key
+    else if (std::sscanf(line, "progress_bar=%u", &uval) == 1)
+      rs.progress_bar_mode = (uval <= 2) ? static_cast<ProgressBarMode>(uval) : ProgressBarMode::None;
     else if (std::sscanf(line, "override_pub_fonts=%u", &uval) == 1)
       rs.override_publisher_fonts = (uval != 0);
     else if (std::sscanf(line, "font_size=%u", &uval) == 1)
       rs.font_size_idx = uval < kMaxFontSizes ? static_cast<uint8_t>(uval) : 1;
     else if (std::sscanf(line, "antialias_enabled=%u", &uval) == 1)
       rs.antialias_enabled = (uval != 0);
+    else if (std::sscanf(line, "avg_page_time=%u", &uval) == 1)
+      rs.avg_page_time_ms = uval;
     else if (std::sscanf(line, "list_format=%u", &uval) == 1)
       menu_.set_list_format(uval <= 2 ? static_cast<BookListFormat>(uval) : BookListFormat::TitleAndAuthor);
     else if (std::sscanf(line, "sort_order=%u", &uval) == 1)
@@ -492,7 +501,7 @@ void microreader::Application::load_settings_() {
 
   MR_LOGI("app", "Loaded settings: align=%u ph=%u pv=%u ls=%u prog=%u sel=%s", static_cast<unsigned>(rs.align_override),
           rs.padding_h_idx, rs.padding_v_idx, static_cast<unsigned>(rs.spacing_override),
-          static_cast<unsigned>(rs.progress_style), book_sel.c_str());
+          static_cast<unsigned>(rs.progress_mode), book_sel.c_str());
 
   // Restore book list selection highlight
   if (!book_sel.empty())

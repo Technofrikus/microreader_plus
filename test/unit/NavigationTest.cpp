@@ -39,7 +39,7 @@ static PageOptions device_opts() {
   s.padding_h_idx = 1;
   s.padding_v_idx = 1;
   s.spacing_override = SpacingOverride::Spacing_1_0x;
-  s.progress_style = ProgressStyle::Bar;
+  s.progress_bar_enabled = true;
   PageOptions opts = ReaderScreen::make_page_opts(&s);
   opts.padding_right = s.h_padding();
   opts.padding_left = s.h_padding();

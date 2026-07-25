@@ -192,7 +192,7 @@ void ReaderOptionsScreen::on_start() {
   subtitle3_ = "";
 
   clear_items();
-  idx_justify_ = idx_padding_h_ = idx_padding_v_ = idx_line_spacing_ = idx_progress_ = idx_progress_scope_ =
+  idx_justify_ = idx_padding_h_ = idx_padding_v_ = idx_line_spacing_ = idx_progress_bar_ = idx_progress_ =
       idx_chapters_ = idx_pub_fonts_ = idx_rotate_display_ = idx_links_ = -1;
 
   char tmp[40];
@@ -263,17 +263,22 @@ void ReaderOptionsScreen::on_start() {
 
     add_separator();
 
-    idx_progress_ = count();
-    const char* prog_name = settings_->progress_style == ProgressStyle::None         ? "None"
-                            : settings_->progress_style == ProgressStyle::Percentage ? "Percent"
-                                                                                     : "Bar";
-    add_item(fmt_setting(tmp, sizeof(tmp), "Progress", prog_name));
+    // ProgressBar toggle (None/Chapter/Book)
+    idx_progress_bar_ = count();
+    const char* bar_name = (settings_->progress_bar_mode == ProgressBarMode::None)    ? "None"
+                           : (settings_->progress_bar_mode == ProgressBarMode::Chapter) ? "Chapter"
+                                                                                        : "Book";
+    add_item(fmt_setting(tmp, sizeof(tmp), "ProgressBar", bar_name));
 
-    if (settings_->progress_style != ProgressStyle::None) {
-      idx_progress_scope_ = count();
-      add_item(fmt_setting(tmp, sizeof(tmp), "Progress Scope",
-                           settings_->progress_scope == ProgressScope::Chapter ? "Chapter" : "Book"));
-    }
+    // Progress mode (None, ETA Chapter, ETA Book, Percent, Percent+ETA Chapter, Percent+ETA Book)
+    idx_progress_ = count();
+    const char* prog_name = settings_->progress_mode == ProgressMode::None              ? "None"
+                            : settings_->progress_mode == ProgressMode::EtaChapter         ? "ETA(Ch)"
+                            : settings_->progress_mode == ProgressMode::EtaBook            ? "ETA(Book)"
+                            : settings_->progress_mode == ProgressMode::Percent              ? "Percent"
+                            : settings_->progress_mode == ProgressMode::PercentChapter     ? "Percent+ETA(Ch)"
+                                                                                                       : "Percent+ETA(Book)";
+    add_item(fmt_setting(tmp, sizeof(tmp), "Progress", prog_name));
 
     idx_rotate_display_ = count();
     add_item(fmt_setting(tmp, sizeof(tmp), "Display", app_ && app_->rotate_display() ? "Landscape" : "Portrait"));
@@ -352,20 +357,13 @@ void ReaderOptionsScreen::on_select(int index) {
     refresh_items_(index);
     return;
   }
-  if (index == idx_line_spacing_) {
-    settings_->spacing_override = static_cast<SpacingOverride>((static_cast<uint8_t>(settings_->spacing_override) + 1) %
-                                                               ReaderSettings::kNumSpacingPresets);
+  if (index == idx_progress_bar_) {
+    settings_->progress_bar_mode = static_cast<ProgressBarMode>((static_cast<uint8_t>(settings_->progress_bar_mode) + 1) % 3);
     refresh_items_(index);
     return;
   }
   if (index == idx_progress_) {
-    settings_->progress_style = static_cast<ProgressStyle>((static_cast<uint8_t>(settings_->progress_style) + 1) % 3);
-    refresh_items_(index);
-    return;
-  }
-  if (index == idx_progress_scope_) {
-    settings_->progress_scope =
-        settings_->progress_scope == ProgressScope::Book ? ProgressScope::Chapter : ProgressScope::Book;
+    settings_->progress_mode = static_cast<ProgressMode>((static_cast<uint8_t>(settings_->progress_mode) + 1) % 6);
     refresh_items_(index);
     return;
   }
@@ -428,18 +426,13 @@ void ReaderOptionsScreen::on_long_select(int index) {
     refresh_items_(index);
     return;
   }
-  if (index == idx_line_spacing_) {
-    settings_->spacing_override = static_cast<SpacingOverride>((static_cast<uint8_t>(settings_->spacing_override) + ReaderSettings::kNumSpacingPresets - 1) % ReaderSettings::kNumSpacingPresets);
+  if (index == idx_progress_bar_) {
+    settings_->progress_bar_mode = static_cast<ProgressBarMode>((static_cast<uint8_t>(settings_->progress_bar_mode) + 2) % 3);
     refresh_items_(index);
     return;
   }
   if (index == idx_progress_) {
-    settings_->progress_style = static_cast<ProgressStyle>((static_cast<uint8_t>(settings_->progress_style) + 2) % 3);
-    refresh_items_(index);
-    return;
-  }
-  if (index == idx_progress_scope_) {
-    settings_->progress_scope = settings_->progress_scope == ProgressScope::Book ? ProgressScope::Chapter : ProgressScope::Book;
+    settings_->progress_mode = static_cast<ProgressMode>((static_cast<uint8_t>(settings_->progress_mode) + 5) % 6);
     refresh_items_(index);
     return;
   }
