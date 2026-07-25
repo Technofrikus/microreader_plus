@@ -1,6 +1,7 @@
 #include "MainMenu.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 
@@ -9,6 +10,8 @@
 
 #ifdef ESP_PLATFORM
 #include <dirent.h>
+#include <strings.h>
+#include <sys/stat.h>
 #else
 #include <filesystem>
 namespace fs = std::filesystem;
@@ -43,23 +46,66 @@ static bool ci_less(std::string_view a, std::string_view b) {
   return a.size() < b.size();
 }
 
+static std::string get_parent_dir(const std::string& path) {
+  if (path.empty()) return path;
+#ifndef ESP_PLATFORM
+  fs::path p(path);
+  if (p.has_parent_path()) {
+    std::string parent = p.parent_path().string();
+    for (char& c : parent) if (c == '\\') c = '/';
+    return parent;
+  }
+  return path;
+#else
+  const char* str = path.c_str();
+  const char* last_sep = std::strrchr(str, '/');
+  if (last_sep && last_sep != str) {
+    return std::string(str, last_sep - str);
+  }
+  return path;
+#endif
+}
+
+static bool is_same_dir(const std::string& a, const std::string& b) {
+  if (a == b) return true;
+#ifndef ESP_PLATFORM
+  std::error_code ec;
+  if (fs::equivalent(a, b, ec)) return true;
+#endif
+  return false;
+}
+
+static bool is_sub_dir_of(const std::string& path, const std::string& root) {
+  if (is_same_dir(path, root)) return true;
+#ifndef ESP_PLATFORM
+  std::error_code ec;
+  fs::path p(path);
+  fs::path r(root);
+  while (!p.empty() && p != p.root_path()) {
+    if (fs::equivalent(p, r, ec)) return true;
+    p = p.parent_path();
+  }
+#endif
+  size_t rlen = root.size();
+  return (path.size() >= rlen && path.compare(0, rlen, root) == 0);
+}
+
 void MainMenu::on_start() {
   title_ = nullptr;
   set_long_back_threshold(20);
+  set_alignment_left(align_left_);
+  // Folder-browsing menu: a held UP goes up one folder level (long-press);
+  // a short tap moves the selection up one. UP auto-repeat is disabled here.
+  set_up_uses_long_press(true);
 
-  if (!app_->data_dir_) {
-    needs_scan_ = false;
-    return;
+  if (app_ && app_->data_dir_) {
+    std::string index_path = std::string(app_->data_dir_) + "/book_index.dat";
+    if (!BookIndex::instance().load(index_path)) {
+      needs_scan_ = true;
+    }
   }
 
-  std::string index_path = std::string(app_->data_dir_) + "/book_index.dat";
-
-  if (BookIndex::instance().load(index_path)) {
-    populate_list_();
-    needs_scan_ = false;
-  } else {
-    needs_scan_ = true;
-  }
+  populate_list_();
 }
 
 void MainMenu::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime& runtime) {
@@ -78,10 +124,25 @@ void MainMenu::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime& run
 void MainMenu::on_select(int index) {
   if (is_separator(index)) return;
   int real = entries_index_for(index);
-  last_selected_path_ = entries_[real].path;
-  app_->record_book_opened(entries_[real].path);
-  app_->reader()->set_path(entries_[real].path.c_str());
-  app_->push_screen(ScreenId::Reader);
+  if (real < 0 || real >= static_cast<int>(entries_.size())) return;
+
+  const MenuEntry& e = entries_[real];
+  if (e.type == EntryType::Directory) {
+    if (e.name == ".." || is_same_dir(e.path, get_parent_dir(current_dir_))) {
+      std::string old_dir = current_dir_;
+      current_dir_ = e.path;
+      initial_selection_ = old_dir;
+    } else {
+      current_dir_ = e.path;
+    }
+    populate_list_();
+    request_redraw();
+  } else {
+    last_selected_path_ = e.path;
+    app_->record_book_opened(e.path);
+    app_->reader()->set_path(e.path.c_str());
+    app_->push_screen(ScreenId::Reader);
+  }
 }
 
 void MainMenu::stop() {
@@ -89,15 +150,44 @@ void MainMenu::stop() {
   if (!cur.empty()) {
     initial_selection_ = cur;
     last_selected_path_ = cur;
+  } else if (!entries_.empty()) {
+    int real = entries_index_for(selected());
+    if (real >= 0 && real < static_cast<int>(entries_.size())) {
+      initial_selection_ = entries_[real].path;
+    }
   }
 
-  { std::vector<BookEntry> tmp; entries_.swap(tmp); }
+  { std::vector<MenuEntry> tmp; entries_.swap(tmp); }
   free_items_storage();
   BookIndex::instance().clear_entries();
 }
 
 void MainMenu::on_back() {
+  const std::string& cur = current_book_path();
+  if (!cur.empty()) {
+    initial_selection_ = cur;
+  } else if (!entries_.empty()) {
+    int real = entries_index_for(selected());
+    if (real >= 0 && real < static_cast<int>(entries_.size())) {
+      initial_selection_ = entries_[real].path;
+    }
+  }
   app_->push_screen(ScreenId::Settings);
+}
+
+void MainMenu::on_long_up() {
+  if (books_dir_.empty() || current_dir_.empty() || is_same_dir(current_dir_, books_dir_)) {
+    return;
+  }
+  std::string parent = get_parent_dir(current_dir_);
+  if (!is_sub_dir_of(parent, books_dir_)) {
+    parent = books_dir_;
+  }
+  std::string old_dir = current_dir_;
+  current_dir_ = parent;
+  initial_selection_ = old_dir;
+  populate_list_();
+  request_redraw();
 }
 
 bool MainMenu::draw_custom_header_(DrawBuffer& buf) const {
@@ -126,12 +216,14 @@ void MainMenu::on_long_back(int index) {
   int real = entries_index_for(index);
   if (real < 0 || real >= static_cast<int>(entries_.size()))
     return;
+  if (entries_[real].type != EntryType::Book)
+    return;
   app_->delete_confirm()->setup(entries_[real].path, entries_[real].last_open_order > 0);
   app_->push_screen(ScreenId::DeleteConfirm);
 }
 
 void MainMenu::scan_directory_(DrawBuffer& buf) {
-  if (!books_dir_ || !app_->data_dir_)
+  if (books_dir_.empty() || !app_->data_dir_)
     return;
 
   std::string root_dir = books_dir_;
@@ -160,18 +252,59 @@ std::string_view MainMenu::get_item_label(int index) const {
   int real = entries_index_for(index);
   if (real < 0 || real >= static_cast<int>(entries_.size()))
     return {};
+  return entries_[real].display_name;
+}
+
+bool MainMenu::directory_has_epubs_(const std::string& dir_path) const {
+  const auto& entries = BookIndex::instance().entries();
   const StringPool& pool = BookIndex::instance().pool();
-  const BookEntry& e = entries_[real];
-  if (list_format_ == BookListFormat::TitleOnly) {
-    return e.title_ref.view(pool);
-  } else if (list_format_ == BookListFormat::Filename) {
-    return filename_sv(e.path);
-  } else {
-    label_buf_ = std::string(e.title_ref.view(pool));
-    label_buf_ += " - ";
-    label_buf_ += e.author_ref.view(pool);
-    return std::string_view(label_buf_);
+  for (const auto& entry : entries) {
+    std::string_view p = entry.path.view(pool);
+    if (!p.empty() && is_sub_dir_of(std::string(p), dir_path)) {
+      return true;
+    }
   }
+
+#ifdef ESP_PLATFORM
+  DIR* dir = opendir(dir_path.c_str());
+  if (dir) {
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+      if (ent->d_name[0] == '.') continue;
+      std::string fullpath = dir_path + "/" + ent->d_name;
+      struct stat st;
+      if (stat(fullpath.c_str(), &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+          if (directory_has_epubs_(fullpath)) {
+            closedir(dir);
+            return true;
+          }
+        } else if (S_ISREG(st.st_mode)) {
+          size_t len = std::strlen(ent->d_name);
+          if (len > 5 && strcasecmp(ent->d_name + len - 5, ".epub") == 0) {
+            closedir(dir);
+            return true;
+          }
+        }
+      }
+    }
+    closedir(dir);
+  }
+#else
+  try {
+    for (const auto& entry : fs::recursive_directory_iterator(dir_path, fs::directory_options::skip_permission_denied)) {
+      std::string fname = entry.path().filename().string();
+      if (fname.empty() || fname[0] == '.') continue;
+      if (entry.is_regular_file() && fname.size() > 5) {
+        std::string ext = fname.substr(fname.size() - 5);
+        for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (ext == ".epub") return true;
+      }
+    }
+  } catch (...) {}
+#endif
+
+  return false;
 }
 
 void MainMenu::populate_list_() {
@@ -179,46 +312,192 @@ void MainMenu::populate_list_() {
   entries_.clear();
   separator_visual_index_ = -1;
 
+  if (books_dir_.empty()) return;
+
+  // Check if books_dir_ has a /books subfolder to default to
+#ifndef ESP_PLATFORM
+  fs::path books_subdir = fs::path(books_dir_) / "books";
+  if (fs::exists(books_subdir) && fs::is_directory(books_subdir)) {
+    std::string s = books_subdir.string();
+    for (char& c : s) if (c == '\\') c = '/';
+    books_dir_ = s;
+  }
+#else
+  std::string books_subdir = books_dir_ + "/books";
+  struct stat st;
+  if (stat(books_subdir.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+    books_dir_ = books_subdir;
+  }
+#endif
+
+  if (!initial_selection_.empty()) {
+    std::string target_path = initial_selection_;
+    std::string parent_dir = get_parent_dir(target_path);
+
+    if (is_sub_dir_of(parent_dir, books_dir_)) {
+      current_dir_ = parent_dir;
+    } else {
+      current_dir_ = books_dir_;
+    }
+  }
+
+  if (current_dir_.empty()) {
+    current_dir_ = books_dir_;
+  }
+
+  std::vector<std::string> subdirs;
+  std::vector<std::string> epubs;
+
+#ifdef ESP_PLATFORM
+  DIR* dir = opendir(current_dir_.c_str());
+  if (dir) {
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+      if (ent->d_name[0] == '.') continue;
+      std::string fullpath = current_dir_ + "/" + ent->d_name;
+      struct stat st;
+      if (stat(fullpath.c_str(), &st) == 0) {
+        if (S_ISDIR(st.st_mode)) {
+          subdirs.push_back(ent->d_name);
+        } else if (S_ISREG(st.st_mode)) {
+          size_t len = std::strlen(ent->d_name);
+          if (len > 5) {
+            const char* ext = ent->d_name + len - 5;
+            if (strcasecmp(ext, ".epub") == 0) {
+              epubs.push_back(ent->d_name);
+            }
+          }
+        }
+      }
+    }
+    closedir(dir);
+  }
+#else
+  try {
+    for (const auto& entry : fs::directory_iterator(current_dir_, fs::directory_options::skip_permission_denied)) {
+      std::string fname = entry.path().filename().string();
+      if (fname.empty() || fname[0] == '.') continue;
+      std::string fullpath = entry.path().string();
+      for (char& c : fullpath) if (c == '\\') c = '/';
+      if (entry.is_directory()) {
+        subdirs.push_back(fname);
+      } else if (entry.is_regular_file()) {
+        if (fname.size() > 5) {
+          std::string ext = fname.substr(fname.size() - 5);
+          for (char& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+          if (ext == ".epub") {
+            epubs.push_back(fname);
+          }
+        }
+      }
+    }
+  } catch (...) {}
+#endif
+
+  std::sort(subdirs.begin(), subdirs.end(), [](const std::string& a, const std::string& b) {
+    return ci_less(a, b);
+  });
+
   const StringPool& bpool = BookIndex::instance().pool();
-  for (const auto& idx : BookIndex::instance().entries()) {
-    BookEntry e;
-    e.path = idx.path.to_string(bpool);
-    e.title_ref = idx.title;
-    e.author_ref = idx.author;
-    e.last_open_order = idx.last_open_order;
+
+  if (!is_same_dir(current_dir_, books_dir_)) {
+    MenuEntry up_entry;
+    up_entry.type = EntryType::Directory;
+    up_entry.name = "..";
+    up_entry.path = get_parent_dir(current_dir_);
+    up_entry.display_name = "/..";
+    entries_.push_back(std::move(up_entry));
+  }
+
+  for (const auto& d : subdirs) {
+    std::string fullpath = current_dir_ + "/" + d;
+    if (!directory_has_epubs_(fullpath)) {
+      continue;
+    }
+    MenuEntry e;
+    e.type = EntryType::Directory;
+    e.name = d;
+    e.path = fullpath;
+    e.display_name = "/" + d;
     entries_.push_back(std::move(e));
+  }
+
+  std::vector<MenuEntry> book_entries;
+  for (const auto& f : epubs) {
+    MenuEntry e;
+    e.type = EntryType::Book;
+    e.name = f;
+    e.path = current_dir_ + "/" + f;
+    const BookIndexEntry* idx = BookIndex::instance().find_entry(e.path);
+    if (idx) {
+      e.title_ref = idx->title;
+      e.author_ref = idx->author;
+      e.last_open_order = idx->last_open_order;
+    }
+
+    std::string_view title = e.title_ref.view(bpool);
+    std::string_view author = e.author_ref.view(bpool);
+
+    if (list_format_ == BookListFormat::TitleOnly) {
+      if (!title.empty()) e.display_name = title;
+      else e.display_name = filename_sv(e.path);
+    } else if (list_format_ == BookListFormat::Filename) {
+      e.display_name = filename_sv(e.path);
+    } else { // TitleAndAuthor
+      if (!title.empty() && !author.empty()) {
+        e.display_name = std::string(title) + " - " + std::string(author);
+      } else if (!title.empty()) {
+        e.display_name = title;
+      } else {
+        e.display_name = filename_sv(e.path);
+      }
+    }
+
+    book_entries.push_back(std::move(e));
   }
 
   if (sort_order_ == BookSortOrder::LastOpened) {
     const auto fmt = list_format_;
-    std::stable_sort(entries_.begin(), entries_.end(),
-                     [&bpool, fmt](const BookEntry& a, const BookEntry& b) {
+    std::stable_sort(book_entries.begin(), book_entries.end(),
+                     [&bpool, fmt](const MenuEntry& a, const MenuEntry& b) {
                       if (a.last_open_order != b.last_open_order)
                         return a.last_open_order > b.last_open_order;
                       if (fmt == BookListFormat::Filename)
                         return ci_less(filename_sv(a.path), filename_sv(b.path));
                       return ci_less(a.title_ref.view(bpool), b.title_ref.view(bpool));
                      });
-    for (int i = 0; i < static_cast<int>(entries_.size()); ++i) {
-      if (i > 0 && entries_[i].last_open_order == 0 &&
-          entries_[i - 1].last_open_order > 0) {
-        separator_visual_index_ = i;
+  } else if (list_format_ == BookListFormat::Filename) {
+    std::stable_sort(book_entries.begin(), book_entries.end(),
+                     [](const MenuEntry& a, const MenuEntry& b) { return ci_less(filename_sv(a.path), filename_sv(b.path)); });
+  } else {
+    std::stable_sort(book_entries.begin(), book_entries.end(),
+                     [&bpool](const MenuEntry& a, const MenuEntry& b) {
+                      std::string_view ta = a.title_ref.view(bpool);
+                      std::string_view tb = b.title_ref.view(bpool);
+                      if (ta.empty()) ta = filename_sv(a.path);
+                      if (tb.empty()) tb = filename_sv(b.path);
+                      return ci_less(ta, tb);
+                     });
+  }
+
+  int num_folders = static_cast<int>(entries_.size());
+  for (auto& b : book_entries) {
+    entries_.push_back(std::move(b));
+  }
+
+  if (sort_order_ == BookSortOrder::LastOpened && !book_entries.empty()) {
+    for (int i = 0; i < static_cast<int>(book_entries.size()); ++i) {
+      if (i > 0 && book_entries[i].last_open_order == 0 &&
+          book_entries[i - 1].last_open_order > 0) {
+        separator_visual_index_ = num_folders + i;
         break;
       }
     }
-  } else if (list_format_ == BookListFormat::Filename) {
-    std::stable_sort(entries_.begin(), entries_.end(),
-                      [](const BookEntry& a, const BookEntry& b) { return ci_less(filename_sv(a.path), filename_sv(b.path)); });
-  } else {
-    std::stable_sort(entries_.begin(), entries_.end(),
-                     [&bpool](const BookEntry& a, const BookEntry& b) {
-                        return ci_less(a.title_ref.view(bpool), b.title_ref.view(bpool));
-                     });
   }
 
   if (!initial_selection_.empty()) {
     for (int i = 0; i < static_cast<int>(entries_.size()); ++i) {
-      if (entries_[i].path == initial_selection_) {
+      if (entries_[i].path == initial_selection_ || is_same_dir(entries_[i].path, initial_selection_)) {
         set_selected(visual_for_entries(i));
         break;
       }

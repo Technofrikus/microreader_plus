@@ -134,11 +134,35 @@ class ListMenuScreen : public IScreen {
   // Called when user holds back for long_back_threshold_ frames (0 = disabled).
   virtual void on_long_back(int index) {}
 
+  // Called when user holds UP button for long threshold.
+  virtual void on_long_up() {}
+  virtual void on_long_down() {}
+
   void set_long_back_threshold(int frames) {
     long_back_threshold_ = frames;
   }
   int long_back_threshold() const {
     return long_back_threshold_;
+  }
+
+  // Hold UP this long (ms) to trigger on_long_up() (go up one folder level).
+  // Auto-repeat is disabled for UP so a long hold never scrolls the list.
+  void set_long_up_threshold_ms(uint32_t ms) {
+    long_up_threshold_ms_ = ms;
+  }
+  uint32_t long_up_threshold_ms() const {
+    return long_up_threshold_ms_;
+  }
+
+  // When true (folder-browsing menu), a held UP goes up one folder level
+  // (on_long_up) and a short tap moves the selection up one; UP auto-repeat
+  // is disabled. When false (all other list menus), UP behaves like DOWN:
+  // a short tap moves up one and a long hold auto-repeats the scroll.
+  void set_up_uses_long_press(bool v) {
+    up_uses_long_press_ = v;
+  }
+  bool up_uses_long_press() const {
+    return up_uses_long_press_;
   }
 
  protected:
@@ -174,8 +198,13 @@ class ListMenuScreen : public IScreen {
   int selected_ = 0;
   int scroll_offset_ = 0;
   int initial_selection_ = -1;
-  int hold_frames_up_ = 0;
   int hold_frames_down_ = 0;
+  int hold_frames_up_ = 0;        // auto-repeat counter for UP (non-folder menus)
+  bool up_uses_long_press_ = false;  // folder-browsing menu enables long-press UP
+  uint32_t hold_ms_up_ = 0;          // accumulated hold time for UP long-press
+  bool long_up_triggered_ = false;   // on_long_up() already fired this hold
+  bool up_press_pending_ = false;     // UP pressed but not yet resolved (tap vs long-press)
+  uint32_t long_up_threshold_ms_ = 500;  // 0.5s hold to go up one folder
   int long_back_threshold_ = 0;
   int back_hold_frames_ = 0;
   bool back_held_ = false;

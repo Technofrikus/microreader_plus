@@ -16,12 +16,19 @@ enum class BookSortOrder { Alphabetical, LastOpened };
 
 // Main screen — lists EPUB books from a directory.
 // Button1 = open book, Button0 = settings.
-class MainMenu final : public ListMenuScreen {
+class MainMenu : public ListMenuScreen {
  public:
   MainMenu() = default;
 
+  void test_on_start() { on_start(); }
+  void test_select(int index) { on_select(index); }
+  void test_back() { on_back(); }
+
   void set_books_dir(const char* dir) {
-    books_dir_ = dir;
+    books_dir_ = dir ? dir : "";
+    if (current_dir_.empty() && !books_dir_.empty()) {
+      current_dir_ = books_dir_;
+    }
   }
 
   // Restore the book list selection to the entry matching this path.
@@ -45,11 +52,15 @@ class MainMenu final : public ListMenuScreen {
   }
 
   bool has_books_dir() const {
-    return books_dir_ != nullptr;
+    return !books_dir_.empty();
   }
 
   const char* books_dir() const {
-    return books_dir_;
+    return books_dir_.c_str();
+  }
+
+  const char* current_dir() const {
+    return current_dir_.c_str();
   }
 
   const char* name() const override {
@@ -68,6 +79,14 @@ class MainMenu final : public ListMenuScreen {
   }
   void set_sort_order(BookSortOrder order) {
     sort_order_ = order;
+  }
+
+  bool align_left() const {
+    return align_left_;
+  }
+  void set_align_left(bool left) {
+    align_left_ = left;
+    set_alignment_left(left);
   }
 
   void set_app(Application* app) {
@@ -92,24 +111,33 @@ class MainMenu final : public ListMenuScreen {
   void on_select(int index) override;
   void on_back() override;
   void on_long_back(int index) override;
+  void on_long_up() override;
   bool draw_custom_header_(DrawBuffer& buf) const override;
 
  private:
-  const char* books_dir_ = nullptr;
+  enum class EntryType { Directory, Book };
+
+  struct MenuEntry {
+    EntryType type = EntryType::Book;
+    std::string path;
+    std::string name;
+    std::string display_name;
+    StringRef title_ref;
+    StringRef author_ref;
+    uint32_t last_open_order = 0;
+  };
+
+  std::string books_dir_;
+  std::string current_dir_;
   std::string initial_selection_;   // path to pre-select after scan
   std::string last_selected_path_;  // path of the most recently opened book
   DrawBuffer* buf_ = nullptr;
   BookListFormat list_format_ = BookListFormat::TitleOnly;
   BookSortOrder sort_order_ = BookSortOrder::Alphabetical;
+  bool align_left_ = false;         // Centered list items by default
   bool needs_scan_ = false;
 
-  struct BookEntry {
-    std::string path;
-    StringRef title_ref;
-    StringRef author_ref;
-    uint32_t last_open_order = 0;
-  };
-  std::vector<BookEntry> entries_;
+  std::vector<MenuEntry> entries_;
   mutable std::string label_buf_;
   int separator_visual_index_ = -1;
 
@@ -125,6 +153,7 @@ class MainMenu final : public ListMenuScreen {
 
   void scan_directory_(DrawBuffer& buf);
   void populate_list_();
+  bool directory_has_epubs_(const std::string& dir_path) const;
 };
 
 }  // namespace microreader

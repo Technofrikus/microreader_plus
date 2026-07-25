@@ -326,22 +326,13 @@ void ListMenuScreen::draw_list_(DrawBuffer& buf, int W, int H, int header_h, int
 
     const int ix = align_left_ ? indent_px : (W - iw) / 2;
     if (i == selected_) {
-      const int bar_w = 3;
+      const int bar_w = 4;
       const int sel_top = (font_size_idx_ == 0) ? y - 1 : y;
       const int bar_h = ui_font_.y_advance() + (font_size_idx_ == 0 ? 1 : 0);
-      if (align_left_) {
-        const int bar_x = 16;
-        const int bar_width = W - 32 - landscape_pad;
-        buf.fill_rect(bar_x + 1, sel_top, bar_width - 2, bar_h, false);
-        buf.fill_rect(bar_x, sel_top + 1, 1, bar_h - 2, false);
-        buf.fill_rect(bar_x + bar_width - 1, sel_top + 1, 1, bar_h - 2, false);
-        buf.draw_text_proportional(ix, y + baseline, label, len, ui_font_, true);
-      } else {
-        buf.fill_rect(ix - bar_w, sel_top, iw + bar_w * 2, bar_h, false);
-        buf.fill_rect(ix - bar_w - 1, sel_top + 1, 1, bar_h - 2, false);
-        buf.fill_rect(ix + iw + bar_w, sel_top + 1, 1, bar_h - 2, false);
-        buf.draw_text_proportional(ix, y + baseline, label, len, ui_font_, true);
-      }
+      buf.fill_rect(ix - bar_w, sel_top, iw + bar_w * 2, bar_h, false);
+      buf.fill_rect(ix - bar_w - 1, sel_top + 1, 1, bar_h - 2, false);
+      buf.fill_rect(ix + iw + bar_w, sel_top + 1, 1, bar_h - 2, false);
+      buf.draw_text_proportional(ix, y + baseline, label, len, ui_font_, true);
     } else {
       buf.draw_text_proportional(ix, y + baseline, label, len, ui_font_, false);
     }
@@ -434,10 +425,6 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
   bool moved = false;       // selection changed — needs a redraw
   bool needs_draw = false;  // on_select returned true — needs a redraw
 
-  // Track whether a fresh press event arrived this frame for each nav direction.
-  bool had_up_press = false;
-  bool had_down_press = false;
-
   bool side_inv = app_ && app_->menu_side_inverted();
   bool front_inv = app_ && app_->menu_front_inverted();
   Button logical_up_front = front_inv ? Button::Button3 : Button::Button2;
@@ -450,16 +437,26 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
   while (buttons.next_press(btn)) {
     ++press_count;
     if (btn == logical_up_front || btn == logical_up_side) {
-      if (n > 0 && !back_held_) {
+      if (up_uses_long_press_) {
+        // Folder-browsing menu: defer the UP press. It may become a long-press
+        // (go up one folder) or a short tap (move selection up one). We must
+        // wait until release (or the long-press threshold) to decide, so a
+        // long-press never first scrolls the list.
+        if (!back_held_) {
+          up_press_pending_ = true;
+          hold_ms_up_ = 0;
+          long_up_triggered_ = false;
+        }
+      } else if (n > 0 && !back_held_) {
+        // Other list menus: behave like DOWN — a tap moves up one immediately
+        // and a long hold auto-repeats (handled in the hold section below).
         move_up();
         moved = true;
-        had_up_press = true;
       }
     } else if (btn == logical_down_front || btn == logical_down_side) {
       if (n > 0 && !back_held_) {
         move_down();
         moved = true;
-        had_down_press = true;
       }
     } else {
       switch (btn) {
@@ -507,26 +504,55 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
     return frames - 1;
   };
 
-  const bool up_held = !had_up_press && !back_held_ && (buttons.is_down(logical_up_front) || buttons.is_down(logical_up_side));
-  const bool down_held = !had_down_press && !back_held_ && (buttons.is_down(logical_down_front) || buttons.is_down(logical_down_side));
+  const bool up_held = !back_held_ && (buttons.is_down(logical_up_front) || buttons.is_down(logical_up_side));
+  const bool down_held = !back_held_ && (buttons.is_down(logical_down_front) || buttons.is_down(logical_down_side));
 
-  if (up_held && n > 0) {
+  // Up button handling depends on the menu mode:
+  //  - Folder-browsing menu (up_uses_long_press_): a held UP goes up one folder
+  //    (long-press) or, on release before the threshold, moves the selection up
+  //    one (short tap). Auto-repeat scrolling is intentionally disabled.
+  //  - Other list menus: behave like DOWN — auto-repeat scroll while held.
+  if (up_uses_long_press_) {
+    if (up_held) {
+      hold_ms_up_ += runtime.frame_time_ms();
+      if (!long_up_triggered_ && hold_ms_up_ >= long_up_threshold_ms_) {
+        on_long_up();
+        long_up_triggered_ = true;
+        up_press_pending_ = false;  // consumed as a long-press, not a tap
+        moved = true;
+      }
+    } else if (up_press_pending_) {
+      // Released before the long-press threshold → treat as a short tap.
+      up_press_pending_ = false;
+      hold_ms_up_ = 0;
+      long_up_triggered_ = false;
+      if (n > 0 && !back_held_) {
+        move_up();
+        moved = true;
+      }
+    } else {
+      hold_ms_up_ = 0;
+      long_up_triggered_ = false;
+    }
+  } else if (up_held && n > 0) {
+    // Auto-repeat scroll (same acceleration as DOWN).
     const int step = hold_step(hold_frames_up_);
     for (int i = 0; i < step; ++i)
       move_up();
     ++hold_frames_up_;
     moved = true;
-  } else if (!had_up_press) {
+  } else {
     hold_frames_up_ = 0;
   }
 
+  // Down button handling: auto-repeat only
   if (down_held && n > 0) {
     const int step = hold_step(hold_frames_down_);
     for (int i = 0; i < step; ++i)
       move_down();
     ++hold_frames_down_;
     moved = true;
-  } else if (!had_down_press) {
+  } else {
     hold_frames_down_ = 0;
   }
 

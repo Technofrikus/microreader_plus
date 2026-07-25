@@ -97,14 +97,21 @@ int main() {
     DesktopInputSource input(runtime);
     DesktopEmulatorDisplay display(runtime);
     microreader::Application app;
-    microreader::DrawBuffer buf(display);
+    microreader::DrawBuffer buf(display, display.device_config());
 
     // Mount the repo-root sd/ folder as the virtual SD card.
     // MICROREADER_SD_DIR is set by CMake via desktop_config.h.
     static std::string books_path = std::filesystem::absolute(MICROREADER_SD_DIR).string();
     std::filesystem::create_directories(books_path);
+    std::filesystem::create_directories(books_path + "/books");
     std::filesystem::create_directories(books_path + "/fonts");
-    app.set_books_dir(books_path.c_str());
+    
+    std::string books_subdir = books_path + "/books";
+    if (std::filesystem::exists(books_subdir) && std::filesystem::is_directory(books_subdir)) {
+      app.set_books_dir(books_subdir.c_str());
+    } else {
+      app.set_books_dir(books_path.c_str());
+    }
 
     // Data directory for converted books, settings, reading state.
     static std::string data_path = (std::filesystem::absolute(MICROREADER_SD_DIR) / ".microreader").string();
