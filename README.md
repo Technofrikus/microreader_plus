@@ -6,7 +6,9 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 
 | # | Change | Commit / PR |
 |---|--------|-------------|
-| 1 | Removed the "sleeping..." text drawn on the sleep screen in `DrawBuffer::show_mgr2_sleep_()` | — |
+| 2 | Added progress bar scope and ETA estimation in the reader screen | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
+| 3 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
+| 4 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
 
 ### Tips for merging upstream changes
 
@@ -22,8 +24,11 @@ This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/mi
 
 ## Fork Features
 
-### Controls
-- Simplified configuration for Menu and Reader with **4 control modes** (Default, Side Inverted, Front Inverted and Inverted).
+### Special Button Presses
+- **Long-press UP (in MainMenu):** Navigate up one folder level.
+- **Long-press BACK (in MainMenu):** Delete the selected book.
+- **Long-press BACK (in Last Opened list):** Remove the selected book from the "Last Opened" list.
+- **Long-hold SELECT (in Reader):** Cycle through text selection settings in reverse (backward).
 
 ### Content management
 - **Delete book** with long-press back
