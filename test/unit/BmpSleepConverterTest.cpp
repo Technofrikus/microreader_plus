@@ -526,13 +526,13 @@ TEST_F(BmpConverterTest, PortraitRotationDirectionIsCorrect) {
     }
     auto src = bmp("rot_dir.bmp", src_data);
     auto dst = mgr("rot_dir.mgr");
-    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str()));
+    // Use auto-size (0,0) to test pure rotation direction without cropping.
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str(), 0, 0));
     auto m = read_mgr2(dst);
     ASSERT_TRUE(m.valid);
-    // Left edge of output (out_x=0) → white (state 0)
-    // Right edge of output (out_x=799) → black (state 3)
-    EXPECT_EQ(mgr2_pixel(m, 0, 240), 0);    // white
-    EXPECT_EQ(mgr2_pixel(m, 799, 240), 3);  // black
+    // Output is 2x1 (rotated from 1x2). Left edge (out_x=0) → white, right (out_x=1) → black.
+    EXPECT_EQ(mgr2_pixel(m, 0, 0), 0);    // white
+    EXPECT_EQ(mgr2_pixel(m, 1, 0), 3);  // black
 }
 
 // ── 2bpp format tests ────────────────────────────────────────────────────────
@@ -605,6 +605,56 @@ TEST_F(BmpConverterTest, AutoSizeLandscape2bpp) {
     // Landscape: no rotation, output should be 200x100
     EXPECT_EQ(m.w, 200);
     EXPECT_EQ(m.h, 100);
+}
+
+// ── COVER mode (scale to fill + crop) ───────────────────────────────────────
+// X4 display is 800x480 (5:3). X3 display is 792x528 (3:2).
+// A 528x792 portrait source (3:2) rotated becomes 792x528 (3:2) → exact fit on X3,
+// but on X4 (5:3) it must be scaled to cover and cropped slightly on left/right.
+
+TEST_F(BmpConverterTest, CoverFitX3Portrait) {
+    // 528x792 portrait → rotate to 792x528 → exact fit for X3 (792x528), no crop.
+    auto src = bmp("cover_x3.bmp", make_bmp_2(528, 792, 1, 128, 128, 128));
+    auto dst = mgr("cover_x3.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str(), 792, 528));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    EXPECT_EQ(m.w, 792);
+    EXPECT_EQ(m.h, 528);
+    // Center pixel should be mid-gray (state 1 or 2).
+    int px = mgr2_pixel(m, 396, 264);
+    EXPECT_GE(px, 1);
+    EXPECT_LE(px, 2);
+}
+
+TEST_F(BmpConverterTest, CoverFitX4Portrait) {
+    // 528x792 portrait → rotate to 792x528 → cover X4 (800x480): scale up, crop sides.
+    auto src = bmp("cover_x4.bmp", make_bmp_2(528, 792, 1, 128, 128, 128));
+    auto dst = mgr("cover_x4.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str(), 800, 480));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    EXPECT_EQ(m.w, 800);
+    EXPECT_EQ(m.h, 480);
+    // Center pixel should be mid-gray (state 1 or 2) — crop is symmetric, center preserved.
+    int px = mgr2_pixel(m, 400, 240);
+    EXPECT_GE(px, 1);
+    EXPECT_LE(px, 2);
+}
+
+TEST_F(BmpConverterTest, CoverFitLandscape) {
+    // 800x600 landscape → cover X4 (800x480): scale to fill width, crop top/bottom.
+    auto src = bmp("cover_ls.bmp", make_bmp_24(800, 600, 128, 128, 128));
+    auto dst = mgr("cover_ls.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str(), 800, 480));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    EXPECT_EQ(m.w, 800);
+    EXPECT_EQ(m.h, 480);
+    // Center pixel should be mid-gray (state 1 or 2).
+    int px = mgr2_pixel(m, 400, 240);
+    EXPECT_GE(px, 1);
+    EXPECT_LE(px, 2);
 }
 
 // namespace microreader not closed - will be closed by compiler?

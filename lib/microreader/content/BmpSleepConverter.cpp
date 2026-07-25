@@ -1,5 +1,6 @@
 #include "BmpSleepConverter.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -75,12 +76,6 @@ namespace microreader {
 
 bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
                           int out_w, int out_h) {
-    // If out_w or out_h is 0, use the source image dimensions after rotation.
-    const bool auto_size = (out_w <= 0 || out_h <= 0);
-    const int OUT_W = auto_size ? 0 : out_w;  // Will be set after reading source
-    const int OUT_H = auto_size ? 0 : out_h;
-    const int OUT_STRIDE = auto_size ? 0 : (OUT_W + 3) / 4;
-
     FILE* f = std::fopen(bmp_path, "rb");
     if (!f) return false;
 
@@ -113,17 +108,52 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
     const bool top_down = (height < 0);
     if (top_down) height = -height;
 
-    // Determine output dimensions
-    int final_out_w = OUT_W;
-    int final_out_h = OUT_H;
-    if (auto_size) {
-        // Use source dimensions after rotation
-        if (height > width) {
-            // Portrait source: rotate 90° CCW, so output is height x width
+    const bool portrait = (height > width);
+
+    // ── Determine output size and source crop rectangle ──────────────────────
+    // If out_w/out_h are both > 0: COVER mode → scale to fill, crop excess.
+    // If either is <= 0: AUTO mode → output matches source dims after rotation.
+    int final_out_w, final_out_h;
+    // Source crop rectangle (in original BMP pixel coordinates, pre-rotation):
+    int crop_x = 0, crop_y = 0;
+    int crop_w = (int)width, crop_h = (int)height;
+
+    if (out_w > 0 && out_h > 0) {
+        // COVER mode.
+        // After rotation (if portrait), the effective source aspect is swapped.
+        // Effective source W/H (post-rotation):
+        const int eff_src_w = portrait ? (int)height : (int)width;
+        const int eff_src_h = portrait ? (int)width  : (int)height;
+        // Scale factor needed to cover the target:
+        const float scale = std::max((float)out_w / eff_src_w,
+                                     (float)out_h / eff_src_h);
+        // Cropped source size (post-rotation) that maps exactly to out_w×out_h:
+        const int crop_eff_w = (int)((float)out_w / scale);
+        const int crop_eff_h = (int)((float)out_h / scale);
+        // Center the crop within the effective source:
+        const int off_eff_x = (eff_src_w - crop_eff_w) / 2;
+        const int off_eff_y = (eff_src_h - crop_eff_h) / 2;
+        // Map back to pre-rotation source coordinates:
+        if (portrait) {
+            // eff_x maps to source y, eff_y maps to source (width-1 - x)
+            crop_x = (int)width  - off_eff_y - crop_eff_h;
+            crop_y = off_eff_x;
+            crop_w = crop_eff_h;   // source rows (height dimension)
+            crop_h = crop_eff_w;   // source cols (width dimension)
+        } else {
+            crop_x = off_eff_x;
+            crop_y = off_eff_y;
+            crop_w = crop_eff_w;
+            crop_h = crop_eff_h;
+        }
+        final_out_w = out_w;
+        final_out_h = out_h;
+    } else {
+        // AUTO mode: output matches source after rotation.
+        if (portrait) {
             final_out_w = (int)height;
             final_out_h = (int)width;
         } else {
-            // Landscape source: no rotation needed
             final_out_w = (int)width;
             final_out_h = (int)height;
         }
@@ -160,22 +190,22 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
     std::fwrite(&oh, 2, 1, out);
 
     bool ok = true;
-    const bool portrait = (height > width);
 
     if (!portrait) {
         // ── Landscape path: row-by-row, O(1) extra memory ───────────────────
+        // Source crop is [crop_x, crop_x+crop_w) × [crop_y, crop_y+crop_h).
         uint8_t out_row[FINAL_STRIDE];
         for (int out_y = 0; out_y < final_out_h && ok; ++out_y) {
-            const int src_log_y  = out_y * (int)height / final_out_h;
-            const int src_file_y = top_down ? src_log_y : ((int)height - 1 - src_log_y);
-            const long row_pos   = (long)data_offset + (long)src_file_y * src_stride;
+            const int src_y = crop_y + out_y * crop_h / final_out_h;
+            const int src_file_y = top_down ? src_y : ((int)height - 1 - src_y);
+            const long row_pos = (long)data_offset + (long)src_file_y * src_stride;
             if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
                 std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) {
                 ok = false; break;
             }
             std::memset(out_row, 0, FINAL_STRIDE);
             for (int out_x = 0; out_x < final_out_w; ++out_x) {
-                const int sx    = out_x * (int)width / final_out_w;
+                const int sx = crop_x + out_x * crop_w / final_out_w;
                 const uint8_t g = decode_pixel(row_buf, sx, bpp, palette, is_rgb565);
                 out_row[out_x / 4] |= (uint8_t)(quantize(g, out_x, out_y) << (6 - (out_x % 4) * 2));
             }
@@ -184,8 +214,8 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
         }
     } else {
         // ── Portrait path: CCW 90° rotation (matches Python ROTATE_90) ───────
-        // Derivation: new[out_y][out_x] = old[out_x * H / 800][W-1 - out_y * W / 480]
-        // For a fixed out_x, the source row is constant → one seek per output column.
+        // Source crop rectangle (pre-rotation): [crop_x, crop_x+crop_w) × [crop_y, crop_y+crop_h).
+        // After 90° CCW rotation: out_x ← crop row (source y), out_y ← crop col (source x, reversed).
         // Accumulate the output array, then write all rows.
         uint8_t* output = (uint8_t*)std::malloc(final_out_h * FINAL_STRIDE);
         if (!output) {
@@ -193,15 +223,17 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
         } else {
             std::memset(output, 0, final_out_h * FINAL_STRIDE);
             for (int out_x = 0; out_x < final_out_w && ok; ++out_x) {
-                const int src_log_y  = out_x * (int)height / final_out_w;
-                const int src_file_y = top_down ? src_log_y : ((int)height - 1 - src_log_y);
-                const long row_pos   = (long)data_offset + (long)src_file_y * src_stride;
+                // out_x maps to a source row within the crop
+                const int src_y = crop_y + out_x * crop_h / final_out_w;
+                const int src_file_y = top_down ? src_y : ((int)height - 1 - src_y);
+                const long row_pos = (long)data_offset + (long)src_file_y * src_stride;
                 if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
                     std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) {
                     ok = false; break;
                 }
                 for (int out_y = 0; out_y < final_out_h; ++out_y) {
-                    const int sx    = (int)width - 1 - out_y * (int)width / final_out_h;
+                    // out_y maps to a source column within the crop, reversed
+                    const int sx = crop_x + (crop_w - 1 - out_y * crop_w / final_out_h);
                     const uint8_t g = decode_pixel(row_buf, sx, bpp, palette, is_rgb565);
                     const uint8_t s = quantize(g, out_x, out_y);
                     output[out_y * FINAL_STRIDE + out_x / 4] |=

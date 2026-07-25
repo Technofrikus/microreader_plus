@@ -8,6 +8,8 @@ namespace microreader {
 // If out_w or out_h is 0, automatically determine output size from source image:
 //   - Portrait source (height > width): rotate 90° CCW, output is height×width
 //   - Landscape source: no rotation, output is width×height
+// If both out_w and out_h are positive, the image will be scaled to COVER the target
+// (scale to fill, then crop excess from edges) to avoid white borders.
 // Returns true on success; on failure any partial output file is removed.
 bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
                           int out_w = 800, int out_h = 480);
