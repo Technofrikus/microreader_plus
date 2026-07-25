@@ -1,0 +1,47 @@
+# CI — runs on every push and pull request to main.
+#
+# Verifies the ESP32 firmware compiles and the Calibre plugin builds.
+# Desktop builds and tests are not included here — they run locally.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  esp32:
+    name: Build ESP32 firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed for git commit count in version.h
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        run: pio run
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: firmware.bin
+
+  calibre-plugin:
+    name: Build Calibre plugin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build plugin zip
+        run: python tools/calibre-plugin/build.py
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: calibre-plugin
+          path: tools/calibre-plugin/microreader.zip
