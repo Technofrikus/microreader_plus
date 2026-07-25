@@ -14,6 +14,7 @@ platforms/desktop/        ← SDL2 desktop emulator
 platforms/esp32/          ← real hardware (ESP-IDF + PlatformIO)
 test/                     ← Google Test suite (unit + integration)
 tools/                    ← Python scripts (LUT editor, upload, etc.)
+  calibre-plugin/         ← Calibre device plugin (build.py → microreader.zip)
 ```
 
 **Core** defines abstract interfaces; each platform provides concrete implementations:
@@ -269,10 +270,18 @@ Device commands (sent via `serial_cmd.py` — see interactive commands below):
 | Button press | Inject button press by index |
 | Open book | Push ReaderScreen for a book path |
 | Status | Query heap info (`STATUS:free=N,largest=N`) |
-| List books | List `.epub`/`.mrb` files on SD card |
-| Clear `.mrb` | Delete all `.mrb` files (`CLEARED:N`) |
+| List books | List `.epub` files on SD card (`path|title|author|size|mtime`) |
+| Download file | Download file from device (`T` + path) |
+| Delete file | Delete file on device (`R` + path) |
+| Clear cache | Delete all `.mrb` files (`CLEARED:N`) |
+| Clear sleep | Delete all sleep images (`CLEARED_SLEEP:N`) |
+| Clear SD fonts | Delete all SD fonts (`CLEARED_SDFONTS:N`) |
 | Bench | Run EPUB conversion benchmark for a book |
 | Image bench | Run image size-read benchmark for a book |
+| Invalidate font | Zero font partition CRC, force re-provisioning |
+| Render bench | Render benchmark on current page |
+| Set model | Set device model (X3/X4) and reboot |
+| Flash bench | Flash erase+write benchmark |
 
 Interactive commands in `serial_cmd.py`:
 ```
@@ -285,11 +294,29 @@ Interactive commands in `serial_cmd.py`:
 > up            # alias for btn 3
 > open alice.epub  # open book (auto-prepends /sdcard/books/)
 > upload alice.epub  # upload EPUB file to the device
+> rm /sdcard/books/alice.epub  # delete a file
 > clear         # delete all .mrb files on the device
+> clear-sleep   # delete all sleep images
+> clear-fonts   # delete all SD fonts
 > bench alice.epub   # run EPUB conversion benchmark
 > imgsize alice.epub # run image size-read benchmark
 > test [filter] [--clean] [-v]  # open each book and watch for BOOK_OK/BOOK_FAIL
 ```
+
+### Calibre Plugin (`tools/calibre-plugin/`)
+
+Calibre device plugin for sending/deleting EPUBs directly from Calibre's library. Bundles `pyserial 3.5` because Calibre's embedded Python doesn't include it.
+
+Install: **Calibre → Preferences → Plugins → Load plugin from file → `tools/calibre-plugin/microreader.zip`**
+
+Build: `cd tools/calibre-plugin && python build.py`
+Install + build: `python build.py --install`
+
+The plugin communicates via the same `CMND` serial protocol. It uses:
+- `CMND L` → list books (expects `path|title|author|size|mtime` format)
+- `CMND R` + path → delete file
+- `CMND T` + path → download file (device→Calibre)
+- `EPUB` protocol → upload file (Calibre→device)
 
 Non-interactive CLI flags:
 ```bash
@@ -314,7 +341,16 @@ ESP_LOGI("test", "Free heap: %lu largest=%lu",
          (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 ```
 
-## Agent rules
+## Git remotes
+
+- `origin` — this repo (microreader-plus)
+- `upstream` — [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader) (original project)
+
+To sync plugin changes from upstream:
+```bash
+git fetch upstream
+git checkout upstream/main -- tools/calibre-plugin/
+```
 
 - **Keep this file up to date after every change.** When you add, rename, or restructure files, interfaces, systems, or tools — update the relevant section immediately. This file is the single source of truth for new chat sessions.
 - **Record useful discoveries.** When you learn something non-obvious (hardware quirks, tricky build steps, constraints, or gotchas), add it to the relevant section so future sessions benefit.

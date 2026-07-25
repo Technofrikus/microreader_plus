@@ -28,6 +28,7 @@
 
 #include <dirent.h>
 #include <sys/stat.h>
+#include <ctime>
 
 #include <cerrno>
 #include <cstdint>
@@ -472,17 +473,43 @@ static void handle_serial_cmd() {
       const auto& entries = microreader::BookIndex::instance().entries();
       if (!entries.empty()) {
         for (const auto& e : entries) {
-          std::string out = "  " + e.path.to_string(microreader::BookIndex::instance().pool()) + "\n";
-          serial_write(out.c_str());
+          std::string path_str = e.path.to_string(microreader::BookIndex::instance().pool());
+          // stat for file size and mtime
+          struct stat st;
+          uint32_t size = 0;
+          uint32_t mtime = 0;
+          if (stat(path_str.c_str(), &st) == 0) {
+            size = st.st_size;
+            mtime = (uint32_t)st.st_mtime;
+          }
+          char title_buf[200] = {};
+          char author_buf[200] = {};
+          if (e.title.len > 0) {
+            strncpy(title_buf, e.title.to_string(microreader::BookIndex::instance().pool()).c_str(), sizeof(title_buf)-1);
+          } else {
+            strncpy(title_buf, path_str.c_str(), sizeof(title_buf)-1);
+            char* dot = strrchr(title_buf, '.');
+            if (dot) *dot = '\0';
+          }
+          if (e.author.len > 0) {
+            strncpy(author_buf, e.author.to_string(microreader::BookIndex::instance().pool()).c_str(), sizeof(author_buf)-1);
+          } else {
+            strncpy(author_buf, "Unknown", sizeof(author_buf)-1);
+          }
+          char out[600];
+          snprintf(out, sizeof(out), "  %s|%s|%s|%lu|%lu\n",
+                   path_str.c_str(), title_buf, author_buf,
+                   (unsigned long)size, (unsigned long)mtime);
+          serial_write(out);
         }
       } else {
         FILE* idx = fopen("/sdcard/.microreader/book_index.dat", "r");
         if (idx) {
           char line[1024];
           while (fgets(line, sizeof(line), idx)) {
+            // Parse: path|title|author|size|mtime
             char* sep = strchr(line, '|');
-            if (sep)
-              *sep = '\0';
+            if (sep) *sep = '\0';
             size_t len = strlen(line);
             while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
               line[--len] = '\0';
@@ -580,6 +607,77 @@ static void handle_serial_cmd() {
       snprintf(buf, sizeof(buf), "CLEARED_SDFONTS:%d\n", count);
       serial_write(buf);
       ESP_LOGI(kCmdTag, "cleared %d SD fonts", count);
+      break;
+    }
+    case 'T': {
+      // Download file from device. Protocol:
+      //   [2B] path_len (LE) + path bytes
+      // Response:
+      //   "READY\n"
+      //   [4B] file_size (LE)
+      //   payload in chunks with ACK flow control
+      //   [4B] CRC32 (LE)
+      {
+        uint8_t len_buf[2];
+        if (!serial_read_exact(len_buf, 2, 1000)) {
+          serial_write("ERR:path_len\n");
+          break;
+        }
+        uint16_t path_len = len_buf[0] | (len_buf[1] << 8);
+        if (path_len == 0 || path_len >= sizeof(g_cmd_path)) {
+          serial_write("ERR:path_too_long\n");
+          break;
+        }
+        if (!serial_read_exact((uint8_t*)g_cmd_path, path_len, 2000)) {
+          serial_write("ERR:path_read\n");
+          break;
+        }
+        g_cmd_path[path_len] = '\0';
+
+        FILE* f = fopen(g_cmd_path, "rb");
+        if (!f) {
+          ESP_LOGE(kCmdTag, "download fopen failed: %s (errno=%d: %s)", g_cmd_path, errno, strerror(errno));
+          serial_write("ERR:fopen\n");
+          break;
+        }
+
+        struct stat st;
+        if (fstat(fileno(f), &st) != 0) {
+          fclose(f);
+          serial_write("ERR:fstat\n");
+          break;
+        }
+        uint32_t file_size = (uint32_t)st.st_size;
+
+        ESP_LOGI(kCmdTag, "downloading '%s' (%lu bytes)", g_cmd_path, (unsigned long)file_size);
+        serial_write("READY\n");
+        serial_write_raw((uint8_t*)&file_size, 4);
+
+        uint32_t crc = 0;
+        uint32_t remaining = file_size;
+        uint8_t chunk[2048];
+        while (remaining > 0) {
+          size_t want = remaining < sizeof(chunk) ? remaining : sizeof(chunk);
+          size_t got = fread(chunk, 1, want, f);
+          if (got == 0) break;
+          crc = esp_rom_crc32_le(crc, chunk, got);
+          serial_write_raw(chunk, got);
+          remaining -= got;
+          // Wait for ACK from host.
+          uint8_t ack_buf[1];
+          if (!serial_read_exact(ack_buf, 1, 30000)) {
+            ESP_LOGE(kCmdTag, "download timeout, %lu remaining", (unsigned long)remaining);
+            fclose(f);
+            serial_write("ERR:timeout\n");
+            break;
+          }
+        }
+        fclose(f);
+
+        uint32_t crc_le = crc;
+        serial_write_raw((uint8_t*)&crc_le, 4);
+        ESP_LOGI(kCmdTag, "downloaded %s (%lu bytes, CRC 0x%08lx)", g_cmd_path, (unsigned long)file_size, (unsigned long)crc);
+      }
       break;
     }
     case 'R': {

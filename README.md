@@ -128,6 +128,39 @@ Open **Settings → Sleep Image**:
 - **Auto** — cycles through all images in `.sleep/`, picking a different one each sleep.
 - **\<filename\>** — pins the device to that specific image.
 
+## Calibre Plugin
+
+Send and delete EPUB books directly from Calibre's library.
+
+### Install
+
+1. In Calibre: **Preferences → Plugins → Load plugin from file**
+2. Select `tools/calibre-plugin/microreader.zip`
+3. Restart Calibre
+4. Connect the device via USB
+
+The device is detected automatically. Books on the device show checkmarks; you can send and delete from the Device menu.
+
+Requires Calibre 5+ and the device connected over USB.
+
+### Build
+
+```powershell
+cd tools/calibre-plugin
+python build.py             # packages __init__.py + serial/ into microreader.zip
+python build.py --install   # build and copy into Calibre's plugins folder
+```
+
+The plugin bundles `pyserial` because Calibre's embedded Python doesn't include it.
+
+### Debug
+
+```powershell
+& tools/calibre-plugin/launch-debug.ps1   # Windows only: calibre-debug -g
+```
+
+All `print()` calls in `__init__.py` appear in the terminal, prefixed with `[Microreader]`.
+
 ---
 
 ## Project Structure

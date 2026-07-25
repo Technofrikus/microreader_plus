@@ -48,7 +48,7 @@ class MockRuntime : public IRuntime {
 class ReaderScreenLinkNavTest : public ::testing::Test {
  protected:
   ScreenshotDisplay display_;
-  DrawBuffer buf_{display_};
+  DrawBuffer buf_{display_, display_.device_config()};
   MockRuntime runtime_;
   Application app_;
   ReaderScreen screen_;

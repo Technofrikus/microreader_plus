@@ -131,7 +131,7 @@ struct BookStats {
 static BookStats export_book_to_html(const fs::path& epub_path, const fs::path& output_root,
                                      const BitmapFontSet& font_set) {
   ScreenshotDisplay display;
-  DrawBuffer buf(display);
+  DrawBuffer buf(display, display.device_config());
   ReaderScreen screen;
   screen.set_path(epub_path.string());
   screen.set_fonts(&font_set);

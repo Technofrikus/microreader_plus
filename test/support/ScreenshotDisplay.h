@@ -13,12 +13,12 @@
 //
 // Usage:
 //   ScreenshotDisplay display;
-//   DrawBuffer buf(display);
+//   DrawBuffer buf(display, display.device_config());
 //   screen.start(buf);
 //   ScreenshotDisplay::save_image(buf, "page_1.png");
 class ScreenshotDisplay final : public microreader::IDisplay {
  public:
-  void full_refresh(const uint8_t*, microreader::RefreshMode, bool) override {}
+  void full_refresh(const uint8_t*, microreader::RefreshMode, bool, bool) override {}
   void partial_refresh(const uint8_t*, const uint8_t*) override {}
 
   // Save the current render buffer as a 1-bpp uncompressed PNG (logical portrait orientation).
