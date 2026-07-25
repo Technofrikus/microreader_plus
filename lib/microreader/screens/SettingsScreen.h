@@ -29,6 +29,10 @@ class SettingsScreen final : public ListMenuScreen {
         request_redraw();
       }
     }
+    if (convert_phase_ == ConvertPhase::Active) {
+      tick_convert_(buttons);
+      return;
+    }
     ListMenuScreen::update(buttons, buf, runtime);
   }
 
@@ -58,6 +62,7 @@ class SettingsScreen final : public ListMenuScreen {
   int idx_menu_font_ = -1;
   int idx_font_ = -1;
   int idx_sleep_image_ = -1;
+  int idx_convert_sleep_ = -1;
   int idx_sd_firmware_ = -1;
   DrawBuffer* buf_ = nullptr;
   std::vector<std::string> sd_fonts_;
@@ -72,6 +77,17 @@ class SettingsScreen final : public ListMenuScreen {
 #ifdef ESP_PLATFORM
   void switch_ota_partition_();
 #endif
+
+  // Batch BMP→MGR2 conversion state
+  enum class ConvertPhase { Idle, Active };
+  ConvertPhase convert_phase_ = ConvertPhase::Idle;
+  std::vector<std::string> convert_srcs_;
+  std::vector<std::string> convert_dsts_;
+  int convert_idx_ = 0;
+  int convert_ok_ = 0;
+
+  void start_convert_();
+  void tick_convert_(const ButtonState& buttons);
 };
 
 }  // namespace microreader

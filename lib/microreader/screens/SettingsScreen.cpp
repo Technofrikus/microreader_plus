@@ -5,7 +5,9 @@
 #include <string>
 
 #include "../Application.h"
+#include "../content/BmpSleepConverter.h"
 #include "../content/BookIndex.h"
+#include "../display/DeviceConfig.h"
 #include "../version.h"
 
 #ifdef ESP_PLATFORM
@@ -229,6 +231,9 @@ void SettingsScreen::on_start() {
 
     idx_rebuild_index_ = count();
     add_item("Rebuild Book Index");
+
+    idx_convert_sleep_ = count();
+    add_item("Rebuild Sleep Images");
   }
 
 #ifdef ESP_PLATFORM
@@ -309,6 +314,10 @@ void SettingsScreen::on_select(int index) {
       buf_->reset_after_scratch(true);
       app_->pop_screen();  // go back to main menu
     }
+    return;
+  }
+  if (index == idx_convert_sleep_) {
+    start_convert_();
     return;
   }
   if (index == idx_sort_order_) {
@@ -579,6 +588,102 @@ void SettingsScreen::clear_cache_() {
     fs::create_directories(cache_path);
   } catch (...) {}
 #endif
+}
+
+void SettingsScreen::start_convert_() {
+  convert_srcs_.clear();
+  convert_dsts_.clear();
+  convert_idx_ = 0;
+  convert_ok_ = 0;
+
+  const char* sleep_dir;
+#ifdef ESP_PLATFORM
+  sleep_dir = "/sdcard/.sleep";
+#else
+  sleep_dir = "sd/.sleep";
+#endif
+
+#ifdef ESP_PLATFORM
+  DIR* d = opendir(sleep_dir);
+  if (d) {
+    struct dirent* ent;
+    while ((ent = readdir(d)) != nullptr) {
+      if (ent->d_name[0] == '.')
+        continue;
+      const char* ext = std::strrchr(ent->d_name, '.');
+      if (!ext || strcmp(ext, ".bmp") != 0)
+        continue;
+      std::string src = std::string(sleep_dir) + "/" + ent->d_name;
+      const char* dot = std::strrchr(ent->d_name, '.');
+      int nlen = dot ? (int)(dot - ent->d_name) : (int)std::strlen(ent->d_name);
+      char dst[384];
+      std::snprintf(dst, sizeof(dst), "%s/cache/sleep/%.*s.mgr", data_dir_, nlen, ent->d_name);
+      convert_srcs_.push_back(std::move(src));
+      convert_dsts_.push_back(dst);
+    }
+    closedir(d);
+  }
+#else
+  namespace fs = std::filesystem;
+  try {
+    for (const auto& entry : fs::directory_iterator(sleep_dir)) {
+      if (entry.path().extension() != ".bmp")
+        continue;
+      convert_srcs_.push_back(entry.path().string());
+      convert_dsts_.push_back(std::string(data_dir_) + "/cache/sleep/" + entry.path().stem().string() + ".mgr");
+    }
+  } catch (...) {}
+#endif
+
+  if (convert_srcs_.empty()) {
+    toast_original_label_ = get_item_label(idx_convert_sleep_);
+    toast_idx_ = idx_convert_sleep_;
+    toast_frames_ = 15;
+    set_item_label(idx_convert_sleep_, "No BMPs found");
+    restart();
+    return;
+  }
+
+  convert_phase_ = ConvertPhase::Active;
+}
+
+void SettingsScreen::tick_convert_(const ButtonState& buttons) {
+  if (buttons.is_pressed(Button::Button0)) {
+    // Cancel
+    convert_phase_ = ConvertPhase::Idle;
+    toast_original_label_ = get_item_label(idx_convert_sleep_);
+    toast_idx_ = idx_convert_sleep_;
+    toast_frames_ = 15;
+    char label_buf[48];
+    std::snprintf(label_buf, sizeof(label_buf), "Cancelled (%d done)", convert_ok_);
+    set_item_label(idx_convert_sleep_, label_buf);
+    restart();
+    return;
+  }
+
+  // Show loading box BEFORE the conversion so it appears immediately
+  int pct = (convert_idx_ * 100) / static_cast<int>(convert_srcs_.size());
+  buf_->show_loading("Converting sleep images...", pct);
+
+  // Convert one image per tick
+  const DeviceConfig& cfg = buf_->config();
+  if (convert_bmp_to_mgr2(convert_srcs_[convert_idx_].c_str(),
+                           convert_dsts_[convert_idx_].c_str(),
+                           cfg.physical_width, cfg.physical_height))
+    ++convert_ok_;
+  ++convert_idx_;
+
+  if (convert_idx_ >= static_cast<int>(convert_srcs_.size())) {
+    // Done
+    convert_phase_ = ConvertPhase::Idle;
+    toast_original_label_ = get_item_label(idx_convert_sleep_);
+    toast_idx_ = idx_convert_sleep_;
+    toast_frames_ = 15;
+    char label_buf[48];
+    std::snprintf(label_buf, sizeof(label_buf), "Converted %d image(s)", convert_ok_);
+    set_item_label(idx_convert_sleep_, label_buf);
+    restart();
+  }
 }
 
 }  // namespace microreader
