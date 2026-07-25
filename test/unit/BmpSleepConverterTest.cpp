@@ -184,6 +184,57 @@ static std::vector<uint8_t> make_bmp_16_rgb565(int w, int h, uint8_t fill_r,
     return bmp;
 }
 
+// 2bpp indexed BMP with palette
+static std::vector<uint8_t> make_bmp_2(int w, int h, uint8_t fill_idx,
+                                        uint8_t pal_r, uint8_t pal_g, uint8_t pal_b) {
+    // 2bpp: 4 pixels per byte, so row_stride must accommodate ceil(w/4)*4 bytes
+    const int pixels_per_byte = 4;
+    const int row_bytes = (w + pixels_per_byte - 1) / pixels_per_byte;
+    const int row_stride = (row_bytes + 3) / 4 * 4;  // pad to 4-byte boundary
+    const int data_offset = 14 + 40 + 4 * 4;  // 4 palette entries (2bpp = 2^2 = 4 colors)
+    const int pixel_data_size = row_stride * h;
+    std::vector<uint8_t> bmp;
+    bmp.push_back('B'); bmp.push_back('M');
+    write_le32(bmp, (uint32_t)(data_offset + pixel_data_size));
+    write_le32(bmp, 0);
+    write_le32(bmp, (uint32_t)data_offset);
+    write_le32(bmp, 40);
+    write_le32(bmp, (uint32_t)w);
+    write_le32(bmp, (uint32_t)h);
+    write_le16(bmp, 1); write_le16(bmp, 2);  // 2bpp
+    write_le32(bmp, 0);  // BI_RGB
+    write_le32(bmp, (uint32_t)pixel_data_size);
+    write_le32(bmp, 2835); write_le32(bmp, 2835);
+    write_le32(bmp, 4); write_le32(bmp, 4);  // 4 palette entries
+    // Palette: 4 entries (BGR + reserved)
+    for (int i = 0; i < 4; ++i) {
+        if (i == fill_idx) {
+            bmp.push_back(pal_b); bmp.push_back(pal_g); bmp.push_back(pal_r);
+        } else {
+            bmp.push_back(0); bmp.push_back(0); bmp.push_back(0);
+        }
+        bmp.push_back(0);
+    }
+    // Pixel data: 2 bits per pixel, 4 pixels per byte
+    // Pixel 0 = bits 7:6, Pixel 1 = bits 5:4, Pixel 2 = bits 3:2, Pixel 3 = bits 1:0
+    for (int row = 0; row < h; ++row) {
+        for (int col = 0; col < w; col += pixels_per_byte) {
+            uint8_t byte = 0;
+            for (int p = 0; p < pixels_per_byte && (col + p) < w; ++p) {
+                uint8_t idx = fill_idx;  // All pixels same color for simplicity
+                int shift = (3 - p) * 2;  // pixel 0 uses bits 7:6 (shift=6), pixel 1 uses 5:4 (shift=4), etc.
+                byte |= (idx << shift);
+            }
+            bmp.push_back(byte);
+        }
+        // Pad row to 4-byte boundary
+        int bytes_written = (w + pixels_per_byte - 1) / pixels_per_byte;
+        for (int pad = bytes_written; pad < row_stride; ++pad)
+            bmp.push_back(0);
+    }
+    return bmp;
+}
+
 // ---------------------------------------------------------------------------
 // Helper: write bytes to a temp file, return path.
 // ---------------------------------------------------------------------------
@@ -482,4 +533,52 @@ TEST_F(BmpConverterTest, PortraitRotationDirectionIsCorrect) {
     // Right edge of output (out_x=799) → black (state 3)
     EXPECT_EQ(mgr2_pixel(m, 0, 240), 0);    // white
     EXPECT_EQ(mgr2_pixel(m, 799, 240), 3);  // black
+}
+
+// ── 2bpp format tests ────────────────────────────────────────────────────────
+
+TEST_F(BmpConverterTest, Format2bppIndexed) {
+    // 2bpp with palette entry 2 = mid-gray (128,128,128)
+    auto src = bmp("fmt_2bpp.bmp", make_bmp_2(200, 100, 2, 128, 128, 128));
+    auto dst = mgr("fmt_2bpp.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str()));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    // Mid-gray should land at state 1 or 2 (dither may vary, just not 0 or 3 at center)
+    int px = mgr2_pixel(m, 400, 240);
+    EXPECT_GE(px, 1);
+    EXPECT_LE(px, 2);
+}
+
+TEST_F(BmpConverterTest, Format2bppBlack) {
+    // 2bpp with palette entry 0 = black (0,0,0)
+    auto src = bmp("fmt_2bpp_black.bmp", make_bmp_2(200, 100, 0, 0, 0, 0));
+    auto dst = mgr("fmt_2bpp_black.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str()));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    // Black should map to state 3
+    EXPECT_EQ(mgr2_pixel(m, 400, 240), 3);
+}
+
+TEST_F(BmpConverterTest, Format2bppWhite) {
+    // 2bpp with palette entry 3 = white (255,255,255)
+    auto src = bmp("fmt_2bpp_white.bmp", make_bmp_2(200, 100, 3, 255, 255, 255));
+    auto dst = mgr("fmt_2bpp_white.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str()));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    // White should map to state 0
+    EXPECT_EQ(mgr2_pixel(m, 400, 240), 0);
+}
+
+TEST_F(BmpConverterTest, Format2bppPortrait) {
+    // Portrait 2bpp image should be rotated correctly
+    auto src = bmp("fmt_2bpp_pt.bmp", make_bmp_2(100, 200, 1, 64, 64, 64));
+    auto dst = mgr("fmt_2bpp_pt.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str()));
+    auto m = read_mgr2(dst);
+    ASSERT_TRUE(m.valid);
+    EXPECT_EQ(m.w, 800);
+    EXPECT_EQ(m.h, 480);
 }

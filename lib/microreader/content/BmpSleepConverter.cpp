@@ -32,6 +32,12 @@ static uint8_t decode_pixel(const uint8_t* row, int sx, int bpp,
     if (bpp == 1) {
         const uint8_t bit = (row[sx / 8] >> (7 - sx % 8)) & 1;
         b = palette[bit*4]; g = palette[bit*4+1]; r = palette[bit*4+2];
+    } else if (bpp == 2) {
+        // 2bpp: 4 pixels per byte, bits [7:6], [5:4], [3:2], [1:0] for pixels 0,1,2,3
+        const uint8_t byte = row[sx / 4];
+        const uint8_t shift = (3 - (sx % 4)) * 2;  // pixel 0 uses bits 7:6, pixel 1 uses 5:4, etc.
+        const uint8_t idx = (byte >> shift) & 0x03;
+        b = palette[idx*4]; g = palette[idx*4+1]; r = palette[idx*4+2];
     } else if (bpp == 4) {
         const uint8_t nibble = (sx & 1) ? (row[sx/2] & 0x0F) : (row[sx/2] >> 4);
         b = palette[nibble*4]; g = palette[nibble*4+1]; r = palette[nibble*4+2];
@@ -96,7 +102,7 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
     }
     // Accept BI_RGB (0), BI_BITFIELDS (3), BI_ALPHABITFIELDS (6); reject RLE.
     if ((compr != 0 && compr != 3 && compr != 6) ||
-        (bpp != 1 && bpp != 4 && bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)) {
+        (bpp != 1 && bpp != 2 && bpp != 4 && bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)) {
         std::fclose(f); return false;
     }
 
