@@ -481,13 +481,11 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
           }
           break;
 
-        case Button::Button1:  // select
+        case Button::Button1:  // select — deferred: may become long-press
           if (n > 0 && selected_ < n && !back_held_) {
-            on_select(selected_);
-            if (app_ && app_->has_pending_transition()) {
-              return;
-            }
-            needs_draw = true;
+            select_press_pending_ = true;
+            hold_ms_select_ = 0;
+            long_select_triggered_ = false;
           }
           break;
 
@@ -554,6 +552,35 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
     moved = true;
   } else {
     hold_frames_down_ = 0;
+  }
+
+  // Select-button long-press: held long enough to go backward one step.
+  if (select_press_pending_) {
+    const bool select_held = buttons.is_down(Button::Button1);
+    if (select_held) {
+      hold_ms_select_ += runtime.frame_time_ms();
+      if (!long_select_triggered_ && hold_ms_select_ >= long_select_threshold_ms_) {
+        on_long_select(selected_);
+        long_select_triggered_ = true;
+        select_press_pending_ = false;  // consumed as long-press, not tap
+        moved = true;
+      }
+    } else {
+      // Released before threshold — short tap, treat as normal select.
+      select_press_pending_ = false;
+      hold_ms_select_ = 0;
+      long_select_triggered_ = false;
+      if (n > 0 && selected_ < n && !back_held_) {
+        on_select(selected_);
+        if (app_ && app_->has_pending_transition()) {
+          return;
+        }
+        needs_draw = true;
+      }
+    }
+  } else {
+    hold_ms_select_ = 0;
+    long_select_triggered_ = false;
   }
 
   // Long-back hold tracking: count frames while Button0 is held.

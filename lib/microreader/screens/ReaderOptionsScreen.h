@@ -146,6 +146,7 @@ class ReaderOptionsScreen final : public ListMenuScreen {
  protected:
   void on_start() override;
   void on_select(int index) override;
+  void on_long_select(int index) override;
 
  private:
   ReaderSettings* settings_ = nullptr;
