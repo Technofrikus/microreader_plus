@@ -6,11 +6,15 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 
 | # | Change | Commit / PR |
 |---|--------|-------------|
+### Changes vs upstream (microreader)
+
+| # | Change | Commit / PR |
+|---|--------|-------------|
 | 1 | Removed the "sleeping..." text drawn on the sleep screen in `DrawBuffer::show_mgr2_sleep_()` | — |
-| 2 | Added 2bpp BMP support for sleep screen images | [7129706](https://github.com/CidVonHighwind/microreader-plus/commit/7129706) |
-| 3 | Added 'Rebuild Sleep Images' menu entry with progress bar and cancel | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
+| 2 | Added 2bpp bitmap support (for the awesome images from the lector wallpaper gallery) | [7129706](https://github.com/CidVonHighwind/microreader-plus/commit/7129706) |
+| 3 | Added 'Rebuild Sleep Images' menu entry with progress bar and cancel (sleep images are converted all at once, making shutdown faster) | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
 | 4 | Added device-native resolution with cover-fit (scale + crop) for sleep BMPs | [6590639](https://github.com/CidVonHighwind/microreader-plus/commit/6590639) |
-| 5 | Added progress bar scope and ETA estimation in the reader screen | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
+| 5 | Added ETA estimation in the reader screen (chapter and book) | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
 | 6 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
 | 7 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
 
