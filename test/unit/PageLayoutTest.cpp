@@ -1363,8 +1363,10 @@ TEST(PageLayout, InlineImageDoesNotIntersectPreviousTextLines) {
   auto page = TextLayout(font8, opts, src, PagePosition(0, 0)).layout();
 
   // Find the text item for paragraph 1 (which has the inline image)
+  // Keep the vector alive so the pointer stays valid.
+  auto items = page.text_items();
   const PageTextItem* inline_para = nullptr;
-  for (const auto& ti : page.text_items())
+  for (const auto& ti : items)
     if (ti.paragraph_index == 1 && ti.line_index == 0) {
       inline_para = &ti;
       break;
