@@ -8,13 +8,13 @@ if(POLICY CMP0141)
   set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
 endif()
 
-project(microreader_desktop CXX)
+project(microreader_desktop C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Auto-generate version.h
-execute_process(COMMAND python ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/generate_version.py)
+execute_process(COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/generate_version.py)
 # ---------------------------------------------------------------------------
 # SDL2 – fetched at configure time; static build, no tests, no shared lib.
 # ---------------------------------------------------------------------------
