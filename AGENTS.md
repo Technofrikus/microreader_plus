@@ -400,7 +400,7 @@ Technofrikus/microreader_plus  ← "this repo"     (origin)
    ```bash
    git merge upstream/main
    ```
-   Expect conflicts in files both sides changed (e.g. `ReaderScreen`, display code, this `copilot-instructions.md`). Resolve, build, test.
+   Expect conflicts in files both sides changed (e.g. `ReaderScreen`, display code, this `AGENTS.md`). Resolve, build, test.
 4. **Validate before declaring success** (see [Tests](#tests) below):
    ```bash
    cd test && cmake -B build2 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.5
