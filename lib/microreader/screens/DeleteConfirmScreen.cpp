@@ -139,16 +139,8 @@ void DeleteConfirmScreen::delete_book_() {
     BookIndex::instance().load(index_path);
 
     // Remove entry from BookIndex and re-save
-    auto& index = BookIndex::instance();
-    const StringPool& pool = index.pool();
-    const auto& entries = index.entries();
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (entries[i].path.view(pool) == book_path_) {
-        index.remove_entry(static_cast<int>(i));
-        break;
-      }
-    }
-    index.save(index_path);
+    BookIndex::instance().remove_entry(book_path_);
+    BookIndex::instance().save(index_path);
   }
 }
 

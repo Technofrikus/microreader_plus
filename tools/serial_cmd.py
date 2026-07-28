@@ -61,8 +61,44 @@ def send_status(ser: serial.Serial) -> str:
 
 
 def send_list_books(ser: serial.Serial) -> str:
+    """List books in a human-readable form.
+
+    Device 'L' response format (per line): path|title|author|size_bytes|mtime.
+    Rendered as: '<title> - <author> (<size>)'.
+    """
     ser.write(MAGIC + b"L")
-    return read_multiline_response(ser)
+    deadline = time.time() + 5.0
+    started = False
+    rows: list[str] = []
+    while time.time() < deadline:
+        line = ser.readline().decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        if line.startswith("BOOKS:"):
+            started = True
+            continue
+        if line == "END":
+            break
+        if line.startswith("ERR:"):
+            return line
+        if not started:
+            continue
+        parts = line.split("|")
+        # parts: [path, title, author, size, mtime]
+        title = parts[1].strip() if len(parts) > 1 else ""
+        author = parts[2].strip() if len(parts) > 2 else ""
+        size = _human_size(int(parts[3])) if len(parts) > 3 and parts[3].isdigit() else ""
+        label = " - ".join(x for x in (title, author) if x) or parts[0]
+        rows.append(f"{label} ({size})" if size else label)
+    return "\n".join(rows) if rows else "(no books found)"
+
+
+def _human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n}B"
 
 
 def send_open(ser: serial.Serial, path: str) -> str:

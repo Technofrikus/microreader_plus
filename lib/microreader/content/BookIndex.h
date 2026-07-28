@@ -70,6 +70,13 @@ class BookIndex {
   // (caller may fall back to index_file). Reloads from disk first if entries_ is empty.
   bool rename_in_place(const std::string& src, const std::string& dst, const std::string& index_path);
 
+  // Remove the entry for `path`. No-op if not found. Call save() to persist.
+  void remove_entry(std::string_view path);
+
+  // Open `path` as an EPUB, extract its metadata, add/replace the index entry,
+  // and persist. Returns true on success. Requires a DrawBuffer for scratch space.
+  bool index_file(const std::string& path, DrawBuffer& buf);
+
   void clear_entries();
 
  private:
