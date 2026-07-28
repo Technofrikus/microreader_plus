@@ -25,10 +25,14 @@ jobs:
       - name: Build firmware
         run: pio run
 
+      - name: Extract version
+        id: version
+        run: echo "version=$(cat version.txt)" >> "$GITHUB_OUTPUT"
+
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware
+          name: firmware-${{ steps.version.outputs.version }}
           path: firmware.bin
 
   calibre-plugin:
