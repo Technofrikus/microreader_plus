@@ -155,8 +155,10 @@ class ReaderScreen final : public IScreen {
 
   // ETA tracking — measures ms-per-char (reading speed) instead of ms-per-page.
   // ms-per-char is independent of font size, padding, and image content, so the
-  // ETA stays stable when display settings change. The page display time (in
-  // frames) is still tracked as before; only the per-sample unit changes.
+  // ETA stays stable when display settings change. Page display time is
+  // measured with a real monotonic clock (esp_timer_get_time on ESP32,
+  // steady_clock on desktop) rather than a frame counter, so it stays accurate
+  // even when the main loop stalls on SD I/O or chapter conversion.
   static constexpr int kMaxPageTimes = 20;
   static constexpr uint32_t kMinPageTimeMs = 5000;   // minimum page display time to count (5s)
   static constexpr uint32_t kMaxPageTimeMs = 300000; // maximum page display time to count (5min)
@@ -166,8 +168,15 @@ class ReaderScreen final : public IScreen {
   static constexpr uint32_t kMsPerCharScale = 1u << kMsPerCharShift;
   uint32_t ms_per_char_history_[kMaxPageTimes] = {0};
   int page_time_count_ = 0;
-  int page_display_frames_ = 0;
+  // Monotonic-ms timestamp captured when the current page was first rendered.
+  // 0 means "no page shown yet". Wraps every ~49.7 days; the elapsed-time
+  // math is wrap-safe as long as a single page is shown for < 49 days.
+  uint32_t page_display_start_ms_ = 0;
   bool has_valid_eta_ = false;
+
+  // Monotonic milliseconds since boot (esp_timer_get_time on ESP32,
+  // steady_clock on desktop). Used for ETA page-time measurement.
+  static uint32_t now_ms_();
 
   bool decode_image_to_buffer_(uint16_t img_key, uint32_t offset, DrawBuffer& buf, int dest_x, int dest_y,
                                uint16_t max_w, uint16_t max_h, uint16_t src_y = 0, uint16_t clip_h = 0);

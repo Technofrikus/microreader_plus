@@ -17,10 +17,25 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #else
+#include <chrono>
 #include <filesystem>
 #endif
 
 namespace microreader {
+
+// Monotonic milliseconds since boot. On ESP32 this is the system timer
+// (independent of the RTC, available on both X3 and X4); on desktop it is a
+// steady_clock for accurate ETA timing in the emulator.
+uint32_t ReaderScreen::now_ms_() {
+#ifdef ESP_PLATFORM
+  return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+#else
+  return static_cast<uint32_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // ReaderScreen — image size resolution
@@ -274,12 +289,13 @@ uint32_t ReaderScreen::count_page_chars_() const {
 }
 
 void ReaderScreen::track_page_time_() {
-  if (page_display_frames_ == 0)
+  if (page_display_start_ms_ == 0)
     return;
 
-  // Estimate time based on frames (assuming ~100ms per frame on desktop, ~200ms on ESP32)
-  // Use an average of 150ms per frame for estimation
-  uint32_t elapsed_ms = static_cast<uint32_t>(page_display_frames_ * 150u);
+  // Real elapsed time on this page, measured with the monotonic clock.
+  // Wrap-safe: unsigned subtraction yields the correct delta as long as the
+  // page was shown for less than ~49.7 days (uint32 wrap period).
+  uint32_t elapsed_ms = now_ms_() - page_display_start_ms_;
 
   // Apply safeguards: only count if within valid range
   if (elapsed_ms >= kMinPageTimeMs && elapsed_ms <= kMaxPageTimeMs) {
@@ -302,14 +318,14 @@ void ReaderScreen::track_page_time_() {
       reader_settings_.avg_ms_per_char = static_cast<uint32_t>(total / page_time_count_);
     }
   }
-  // Reset frame counter for next page
-  page_display_frames_ = 0;
+  // Reset start timestamp for next page (will be re-stamped on render)
+  page_display_start_ms_ = 0;
 }
 
 void ReaderScreen::reset_eta_() {
   page_time_count_ = 0;
   has_valid_eta_ = false;
-  page_display_frames_ = 0;
+  page_display_start_ms_ = 0;
   // Load persisted average if available — pre-fills the history buffer so the
   // ETA is usable immediately on book open, before new measurements arrive.
   if (reader_settings_.avg_ms_per_char > 0) {
@@ -449,6 +465,8 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   layout_engine_.set_hyphenation_lang(detect_language(mrb_.metadata().language));
   reset_eta_();  // Reset ETA tracking for new book/session
   render_page_(buf);
+  // Stamp the start of the first page's display for ETA measurement.
+  page_display_start_ms_ = now_ms_();
 #ifdef ESP_PLATFORM
   ESP_LOGI("reader", "BOOK_OK: %s", path_.c_str());
 #endif
@@ -501,6 +519,11 @@ void ReaderScreen::resume(DrawBuffer& buf, IRuntime& runtime) {
     layout_engine_.set_source(*chapter_src_);
 
   render_page_(buf);
+  // Stamp the start of the resumed page's display for ETA measurement.
+  // resume() is called when returning from a child screen (options/chapter/
+  // links); the previous page's elapsed time is discarded because the user
+  // was not actively reading during that time.
+  page_display_start_ms_ = now_ms_();
   save_position_();
 }
 
@@ -581,6 +604,7 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
             layout_engine_.set_image_size_fn(image_size_fn_);
             layout_engine_.set_hyphenation_lang(detect_language(mrb_.metadata().language));
             render_page_(buf);
+            page_display_start_ms_ = now_ms_();
             buf.refresh();
             save_position_();
             return;
@@ -592,6 +616,7 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
             // Stay here: clear the nav history and redraw to remove hints.
             nav_history_.clear();
             render_page_(buf);
+            page_display_start_ms_ = now_ms_();
             buf.refresh();
             return;
           }
@@ -646,17 +671,14 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
     }
   }
 
-  // Increment frame counter for current page display
-  if (!changed) {
-    ++page_display_frames_;
-  }
-
   if (changed) {
     if (grayscale_active_) {
       buf.revert_grayscale();
       grayscale_active_ = false;
     }
     render_page_(buf);
+    // Stamp the start of this page's display for ETA measurement.
+    page_display_start_ms_ = now_ms_();
     buf.refresh();
     save_position_();
   }
