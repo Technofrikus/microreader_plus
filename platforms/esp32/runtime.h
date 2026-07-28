@@ -78,7 +78,7 @@ class Esp32Runtime final : public microreader::IRuntime {
       return std::nullopt;
 
     int adc_raw = 0;
-    if (adc_oneshot_read(adc1_handle_, BATTERY_ADC_CHANNEL, &adc_raw) != ESP_OK) {
+    if (adc_oneshot_read(adc1_handle_, ADC_CHANNEL_0, &adc_raw) != ESP_OK) {
       return std::nullopt;
     }
 

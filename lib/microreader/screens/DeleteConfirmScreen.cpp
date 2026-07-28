@@ -139,8 +139,7 @@ void DeleteConfirmScreen::delete_book_() {
     BookIndex::instance().load(index_path);
 
     // Remove entry from BookIndex and re-save
-    BookIndex::instance().remove_entry(book_path_);
-    BookIndex::instance().save(index_path);
+    BookIndex::instance().remove_path(book_path_, index_path);
   }
 }
 

@@ -136,20 +136,7 @@ static char g_top_screen_name[32] = "unknown";
 static volatile bool g_model_change_pending = false;
 static char g_device_model[4] = {};  // "x3" or "x4"
 
-// Set when an EPUB has been uploaded to /sdcard/books and the book index
-// needs to be updated. Cleared by the main loop after calling index_file().
-static volatile bool g_book_uploaded = false;
-static char g_new_book_path[256];
-
-// Set while a chunked file upload (EPUB/SDFN/SIMG/FONT/CMND-W) is in
-// progress. The main loop skips app.update() when this is true to prevent
-// display SPI traffic (SPI2_HOST) from contending with SD-card fwrite()
-// (also SPI2_HOST). We also silence esp_log during this window so no log
-// line can interleave with 0x06 ACK bytes in the shared USB serial TX buffer.
-static volatile bool g_upload_in_progress = false;
-
 // Call from the main loop. Returns true (and copies into `out`) when a fresh
-// LUT has been received since the last call.
 // Returns true and sets *type_out if a new LUT is available.
 inline bool serial_lut_take(uint8_t* out, uint8_t* type_out = nullptr) {
   if (!g_lut_pending)

@@ -116,24 +116,7 @@ void BookIndex::clear_entries() {
   generation_ = 0;
 }
 
-// Updates in-memory entry only; call save() to persist.
-bool BookIndex::index_file(const std::string& path, DrawBuffer& buf) {
-  Book book;
-  if (book.open(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2(), false) != EpubError::Ok)
-    return false;
-  auto meta = book.metadata();
-  const std::string author = meta.author.value_or("");
-  remove_entry(path);
-  add_entry(path, meta.title, author);
-  return save("/sdcard/.microreader/book_index.dat");
-}
 
-void BookIndex::remove_entry(std::string_view path) {
-  auto it = std::find_if(entries_.begin(), entries_.end(),
-                         [&](const BookIndexEntry& e) { return e.path.view(pool_) == path; });
-  if (it != entries_.end())
-    entries_.erase(it);
-}
 void BookIndex::set_last_opened(std::string_view path, uint32_t order) {
   for (auto& entry : entries_) {
     if (entry.path.view(pool_) == path) {
@@ -146,15 +129,6 @@ void BookIndex::set_last_opened(std::string_view path, uint32_t order) {
 void BookIndex::remove_entry(int index) {
   if (index >= 0 && index < static_cast<int>(entries_.size()))
     entries_.erase(entries_.begin() + index);
-}
-
-void BookIndex::remove_entry(std::string_view path) {
-  for (auto it = entries_.begin(); it != entries_.end(); ++it) {
-    if (it->path.view(pool_) == path) {
-      entries_.erase(it);
-      return;
-    }
-  }
 }
 
 bool BookIndex::is_book_path(const char* path) {
