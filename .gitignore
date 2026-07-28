@@ -46,6 +46,9 @@ __pycache__
 *.log
 test/bench_results.json
 
+# Auto-generated version header
+lib/microreader/version.h
+
 # Python virtual environment
 .venv/
 /sd/books
