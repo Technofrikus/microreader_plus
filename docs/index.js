@@ -338,8 +338,8 @@ function renderEntries(entries) {
     return sortDir === 'asc' ? v : -v;
   };
 
-  const dirs  = entries.filter(e => e.type === 'dir' ).sort(cmp);
-  const files = entries.filter(e => e.type === 'file').sort(cmp);
+  const dirs  = currentEntries.filter(e => e.type === 'dir' ).sort(cmp);
+  const files = currentEntries.filter(e => e.type === 'file').sort(cmp);
 
   if (!dirs.length && !files.length) {
     fileTbody.innerHTML = '<tr class="placeholder-row"><td colspan="4">Empty folder</td></tr>';
@@ -394,8 +394,8 @@ async function navigate(path, hist = {}) {
   try {
     const entries = await cmdDirList(path);
     renderEntries(entries);
-    const nDirs = entries.filter(e => e.type === 'dir').length;
-    const nFiles = entries.filter(e => e.type === 'file').length;
+    const nDirs = currentEntries.filter(e => e.type === 'dir').length;
+    const nFiles = currentEntries.filter(e => e.type === 'file').length;
     const summary = [nDirs && `${nDirs} folder${nDirs !== 1 ? 's' : ''}`, nFiles && `${nFiles} file${nFiles !== 1 ? 's' : ''}`].filter(Boolean).join(', ');
     setStatus(path + (summary ? `  —  ${summary}` : ''));
     log(`${entries.length} entries`);
