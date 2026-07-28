@@ -157,6 +157,15 @@ class ReaderScreen final : public IScreen {
   uint8_t hold_prev_frames_ = 0;
   std::vector<PageLink> page_links_;
 
+  // Long-press of select (Button1): held past kLongSelectMs → toggle rotation
+  // (portrait <-> landscape); released earlier → normal short tap (open the
+  // reader options menu, or clear the nav-history back-stack if present).
+  // Mirrors the select long-press pattern in ListMenuScreen.
+  static constexpr uint32_t kLongSelectMs = 500;  // hold to trigger rotation
+  uint32_t hold_ms_select_ = 0;
+  bool long_select_triggered_ = false;
+  bool select_press_pending_ = false;
+
   // ETA tracking — measures ms-per-char (reading speed) instead of ms-per-page.
   // ms-per-char is independent of font size, padding, and image content, so the
   // ETA stays stable when display settings change. Page display time is

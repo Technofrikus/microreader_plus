@@ -564,7 +564,7 @@ void ReaderScreen::stop() {
   buf_ = nullptr;
 }
 
-void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime& /*runtime*/) {
+void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime& runtime) {
   if (!open_ok_) {
     // Auto-pop if the book was never found (no display was touched).
     // Otherwise wait for back button so user can see the error message.
@@ -626,23 +626,21 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
           }
           app_->pop_screen();
           return;
-        case Button::Button1:
+        case Button::Button1:  // select — deferred: may become a long-press (rotate)
           if (!nav_history_.empty()) {
             // Stay here: clear the nav history and redraw to remove hints.
-            nav_history_.clear();
-            render_page_(buf);
-            page_display_start_ms_ = now_ms_();
-            buf.refresh();
-            return;
+            // Deferred to release so a long-press can claim the hold for rotation.
+            select_press_pending_ = true;
+            hold_ms_select_ = 0;
+            long_select_triggered_ = false;
+          } else {
+            // Open the reader options menu. Also deferred to release so a
+            // long-press can claim the hold for rotation instead.
+            select_press_pending_ = true;
+            hold_ms_select_ = 0;
+            long_select_triggered_ = false;
           }
-          saved_chapter_idx_ = chapter_idx_;
-          saved_page_pos_ = page_pos_;
-          app_->reader_options()->set_settings(&reader_settings_);
-          app_->reader_options()->populate(mrb_.toc(), static_cast<uint16_t>(chapter_idx_), page_pos_.paragraph,
-                                           mrb_.metadata().title, progress_pct(), chapter_progress_pct());
-          app_->reader_options()->set_page_links(page_links_, mrb_.spine_files(), mrb_);
-          app_->push_screen(ScreenId::ReaderOptions);
-          return;
+          break;
         default:
           break;
       }
@@ -669,6 +667,55 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
     }
   } else {
     hold_prev_frames_ = 0;
+  }
+
+  // Select-button long-press: held past kLongSelectMs toggles rotation
+  // (portrait <-> landscape). Released earlier → normal short tap (clear
+  // nav-history back-stack if present, otherwise open the reader options menu).
+  if (select_press_pending_) {
+    const bool select_held = buttons.is_down(Button::Button1);
+    if (select_held) {
+      hold_ms_select_ += runtime.frame_time_ms();
+      if (!long_select_triggered_ && hold_ms_select_ >= kLongSelectMs) {
+        long_select_triggered_ = true;
+        select_press_pending_ = false;  // consumed as a long-press, not a tap
+        // Toggle rotation and re-render the current page in the new orientation.
+        bool v = !app_->rotate_display();
+        app_->set_rotate_display(v);
+        buf.set_rotation(v ? Rotation::Deg0 : Rotation::Deg90);
+        if (grayscale_active_) {
+          buf.revert_grayscale();
+          grayscale_active_ = false;
+        }
+        render_page_(buf);
+        page_display_start_ms_ = now_ms_();
+        buf.refresh();
+        save_position_();
+      }
+    } else {
+      // Released before threshold — short tap.
+      select_press_pending_ = false;
+      hold_ms_select_ = 0;
+      long_select_triggered_ = false;
+      if (!nav_history_.empty()) {
+        nav_history_.clear();
+        render_page_(buf);
+        page_display_start_ms_ = now_ms_();
+        buf.refresh();
+        return;
+      }
+      saved_chapter_idx_ = chapter_idx_;
+      saved_page_pos_ = page_pos_;
+      app_->reader_options()->set_settings(&reader_settings_);
+      app_->reader_options()->populate(mrb_.toc(), static_cast<uint16_t>(chapter_idx_), page_pos_.paragraph,
+                                       mrb_.metadata().title, progress_pct(), chapter_progress_pct());
+      app_->reader_options()->set_page_links(page_links_, mrb_.spine_files(), mrb_);
+      app_->push_screen(ScreenId::ReaderOptions);
+      return;
+    }
+  } else {
+    hold_ms_select_ = 0;
+    long_select_triggered_ = false;
   }
 
   bool changed = false;
