@@ -10,7 +10,11 @@
 #include "esp_vfs_fat.h"
 
 #define SD_MOUNT "/sdcard"
-#define SD_MAX_FILES 4
+// Max simultaneously open files on the SD FAT volume. The EPUB converter needs
+// up to 4 at once (source EPUB + MRB output + .desc temp + .tmp anchor temp),
+// so 4 was too tight and conversion failed with "no free file descriptors".
+// Bumped to 8 to leave headroom for settings/index/serial FDs during conversion.
+#define SD_MAX_FILES 8
 
 static const char* kSdTag = "sd";
 
