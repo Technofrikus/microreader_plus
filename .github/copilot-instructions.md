@@ -341,16 +341,85 @@ ESP_LOGI("test", "Free heap: %lu largest=%lu",
          (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 ```
 
-## Git remotes
+## Git remotes & fork topology
 
-- `origin` — this repo (microreader-plus)
-- `upstream` — [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader) (original project)
+This repo is **two fork-hops** downstream of the original. There are three repos in the chain:
 
-To sync plugin changes from upstream:
-```bash
-git fetch upstream
-git checkout upstream/main -- tools/calibre-plugin/
 ```
+CidVonHighwind/microreader     ← "the original"   (upstream)
+        │ fork
+pablohc/microreader_plus       ← "plus"          (the fork this repo is based on)
+        │ fork
+Technofrikus/microreader_plus  ← "this repo"     (origin)
+```
+
+### Configured remotes (all three point at the same local repo — do NOT clone separately)
+
+- `origin` — [Technofrikus/microreader_plus](https://github.com/Technofrikus/microreader_plus) (your fork; **push here**)
+- `pablohc` — [pablohc/microreader_plus](https://github.com/pablohc/microreader_plus) (the "plus" fork; has fixes not yet in the original)
+- `upstream` — [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader) (the original project)
+
+> **Why one repo, not three clones:** all three are remotes in this single checkout. Cloning separately means three working trees you can't diff/merge across. Everything is done from here with `git fetch` + `cherry-pick`/`merge`.
+
+### Divergence (measured — re-check with the commands below)
+
+| Comparison | This repo has | Other has |
+|---|---|---|
+| This repo vs `pablohc/main` (plus) | +24 | 0 |
+| This repo vs `upstream/main` (original) | +68 | **+37** |
+| `pablohc/main` vs `upstream/main` | +44 | +37 |
+
+**This repo is 37 commits behind the original.** Notable features missing from this repo (live in `upstream/main`, most also in `pablohc`):
+
+- **Dark mode** with OS-preference theme toggle (`fd5e07e`)
+- **UTF-8 FATFS filenames** + index migration (`f5ef63b`)
+- **Incremental book reindex** on upload/delete/rename (`6d056ff`)
+- **ACK-paced serial download** (prevents corruption) + 2048 TX buffer (`f9265a3`, `2da8ec9`)
+- **Total/Double Commander WFX plugin** (`17b0f1a`)
+- **CssCache** (load CSS only when needed) (`37916b3`)
+- Calibre plugin download support, font-generator wasm rework, README/docs
+
+`pablohc` also carries fixes not in the original yet (battery-fix, phantom-button-clear, utf8). **Pull from both `pablohc` and `upstream`, not just the original.**
+
+### Workflow for pulling features down
+
+1. **Always work on a feature branch, never directly on `main`:**
+   ```bash
+   git fetch upstream pablohc
+   git checkout -b feat/<name>
+   ```
+2. **Grab a specific feature (fastest, most surgical) — `cherry-pick`:**
+   ```bash
+   git cherry-pick f5ef63b          # single commit (e.g. UTF-8 filenames)
+   git cherry-pick fd5e07e..pablohc/feat/dark-mode   # whole topic branch
+   ```
+   Use this when you only want specific features and want to avoid unrelated conflicts.
+3. **Grab everything new from the original — `merge`:**
+   ```bash
+   git merge upstream/main
+   ```
+   Expect conflicts in files both sides changed (e.g. `ReaderScreen`, display code, this `copilot-instructions.md`). Resolve, build, test.
+4. **Validate before declaring success** (see [Tests](#tests) below):
+   ```bash
+   cd test && cmake -B build2 -DCMAKE_BUILD_TYPE=Debug -DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.5
+   cmake --build build2 --config Debug && ./build2/Debug/unit_tests
+   ```
+
+### Useful commands
+
+```bash
+# Re-measure divergence:
+#   this vs original:   git rev-list --left-right --count HEAD...upstream/main
+#   this vs plus:       git rev-list --left-right --count HEAD...pablohc/main
+#   plus vs original:   git rev-list --left-right --count pablohc/main...upstream/main
+# List commits in original NOT in this repo:
+#   git log --oneline HEAD..upstream/main
+# Sync only the calibre plugin from upstream (legacy one-liner):
+#   git checkout upstream/main -- tools/calibre-plugin/
+```
+
+> **Gotcha:** the working tree often has untracked/staged `docs/` files (font-generator wasm etc.). Commit or `git stash` them before a `merge` so they don't tangle with incoming changes.
+
 
 - **Keep this file up to date after every change.** When you add, rename, or restructure files, interfaces, systems, or tools — update the relevant section immediately. This file is the single source of truth for new chat sessions.
 - **Record useful discoveries.** When you learn something non-obvious (hardware quirks, tricky build steps, constraints, or gotchas), add it to the relevant section so future sessions benefit.
