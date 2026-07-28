@@ -53,6 +53,23 @@ class BookIndex {
   // Remove entry by path. No-op if not found.
   void remove_entry(std::string_view path);
 
+  // Record that a book was opened. `order` should be a monotonically
+  // increasing counter (higher = more recently opened). Updates the in-memory
+  // entry only; call save() afterwards to persist.
+  void set_last_opened(std::string_view path, uint32_t order);
+
+  // Open path as an EPUB, upsert its index entry, and save to index_path.
+  // Reloads from disk first if entries_ is empty, to avoid truncating the .dat.
+  bool index_file(const std::string& path, const std::string& index_path, DrawBuffer& buf);
+
+  // Remove path's entry and save to index_path. No-op (returns true) if not indexed.
+  // Reloads from disk first if entries_ is empty.
+  bool remove_path(const std::string& path, const std::string& index_path);
+
+  // Rename src→dst in-place, preserving metadata. Returns false if src not indexed
+  // (caller may fall back to index_file). Reloads from disk first if entries_ is empty.
+  bool rename_in_place(const std::string& src, const std::string& dst, const std::string& index_path);
+
   void clear_entries();
 
  private:

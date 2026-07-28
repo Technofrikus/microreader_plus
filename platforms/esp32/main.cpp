@@ -321,7 +321,6 @@ extern "C" void app_main(void) {
         }
       }
     }
-    }
 
     // Check if a new grayscale LUT was uploaded via serial.
     uint8_t lut_buf[112];

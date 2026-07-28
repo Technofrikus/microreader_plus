@@ -132,6 +132,10 @@ static volatile bool g_upload_in_progress = false;
 // Used by the serial 'Q' debug command.
 static char g_top_screen_name[32] = "unknown";
 
+// Model-change request: main loop persists to NVS and reboots.
+static volatile bool g_model_change_pending = false;
+static char g_device_model[4] = {};  // "x3" or "x4"
+
 // Call from the main loop. Returns true (and copies into `out`) when a fresh
 // LUT has been received since the last call.
 // Returns true and sets *type_out if a new LUT is available.
@@ -526,7 +530,7 @@ static void remove_recursive(const char* path) {
   struct dirent* ent;
   char child[300];
   while ((ent = readdir(d)) != nullptr) {
-    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+    if (ent->d_name[0] == '.') continue;
     snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
     if (ent->d_type == DT_DIR) {
       remove_recursive(child);
@@ -796,7 +800,7 @@ static void handle_serial_cmd() {
       serial_write(lline);
       struct dirent* lent;
       while ((lent = readdir(ldir)) != nullptr) {
-        if (strcmp(lent->d_name, ".") == 0 || strcmp(lent->d_name, "..") == 0)
+        if (lent->d_name[0] == '.')
           continue;
         char lfull[300];
         snprintf(lfull, sizeof(lfull), "%s/%s", g_cmd_path, lent->d_name);

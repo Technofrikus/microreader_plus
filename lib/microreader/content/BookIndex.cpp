@@ -34,14 +34,17 @@ const BookIndexEntry* BookIndex::find_entry(std::string_view path) const {
   return nullptr;
 }
 
-void BookIndex::add_entry(std::string_view path, std::string_view title, std::string_view author,
+bool BookIndex::add_entry(std::string_view path, std::string_view title, std::string_view author,
                           uint32_t last_open_order) {
+  if (static_cast<int>(entries_.size()) >= MAX_BOOKS)
+    return false;
   BookIndexEntry entry;
   entry.path = pool_.add(path);
   entry.title = pool_.add(title);
   entry.author = pool_.add(author);
   entry.last_open_order = last_open_order;
   entries_.push_back(entry);
+  return true;
 }
 
 bool BookIndex::load(const std::string& index_file) {
@@ -109,8 +112,10 @@ bool BookIndex::save(const std::string& index_file) const {
 void BookIndex::clear_entries() {
   { std::vector<BookIndexEntry> tmp; entries_.swap(tmp); }
   pool_.reset();
+  generation_ = 0;
 }
 
+// Updates in-memory entry only; call save() to persist.
 void BookIndex::set_last_opened(std::string_view path, uint32_t order) {
   for (auto& entry : entries_) {
     if (entry.path.view(pool_) == path) {
@@ -123,6 +128,86 @@ void BookIndex::set_last_opened(std::string_view path, uint32_t order) {
 void BookIndex::remove_entry(int index) {
   if (index >= 0 && index < static_cast<int>(entries_.size()))
     entries_.erase(entries_.begin() + index);
+}
+
+void BookIndex::remove_entry(std::string_view path) {
+  for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+    if (it->path.view(pool_) == path) {
+      entries_.erase(it);
+      return;
+    }
+  }
+}
+
+bool BookIndex::is_book_path(const char* path) {
+  if (!path) return false;
+  // Must be under /sdcard/
+  if (strncmp(path, "/sdcard/", 8) != 0) return false;
+  const char* slash = std::strrchr(path, '/');
+  const char* name = slash ? slash + 1 : path;
+  const size_t name_len = std::strlen(name);
+  if (name_len <= 5) return false;
+  const char* ext = name + name_len - 5;
+  char ext_lower[5];
+  for (int i = 0; i < 5; ++i)
+    ext_lower[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(ext[i])));
+  return std::memcmp(ext_lower, ".epub", 5) == 0;
+}
+
+void BookIndex::ensure_loaded_(const std::string& index_path) {
+  if (entries_.empty())
+    load(index_path);
+}
+
+bool BookIndex::index_file(const std::string& path, const std::string& index_path, DrawBuffer& buf) {
+  ensure_loaded_(index_path);
+  // Check if already indexed
+  for (auto& e : entries_) {
+    if (e.path.view(pool_) == path)
+      return true;  // already in index
+  }
+  // Open and extract metadata
+  Book book;
+  book.close();
+  if (book.open(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2(), false) != EpubError::Ok) {
+    buf.reset_after_scratch(true);
+    return false;
+  }
+  auto meta = book.metadata();
+  const std::string author = meta.author.value_or("");
+  add_entry(path, meta.title, author);
+  book.close();
+  buf.reset_after_scratch(true);
+  save(index_path);
+  generation_++;
+  return true;
+}
+
+bool BookIndex::remove_path(const std::string& path, const std::string& index_path) {
+  ensure_loaded_(index_path);
+  for (auto it = entries_.begin(); it != entries_.end(); ++it) {
+    if (it->path.view(pool_) == path) {
+      entries_.erase(it);
+      save(index_path);
+      generation_++;
+      return true;
+    }
+  }
+  // No-op — path not found, but that's not an error.
+  return true;
+}
+
+bool BookIndex::rename_in_place(const std::string& src, const std::string& dst, const std::string& index_path) {
+  ensure_loaded_(index_path);
+  for (auto& e : entries_) {
+    if (e.path.view(pool_) == src) {
+      e.path = pool_.add(dst);
+      save(index_path);
+      generation_++;
+      return true;
+    }
+  }
+  return false;  // src not found
 }
 
 void BookIndex::build_index(const std::string& root_dir, DrawBuffer& buf) {

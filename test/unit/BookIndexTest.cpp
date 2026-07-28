@@ -40,7 +40,7 @@ class BookIndexTest : public ::testing::Test {
   fs::path temp_dir_;
   std::string index_path_;
   ScreenshotDisplay display_;
-  DrawBuffer buf_{display_};
+  DrawBuffer buf_{display_, DeviceConfig::x4()};
 
   void SetUp() override {
     BookIndex::instance().clear_entries();
