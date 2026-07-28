@@ -238,6 +238,15 @@ void Application::update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer&
   uptime_ms_ += dt_ms;
   buttons_ = buttons;
 
+  // Discard button presses that accumulated during the previous transition
+  // (e.g. while a blocking on_select/on_start such as book conversion, index
+  // rebuild or firmware validation ran). Restored from main-old.
+  if (pending_transition_) {
+    buttons_.pressed_latch = 0;
+    buttons_.press_history_count = 0;
+    pending_transition_ = false;
+  }
+
   // Inactivity / auto-sleep tracking
   if (buttons_.current != 0 || buttons_.pressed_latch != 0) {
     inactivity_ms_ = 0;
@@ -255,6 +264,8 @@ void Application::update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer&
     return;
   }
 
+  buf.clear_loading_flag();
+
   IScreen* top = screen_mgr_.top();
   if (top) {
     top->update(buttons_, buf, runtime);
@@ -266,11 +277,13 @@ void Application::update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer&
       screen_mgr_.pop(buf, runtime);
       screen_mgr_.push(screen_for_(id), buf, runtime);
       buf.refresh();
+      if (buf.loading_shown()) pending_transition_ = true;
     } else if (pending_push_ != ScreenId::None) {
       ScreenId id = pending_push_;
       pending_push_ = ScreenId::None;
       screen_mgr_.push(screen_for_(id), buf, runtime);
       buf.refresh();
+      if (buf.loading_shown()) pending_transition_ = true;
     } else if (pending_pop_count_ > 0) {
       int count = pending_pop_count_;
       pending_pop_count_ = 0;
@@ -278,6 +291,7 @@ void Application::update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer&
         save_settings_();
       screen_mgr_.pop(count, buf, runtime);
       buf.refresh();
+      if (buf.loading_shown()) pending_transition_ = true;
     }
   }
 }  // namespace microreader

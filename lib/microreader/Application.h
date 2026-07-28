@@ -297,6 +297,11 @@ class Application {
   ScreenId pending_replace_ = ScreenId::None;
 
   int pending_pop_count_ = 0;
+  // Set whenever a screen transition (push/replace/pop) is applied. The next
+  // update() consumes it to discard button presses that accumulated in the
+  // hardware queue during the transition (or during a blocking on_select /
+  // on_start that triggered it), preventing phantom navigation afterwards.
+  bool pending_transition_ = false;
 
   const BitmapFontSet* reader_font_ = nullptr;
   FontManager* font_manager_ = nullptr;
