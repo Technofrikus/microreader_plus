@@ -76,6 +76,11 @@ class SerialConn {
       if (b !== 0x0D) bytes.push(b);
     }
   }
+  async readBytes(n, timeoutMs = 30000) {
+    const out = new Uint8Array(n);
+    for (let i = 0; i < n; i++) out[i] = await this.readByte(timeoutMs);
+    return out;
+  }
   async write(data) {
     const w = this.port.writable.getWriter();
     try { await w.write(data); } finally { w.releaseLock(); }
@@ -124,6 +129,22 @@ async function cmdDirList(path) {
     }
   }
   return entries;
+}
+
+// 'T' — read file from device: READY\n + 4B size LE + raw data + 4B CRC32 LE
+async function cmdReadFile(path) {
+  const pb = enc.encode(path);
+  await conn.write(new Uint8Array([...CMND, 0x54, ...u16le(pb.length), ...pb]));
+  await readUntil(l => l === 'READY' || l.startsWith('ERR:'), 10000);
+  const sizeBytes = await conn.readBytes(4, 10000);
+  const size = ((sizeBytes[0]) | (sizeBytes[1] << 8) | (sizeBytes[2] << 16) | (sizeBytes[3] << 24)) >>> 0;
+  if (size > 50 * 1024 * 1024) throw new Error(`Invalid file size: ${size}`);
+  const data = await conn.readBytes(size, 60000);
+  const crcBytes = await conn.readBytes(4, 10000);
+  const crc = ((crcBytes[0]) | (crcBytes[1] << 8) | (crcBytes[2] << 16) | (crcBytes[3] << 24)) >>> 0;
+  const computed = crc32(data);
+  if (computed !== crc) throw new Error(`CRC mismatch: expected 0x${crc.toString(16)}, got 0x${computed.toString(16)}`);
+  return data;
 }
 
 // 'W' — write file to full path (chunked + ACK + CRC)
@@ -348,11 +369,15 @@ function renderEntries(entries) {
   }
 
   fileTbody.innerHTML = '';
-  const actions = `<button class="btn-sm btn-ren">Rename</button>
-                   <button class="btn-sm btn-danger btn-del">Delete</button>`;
+  const dirActions = `<button class="btn-sm btn-ren" title="Rename">✏️</button>
+                     <button class="btn-sm btn-danger btn-del" title="Delete">🗑️</button>`;
+  const fileActions = `                      <button class="btn-sm btn-dl" title="Download">💾</button>
+                      <button class="btn-sm btn-ren" title="Rename">✏️</button>
+                      <button class="btn-sm btn-danger btn-del" title="Delete">🗑️</button>`;
   for (const entry of [...dirs, ...files]) {
     const tr = document.createElement('tr');
     const fullPath = currentPath + '/' + entry.name;
+    const actions = entry.type === 'dir' ? dirActions : fileActions;
 
     if (entry.type === 'dir') {
       tr.innerHTML = `
@@ -375,6 +400,8 @@ function renderEntries(entries) {
         <td class="col-actions">${actions}</td>`;
     }
     tr.querySelector('.btn-ren').addEventListener('click', () => onRename(fullPath));
+    const dlBtn = tr.querySelector('.btn-dl');
+    if (dlBtn) dlBtn.addEventListener('click', () => onDownload(fullPath, entry.name));
     tr.querySelector('.btn-del').addEventListener('click', () => onDelete(fullPath, entry.type));
     fileTbody.appendChild(tr);
   }
@@ -462,6 +489,28 @@ async function onDelete(fullPath, type) {
     else setStatus('Delete failed: ' + r);
   } catch (e) {
     log('Error: ' + e.message); setStatus('Error: ' + e.message);
+  } finally { setBusy(false); }
+}
+
+async function onDownload(fullPath, name) {
+  setBusy(true);
+  setStatus(`Downloading ${name}...`);
+  log(`read ${fullPath}`);
+  try {
+    const data = await cmdReadFile(fullPath);
+    const blob = new Blob([data], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus(`Downloaded ${name} (${data.length} bytes)`);
+    log(`read: ${data.length} bytes`);
+  } catch (e) {
+    log('Error: ' + e.message); setStatus('Download failed: ' + e.message);
   } finally { setBusy(false); }
 }
 

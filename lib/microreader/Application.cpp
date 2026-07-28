@@ -13,6 +13,8 @@
 #include <sys/stat.h>
 
 #include "esp_random.h"
+#include "esp_sleep.h"
+#include "esp_system.h"
 #else
 #include <filesystem>
 #endif
@@ -29,6 +31,8 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   buttons_ = ButtonState{};
   started_ = true;
   running_ = true;
+
+  runtime_ = &runtime;
 
 #ifdef ESP_PLATFORM
   std::srand(esp_random());
@@ -62,6 +66,26 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   // Load settings first so initial_selection_ and reader settings are ready
   // before the menu's on_start() (directory scan + selection restore) runs.
   load_settings_();
+
+  // Increment and persist boot_count for battery-log event pairing.
+  if (data_dir_) {
+    std::string bc_path = std::string(data_dir_) + "/boot_count";
+    FILE* bcf = std::fopen(bc_path.c_str(), "r");
+    if (bcf) {
+      unsigned loaded = 0;
+      if (std::fscanf(bcf, "%u", &loaded) == 1)
+        boot_count_ = loaded;
+      std::fclose(bcf);
+    }
+    boot_count_++;
+    bcf = std::fopen(bc_path.c_str(), "w");
+    if (bcf) {
+      std::fprintf(bcf, "%lu\n", (unsigned long)boot_count_);
+      std::fclose(bcf);
+    }
+  }
+
+  log_battery_event_("BOOT");
 
   // Apply persisted menu font size to all list screens.
   ListMenuScreen::set_font_size(menu_font_size_);
@@ -143,6 +167,9 @@ void Application::do_sleep_(DrawBuffer& buf) {
   if (IScreen* top = screen_mgr_.top())
     top->stop();
 
+  // Capture battery state before the sleep-image render draws current.
+  log_battery_event_("SLEEP");
+
   // If a specific image is pinned, always show it. Otherwise auto-cycle.
   MR_LOGI("sleep", "do_sleep_: pinned='%s' idx=%d", sleep_image_path_.c_str(), sleep_image_idx_);
   if (!sleep_image_path_.empty()) {
@@ -157,8 +184,10 @@ void Application::do_sleep_(DrawBuffer& buf) {
       shown = buf.show_sleep_image(sleep_image_path_.c_str());
     }
     MR_LOGI("sleep", "show result: %d", (int)shown);
-    if (!shown && !buf.show_sleep_image_embedded(0))
-      buf.deep_sleep();
+    if (!shown && !buf.show_sleep_image_embedded(0)) {
+      // Both show attempts failed — display will just deep_sleep without image.
+    }
+    buf.deep_sleep();
     running_ = false;
     return;
   }
@@ -222,10 +251,59 @@ void Application::do_sleep_(DrawBuffer& buf) {
   }
 
   MR_LOGI("sleep", "show result: %d", (int)sleep_shown);
-  if (!sleep_shown && !buf.show_sleep_image_embedded(0))
-    buf.deep_sleep();
+  if (!sleep_shown && !buf.show_sleep_image_embedded(0)) {
+    // Both show attempts failed — display will just deep_sleep without image.
+  }
+  buf.deep_sleep();
 
   running_ = false;
+}
+
+void Application::log_battery_event_(const char* event) {
+  if (!data_dir_ || !runtime_)
+    return;
+
+  std::string path = std::string(data_dir_) + "/battery_log.csv";
+
+  // Detect first creation to emit a CSV header row.
+  bool is_new = (std::fopen(path.c_str(), "r") == nullptr);
+
+  FILE* f = std::fopen(path.c_str(), "a");
+  if (!f)
+    return;
+
+  if (is_new)
+    std::fprintf(f, "boot,event,pct,voltage_mv,uptime_ms,wake_cause,reset_reason\n");
+
+  auto pct = runtime_->battery_percentage();
+  auto mv = runtime_->battery_voltage_mv();
+
+#ifdef ESP_PLATFORM
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+  int wake_cause = static_cast<int>(esp_sleep_get_wakeup_cause());
+#pragma GCC diagnostic pop
+  int reset_reason = static_cast<int>(esp_reset_reason());
+#else
+  int wake_cause = 0;
+  int reset_reason = 0;
+#endif
+
+  // SLEEP rows leave wake_cause/reset_reason empty (not waking, going to sleep).
+  bool is_boot = (std::strcmp(event, "BOOT") == 0);
+
+  std::fprintf(f, "%lu,%s,%d,%d,%lu,", (unsigned long)boot_count_, event,
+               pct.value_or(-1), mv.value_or(-1), (unsigned long)uptime_ms_);
+  if (is_boot)
+    std::fprintf(f, "%d,%d\n", wake_cause, reset_reason);
+  else
+    std::fprintf(f, ",\n");
+
+  std::fclose(f);
+
+  MR_LOGI("batt", "log: boot=%u %s pct=%d mv=%d up=%u wc=%d rr=%d",
+          boot_count_, event, pct.value_or(-1), mv.value_or(-1), uptime_ms_,
+          is_boot ? wake_cause : -1, is_boot ? reset_reason : -1);
 }
 
 void Application::update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer& buf, IRuntime& runtime) {

@@ -743,6 +743,8 @@ class EInkDisplay : public microreader::IDisplay {
   }
 
   void deep_sleep() override {
+    if (inDeepSleep_)
+      return;
     if (config_.model == microreader::DeviceModel::X3) {
       if (isScreenOn) {
         x3PowerOff_();
@@ -750,6 +752,7 @@ class EInkDisplay : public microreader::IDisplay {
       sendCommand(CMD_DEEP_SLEEP);
       sendData(0x01);
     } else {
+      waitWhileBusy("deep_sleep");
       sendCommand(CMD_DEEP_SLEEP);
       sendData(0x03);
     }

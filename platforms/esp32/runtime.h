@@ -73,6 +73,25 @@ class Esp32Runtime final : public microreader::IRuntime {
     return is_x3_ ? microreader::DeviceModel::X3 : microreader::DeviceModel::X4;
   }
 
+  std::optional<int> battery_voltage_mv() const override {
+    if (!adc1_handle_)
+      return std::nullopt;
+
+    int adc_raw = 0;
+    if (adc_oneshot_read(adc1_handle_, BATTERY_ADC_CHANNEL, &adc_raw) != ESP_OK) {
+      return std::nullopt;
+    }
+
+    int voltage_mv = 0;
+    if (adc_cali_handle_) {
+      adc_cali_raw_to_voltage(adc_cali_handle_, adc_raw, &voltage_mv);
+    } else {
+      voltage_mv = adc_raw;
+    }
+
+    return static_cast<int>(voltage_mv * 2.0f);  // Voltage divider multiplier
+  }
+
   void yield() override {
     vTaskDelay(1);
   }

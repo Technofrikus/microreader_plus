@@ -415,6 +415,9 @@ extern "C" void app_main(void) {
   MR_LOGI("app", "Shutting down, entering deep sleep...");
 
 #ifndef QEMU_BUILD
+  // Unmount SD card and release CS pin to minimise sleep current.
+  sd_deinit();
+
   // Enter deep sleep; wake on power button press (active LOW, GPIO 3).
   esp_sleep_enable_gpio_wakeup_on_hp_periph_powerdown(1ULL << kPowerPin, ESP_GPIO_WAKEUP_GPIO_LOW);
   esp_deep_sleep_start();

@@ -77,6 +77,10 @@ class Application {
   // Common sleep sequence (save state, show sleep image, set running_=false)
   void do_sleep_(DrawBuffer& buf);
 
+  // Append a row to battery_log.csv for power-off drain diagnostics.
+  // event is "BOOT" or "SLEEP". No-op if data_dir_ or runtime_ is unset.
+  void log_battery_event_(const char* event);
+
   // Font management. set_reader_font() also propagates to the reader screen.
   void set_reader_font(const BitmapFontSet* fonts) {
     reader_font_ = fonts;
@@ -259,6 +263,9 @@ class Application {
 
   bool started_ = false;
   bool running_ = true;
+
+  IRuntime* runtime_ = nullptr;       // cached in start() for log_battery_event_()
+  uint32_t boot_count_ = 0;           // incremented each boot, persisted to dedicated file
 
   static constexpr uint32_t kSleepTimeoutMs = 10u * 60u * 1000u;  // 10 minutes
   uint32_t inactivity_ms_ = 0;
