@@ -46,6 +46,7 @@ target_include_directories(miniz PUBLIC ${MINIZ_DIR})
 set(CONTENT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/content)
 
 add_library(microreader_content STATIC
+    ${CONTENT_DIR}/HtmlEntities.cpp
     ${CONTENT_DIR}/ZipReader.cpp
     ${CONTENT_DIR}/XmlReader.cpp
     ${CONTENT_DIR}/CssParser.cpp

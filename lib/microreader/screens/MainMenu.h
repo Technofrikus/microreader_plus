@@ -136,6 +136,11 @@ class MainMenu : public ListMenuScreen {
   BookSortOrder sort_order_ = BookSortOrder::Alphabetical;
   bool align_left_ = false;         // Centered list items by default
   bool needs_scan_ = false;
+  // Cached BookIndex::generation() value from the last populate_list_(). When
+  // update() detects a mismatch, the index was mutated externally (e.g. by a
+  // serial upload/delete/rename while this screen is showing) and we refresh
+  // the list in place without requiring the user to navigate away and back.
+  uint64_t cached_generation_ = 0;
 
   std::vector<MenuEntry> entries_;
   mutable std::string label_buf_;

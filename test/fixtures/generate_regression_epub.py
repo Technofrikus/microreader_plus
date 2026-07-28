@@ -1292,6 +1292,27 @@ def ch_drop_cap():
     )
 
 
+def ch_supported_entity_chars():
+    """Chapter 44: all supported named-entity outputs."""
+    return make_xhtml(
+        "Supported Entity Characters",
+        """\
+<h1>44. Supported Entity Characters</h1>
+
+<p>This chapter manually enumerates the currently supported named entities so parsing regressions remain visible in the regression EPUB itself.</p>
+
+<p>Named entities covered: 133</p>
+
+<h2>Decoded named entities</h2>
+<p>&amp; &lt; &gt; &quot; &apos; &iexcl; &cent; &pound; &curren; &yen; &brvbar; &sect; &uml; &copy; &ordf; &laquo; &not; &shy; &reg; &macr; &deg; &plusmn; &sup2; &sup3; &acute; &micro; &para; &middot; &cedil; &sup1; &ordm; &raquo; &frac14; &frac12; &frac34; &iquest; &Agrave; &Aacute; &Acirc; &Atilde; &Auml; &Aring; &AElig; &Ccedil; &Egrave; &Eacute; &Ecirc; &Euml; &Igrave; &Iacute; &Icirc; &Iuml; &ETH; &Ntilde; &Ograve; &Oacute; &Ocirc; &Otilde; &Ouml; &times; &Oslash; &Ugrave; &Uacute; &Ucirc; &Uuml; &Yacute; &THORN; &szlig; &agrave; &aacute; &acirc; &atilde; &auml; &aring; &aelig; &ccedil; &egrave; &eacute; &ecirc; &euml; &igrave; &iacute; &icirc; &iuml; &eth; &ntilde; &ograve; &oacute; &ocirc; &otilde; &ouml; &divide; &oslash; &ugrave; &uacute; &ucirc; &uuml; &yacute; &thorn; &yuml; &OElig; &oelig; &Scaron; &scaron; &Yuml; &fnof; &circ; &tilde; &ndash; &mdash; &lsquo; &rsquo; &sbquo; &ldquo; &rdquo; &bdquo; &dagger; &Dagger; &bull; &hellip; &permil; &prime; &Prime; &lsaquo; &rsaquo; &oline; &frasl; &euro; &trade;</p>
+
+<h2>Space-like entities</h2>
+<p>A&nbsp;B | A&ensp;B | A&emsp;B | A&thinsp;B</p>
+""",
+        css_link="style.css",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Image generation
 # ---------------------------------------------------------------------------
@@ -1447,6 +1468,12 @@ def main():
             ch_centered_with_margins(),
         ),
         ("ch43", "ch43_drop_cap.xhtml", "43. Drop Caps", ch_drop_cap()),
+        (
+            "ch44",
+            "ch44_supported_entities.xhtml",
+            "44. Supported Entity Characters",
+            ch_supported_entity_chars(),
+        ),
     ]
 
     # Build manifest and spine

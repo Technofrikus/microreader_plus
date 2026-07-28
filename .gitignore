@@ -58,3 +58,4 @@ test/bench_results.json
 /firmware.bin
 /version.txt
 /sd/.sleep
+/test/build_verify

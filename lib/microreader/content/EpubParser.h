@@ -13,6 +13,56 @@ namespace microreader {
 // Each paragraph is emitted as soon as it's parsed — no accumulation.
 using ParagraphSink = void (*)(void* ctx, Paragraph&& para);
 
+// Cache for per-file parsed CSS stylesheets.
+// Uses a fixed-size array so entry addresses never move — callers may hold
+// raw pointers to Entry::sheet for the duration of a chapter parse.
+// Evicts the least-recently-used eligible entry when total cached bytes
+// exceed kMaxCacheBytes, or when the platform reports low heap (ESP32 only).
+// CSS files are loaded on demand — only those actually referenced by a
+// chapter's <link rel="stylesheet"> tags are loaded.
+class CssCache {
+ public:
+  static constexpr size_t kMaxCacheBytes = 64 * 1024;
+  static constexpr size_t kMaxEntries = 16;
+
+  // protect_gen: entries whose last_used_gen > protect_gen are not evicted.
+  // Pass current_gen() before the chapter's head scan starts so that CSS
+  // loaded earlier in the same chapter cannot be evicted mid-scan.
+  //
+  // work_buf/work_buf_size: caller-provided decompression buffer (from the
+  // application's framebuffer). Required on cache miss; if null and there
+  // is a cache miss the stylesheet is silently skipped rather than crashing.
+  const CssStylesheet* get_or_load(IZipFile& file, const ZipReader& zip,
+                                   const std::string& path, const CssConfig& config,
+                                   uint32_t protect_gen = 0,
+                                   uint8_t* work_buf = nullptr,
+                                   size_t work_buf_size = 0);
+
+  void clear();
+
+  size_t entry_count() const { return count_; }
+  size_t total_bytes() const { return total_bytes_; }
+  uint32_t current_gen() const { return gen_; }
+
+ private:
+  struct Entry {
+    std::string path;
+    CssStylesheet sheet;
+    size_t bytes = 0;
+    uint32_t last_used_gen = 0;
+  };
+
+  Entry entries_[kMaxEntries];
+  size_t count_ = 0;
+  size_t total_bytes_ = 0;
+  uint32_t gen_ = 0;
+
+  static bool low_memory();
+  // Returns the index of the best LRU candidate with last_used_gen <= protect_gen
+  // (or any entry when protect_gen == 0). Returns kMaxEntries if none found.
+  size_t find_evict_slot(uint32_t protect_gen) const;
+};
+
 // Callback for element id="" annotations encountered during streaming XHTML parsing.
 // Called once per element that has an id attribute.
 // para_idx = number of paragraphs already emitted before this element opens.
@@ -36,10 +86,10 @@ class Epub {
 
   // Set CSS unit conversion config (call before open()).
   void set_css_config(const CssConfig& config) {
-    stylesheet_.set_config(config);
+    css_config_ = config;
   }
   const CssConfig& css_config() const {
-    return stylesheet_.config();
+    return css_config_;
   }
 
   // Open an EPUB file. work_buf (~45KB) and xml_buf (~4KB) are used during
@@ -88,8 +138,8 @@ class Epub {
   const std::vector<SpineItem>& spine() const {
     return spine_;
   }
-  const CssStylesheet& stylesheet() const {
-    return stylesheet_;
+  const CssCache& css_cache() const {
+    return css_cache_;
   }
 
   // Resolve a path relative to a content file's directory.
@@ -108,7 +158,8 @@ class Epub {
   EpubMetadata metadata_;
   std::vector<SpineItem> spine_;
   TableOfContents toc_;
-  CssStylesheet stylesheet_;
+  CssConfig css_config_;
+  mutable CssCache css_cache_;
   int cover_idx_ = -1;
 
   // Internal parsing steps

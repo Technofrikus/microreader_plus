@@ -79,8 +79,13 @@ TEST_F(EpubTest, MultiChapterToc) {
 }
 
 TEST_F(EpubTest, WithCssStylesheet) {
+  // CSS is now loaded lazily per chapter — the cache is populated on first parse.
   open_fixture("with_css.epub");
-  EXPECT_GT(epub.stylesheet().rule_count(), 0u);
+  ASSERT_GT(epub.chapter_count(), 0u);
+  Chapter ch;
+  EXPECT_EQ(epub.parse_chapter(file, 0, ch), EpubError::Ok);
+  // After parsing, at least one CSS file should be cached.
+  EXPECT_GT(epub.css_cache().entry_count(), 0u);
 }
 
 TEST_F(EpubTest, WithImagesMetadata) {
@@ -163,6 +168,33 @@ TEST_F(EpubTest, SpecialCharsUnicode) {
   }
   // Unicode should be preserved
   EXPECT_NE(all_text.find("Ünïcödë"), std::string::npos);
+}
+
+TEST_F(EpubTest, RegressionFixtureContainsSupportedEntityCharacters) {
+  open_fixture("regression_test.epub");
+  ASSERT_GE(epub.chapter_count(), 44u);
+
+  Chapter ch;
+  ASSERT_EQ(epub.parse_chapter(file, epub.chapter_count() - 1, ch), EpubError::Ok);
+
+  std::string all_text;
+  for (auto& p : ch.paragraphs) {
+    if (p.type != ParagraphType::Text)
+      continue;
+    for (auto& run : p.text.runs)
+      all_text += run.text;
+  }
+
+  EXPECT_NE(all_text.find("44. Supported Entity Characters"), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xC5\x92 \xC5\x93 \xC5\xA0 \xC5\xA1 \xC5\xB8 \xC6\x92")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xC6\x92 \xCB\x86 \xCB\x9C")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xE2\x80\x94 \xE2\x80\x98 \xE2\x80\x99")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xE2\x80\x9C \xE2\x80\x9D")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xE2\x80\x9E")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xE2\x80\xA0 \xE2\x80\xA1 \xE2\x80\xA2")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xE2\x80\xA6 \xE2\x80\xB0")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xE2\x80\xB9 \xE2\x80\xBA \xE2\x80\xBE \xE2\x81\x84")), std::string::npos);
+  EXPECT_NE(all_text.find(std::string("\xE2\x82\xAC \xE2\x84\xA2")), std::string::npos);
 }
 
 TEST_F(EpubTest, InvalidChapterIndex) {
@@ -566,6 +598,36 @@ TEST(XhtmlBody, HtmlEntities) {
   for (auto& run : paragraphs[0].text.runs)
     text += run.text;
   EXPECT_EQ(text, "Tom & Jerry <3> \"test\"");
+}
+
+TEST(XhtmlBody, NamedHtmlEntitiesAcrossStyledSpans) {
+  const char* xhtml =
+      "<html><body>"
+      "<p><span class=\"t200\">M</span><span class=\"t80\">INUIT</span>, au Mus&eacute;e royal des beaux-arts "
+      "d&rsquo;Ankh-Morpork</p>"
+      "</body></html>";
+
+  CssStylesheet css;
+  css.extend_from_sheet(".t200 { font-size: 200%; } .t80 { font-size: 80%; }");
+
+  ZipReader dummy_zip;
+  std::vector<Paragraph> paragraphs;
+  parse_xhtml_body(reinterpret_cast<const uint8_t*>(xhtml), std::strlen(xhtml), nullptr, &css, "", dummy_zip,
+                   paragraphs);
+
+  ASSERT_EQ(paragraphs.size(), 1u);
+  const auto& runs = paragraphs[0].text.runs;
+  ASSERT_GE(runs.size(), 3u);
+  EXPECT_EQ(runs[0].text, "M");
+  EXPECT_EQ(runs[0].size_pct, 200u);
+  EXPECT_EQ(runs[1].text, "INUIT");
+  EXPECT_EQ(runs[1].size_pct, 80u);
+
+  std::string text;
+  for (const auto& run : runs)
+    text += run.text;
+  EXPECT_EQ(text, std::string("MINUIT, au Mus") + "\xC3\xA9" + "e royal des beaux-arts d" + "\xE2\x80\x99" +
+                      "Ankh-Morpork");
 }
 
 TEST(XhtmlBody, NumericEntities) {

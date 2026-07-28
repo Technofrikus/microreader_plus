@@ -20,6 +20,7 @@ set(lib_sources
     ${LIB}/content/ZipReader.cpp
     ${LIB}/content/XmlReader.cpp
     ${LIB}/content/CssParser.cpp
+    ${LIB}/content/HtmlEntities.cpp
     ${LIB}/content/EpubParser.cpp
     ${LIB}/content/TextLayout.cpp
     ${LIB}/content/hyphenation/Hyphenation.cpp

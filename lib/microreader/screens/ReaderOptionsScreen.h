@@ -151,6 +151,8 @@ class ReaderOptionsScreen final : public ListMenuScreen {
     toc_ = nullptr;
   }
 
+  void pause() override {}  // keep toc_ alive so resume() → start() can rebuild the list
+
   void update(const ButtonState& buttons, DrawBuffer& buf, IRuntime& runtime) override {
     buf_ = &buf;
     ListMenuScreen::update(buttons, buf, runtime);

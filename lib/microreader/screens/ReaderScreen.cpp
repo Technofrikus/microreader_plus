@@ -38,6 +38,25 @@ uint32_t ReaderScreen::now_ms_() {
 }
 
 // ---------------------------------------------------------------------------
+// ReaderScreen — path helpers
+// ---------------------------------------------------------------------------
+
+std::string ReaderScreen::book_stem_() const {
+  const char* name = path_.c_str();
+  const char* sep = std::strrchr(name, '/');
+#ifdef _WIN32
+  const char* bsep = std::strrchr(name, '\\');
+  if (bsep && (!sep || bsep > sep))
+    sep = bsep;
+#endif
+  if (sep)
+    name = sep + 1;
+  const char* dot = std::strrchr(name, '.');
+  size_t len = dot ? static_cast<size_t>(dot - name) : std::strlen(name);
+  return std::string(name, len);
+}
+
+// ---------------------------------------------------------------------------
 // ReaderScreen — image size resolution
 // ---------------------------------------------------------------------------
 
@@ -346,31 +365,27 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     app_->font_manager()->ensure_ready(buf);
   MR_LOGI("reader", "font ready");
 
-  // Build cache path: <data_dir>/cache/<basename>/book.mrb
-  {
-    const char* name = path_.c_str();
-    const char* sep = std::strrchr(path_.c_str(), '/');
-#ifdef _WIN32
-    const char* bsep = std::strrchr(path_.c_str(), '\\');
-    if (bsep && (!sep || bsep > sep))
-      sep = bsep;
-#endif
-    if (sep)
-      name = sep + 1;
-    const char* dot = std::strrchr(name, '.');
-    size_t name_len = dot ? static_cast<size_t>(dot - name) : std::strlen(name);
-    book_cache_dir_ = std::string(data_dir_) + "/cache/" + std::string(name, name_len);
+  // Build cache path: <data_dir>/cache/<stem>/book.mrb
+  book_cache_dir_ = data_dir_ + "/cache/" + book_stem_();
 #ifdef ESP_PLATFORM
-    mkdir(book_cache_dir_.c_str(), 0775);
+  mkdir(book_cache_dir_.c_str(), 0775);
 #else
-    std::filesystem::create_directories(book_cache_dir_);
+  std::filesystem::create_directories(book_cache_dir_);
 #endif
-    mrb_path_ = book_cache_dir_ + "/book.mrb";
-  }
+  mrb_path_ = book_cache_dir_ + "/book.mrb";
 
   MR_LOGI("reader", "mrb_path='%s'", mrb_path_.c_str());
   bool mrb_ok = mrb_.open(mrb_path_.c_str());
   MR_LOGI("reader", "mrb_ok=%d", (int)mrb_ok);
+
+  const bool cache_only = cache_only_;
+  cache_only_ = false;
+  if (!mrb_ok && cache_only) {
+    MR_LOGI("reader", "cache-only open: MRB missing — returning to book list");
+    open_ok_ = false;
+    if (app_) app_->pop_screen();
+    return;
+  }
   buf_was_touched_ = false;
 
   if (!mrb_ok) {

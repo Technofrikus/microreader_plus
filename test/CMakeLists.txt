@@ -59,6 +59,7 @@ FetchContent_MakeAvailable(googlebenchmark)
 set(LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader)
 
 add_library(microreader_content STATIC
+    ${LIB_DIR}/content/HtmlEntities.cpp
     ${LIB_DIR}/content/ZipReader.cpp
     ${LIB_DIR}/content/XmlReader.cpp
     ${LIB_DIR}/content/CssParser.cpp
@@ -121,6 +122,7 @@ add_executable(unit_tests
     unit/NavigationTest.cpp
     unit/HyphenationTest.cpp
     unit/BmpSleepConverterTest.cpp
+    unit/BookIndexTest.cpp
 )
 target_include_directories(unit_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/support
@@ -162,6 +164,7 @@ add_executable(microreader_tests
     integration/LinkNavigationTest.cpp
     integration/HrBackwardTest.cpp
     unit/LinksScreenTest.cpp
+    unit/BookIndexTest.cpp
 )
 target_include_directories(microreader_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/support

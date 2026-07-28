@@ -53,6 +53,9 @@ class ReaderScreen final : public IScreen {
   bool render_current_page(DrawBuffer& buf);
   bool next_page_and_render(DrawBuffer& buf);
   bool is_open_ok() const;
+  // When set, start() will pop back to the book list instead of converting if
+  // the MRB cache is missing. The flag is consumed (reset to false) in start().
+  void set_cache_only(bool v) { cache_only_ = v; }
 
   // Render benchmark: calls render_page_ `iterations` times on the current page
   // and logs timing stats (per-iteration + summary). ESP32-only; no-op on desktop.
@@ -129,6 +132,7 @@ class ReaderScreen final : public IScreen {
   PageContent page_;
   bool open_ok_ = false;
   bool buf_was_touched_ = false;
+  bool cache_only_ = false;
 
   // Navigation history: stack of positions pushed before following a hyperlink.
   struct NavHistoryEntry {
@@ -177,6 +181,9 @@ class ReaderScreen final : public IScreen {
   // Monotonic milliseconds since boot (esp_timer_get_time on ESP32,
   // steady_clock on desktop). Used for ETA page-time measurement.
   static uint32_t now_ms_();
+
+   // Returns the filename stem of path_ (no directory, no extension).
+   std::string book_stem_() const;
 
   bool decode_image_to_buffer_(uint16_t img_key, uint32_t offset, DrawBuffer& buf, int dest_x, int dest_y,
                                uint16_t max_w, uint16_t max_h, uint16_t src_y = 0, uint16_t clip_h = 0);

@@ -104,6 +104,17 @@ class Application {
   ReaderScreen* reader() {
     return &reader_;
   }
+  // Returns true when the Reader is the top/active screen — used by the main
+  // loop to decide whether scratch-needing index ops (Add/Rename) must be
+  // deferred to avoid corrupting display buffers the Reader is rendering to.
+  bool is_reader_active() const {
+    return screen_mgr_.top() == &reader_;
+  }
+  // Returns the name() of the top/active screen for serial diagnostics.
+  const char* top_screen_name() const {
+    IScreen* top = screen_mgr_.top();
+    return top ? top->name() : "none";
+  }
   SettingsScreen* settings() {
     return &settings_;
   }
@@ -230,6 +241,10 @@ class Application {
   }
 
   void start(DrawBuffer& buf, IRuntime& runtime);
+
+  // Reset the inactivity timer so the device won't sleep. Call each tick
+  // whenever an external connection (e.g. USB serial) is active.
+  void keep_awake() { inactivity_ms_ = 0; }
   // Auto-open a book by path (skips menu, for debugging).
   void auto_open_book(const char* epub_path, DrawBuffer& buf, IRuntime& runtime);
   void update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer& buf, IRuntime& runtime);
