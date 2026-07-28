@@ -363,25 +363,28 @@ Technofrikus/microreader_plus  ← "this repo"     (origin)
 
 > **Why one repo, not three clones:** all three are remotes in this single checkout. Cloning separately means three working trees you can't diff/merge across. Everything is done from here with `git fetch` + `cherry-pick`/`merge`.
 
-### Divergence (measured — re-check with the commands below)
+### Divergence (measured 2026-07-28 — re-check with the commands below)
 
-| Comparison | This repo has | Other has |
-|---|---|---|
-| This repo vs `pablohc/main` (plus) | +24 | 0 |
-| This repo vs `upstream/main` (original) | +68 | **+37** |
-| `pablohc/main` vs `upstream/main` | +44 | +37 |
+**Upstream (`CidVonHighwind/microreader`) is fully merged into this repo.** A prior sync (the "Browser Manager from Upstream" commits on `main`) already brought in the entire upstream history, including `upstream/rework` and all tags through `v2.1-dev.02`. As of this measurement:
 
-**This repo is 37 commits behind the original.** Notable features missing from this repo (live in `upstream/main`, most also in `pablohc`):
+| Comparison | Commits in other NOT in HEAD |
+|---|---|
+| `upstream/main` (original) | **0** |
+| `upstream/rework` | **0** |
+| tag `v2.1-dev.02` | **0** |
+| `pablohc/main` (plus) | 0 |
 
-- **Dark mode** with OS-preference theme toggle (`fd5e07e`)
-- **UTF-8 FATFS filenames** + index migration (`f5ef63b`)
-- **Incremental book reindex** on upload/delete/rename (`6d056ff`)
-- **ACK-paced serial download** (prevents corruption) + 2048 TX buffer (`f9265a3`, `2da8ec9`)
-- **Total/Double Commander WFX plugin** (`17b0f1a`)
-- **CssCache** (load CSS only when needed) (`37916b3`)
-- Calibre plugin download support, font-generator wasm rework, README/docs
+So there is **nothing left to pull from upstream** — the older "37 commits behind" note is stale and has been removed.
 
-`pablohc` also carries fixes not in the original yet (battery-fix, phantom-button-clear, utf8). **Pull from both `pablohc` and `upstream`, not just the original.**
+**Where new features actually come from now:** this repo is forked from `pablohc/microreader_plus`, and `pablohc` carries its own feature branches on top of upstream. On 2026-07-28 these were merged into `main` via the `feat/sync-pablohc-features` branch:
+
+- `pablohc/feat/battery-fix` — deep-sleep current reduction (unmount SD + deep-sleep display) + battery voltage logging
+- `pablohc/fix/phantom-button-clear` — clear phantom button presses after loading-box transitions
+- `pablohc/feat/upstream-sync` — web file-manager page, Calibre plugin, font-generator page, upload/sleep fixes
+
+The **Calibre plugin** (`tools/calibre-plugin/`) was additionally synced directly from `upstream/main` because our fork's copy had diverged and its `download()` used the old non-ACK protocol, which hangs against the firmware's ACK-paced `T` (read) command. Upstream's plugin sends a `0x06` ACK per 2KB chunk, matching the firmware.
+
+> **Pull from `pablohc` for the "plus" extras**, and pull from `upstream` only if a future upstream commit lands that we don't have (the divergence commands below will show it).
 
 ### Workflow for pulling features down
 
@@ -392,13 +395,13 @@ Technofrikus/microreader_plus  ← "this repo"     (origin)
    ```
 2. **Grab a specific feature (fastest, most surgical) — `cherry-pick`:**
    ```bash
-   git cherry-pick f5ef63b          # single commit (e.g. UTF-8 filenames)
-   git cherry-pick fd5e07e..pablohc/feat/dark-mode   # whole topic branch
+   git cherry-pick <commit>            # single commit
+   git cherry-pick <start>..<end>      # whole topic branch
    ```
    Use this when you only want specific features and want to avoid unrelated conflicts.
-3. **Grab everything new from the original — `merge`:**
+3. **Grab everything new from a remote — `merge`:**
    ```bash
-   git merge upstream/main
+   git merge pablohc/feat/<name>   # or upstream/main if it has new commits
    ```
    Expect conflicts in files both sides changed (e.g. `ReaderScreen`, display code, this `AGENTS.md`). Resolve, build, test.
 4. **Validate before declaring success** (see [Tests](#tests) below):
@@ -410,13 +413,15 @@ Technofrikus/microreader_plus  ← "this repo"     (origin)
 ### Useful commands
 
 ```bash
-# Re-measure divergence:
+# Re-measure divergence (should report 0 for upstream/main):
 #   this vs original:   git rev-list --left-right --count HEAD...upstream/main
 #   this vs plus:       git rev-list --left-right --count HEAD...pablohc/main
 #   plus vs original:   git rev-list --left-right --count pablohc/main...upstream/main
 # List commits in original NOT in this repo:
 #   git log --oneline HEAD..upstream/main
-# Sync only the calibre plugin from upstream (legacy one-liner):
+# List commits in a pablohc branch NOT in this repo:
+#   git log --oneline HEAD..pablohc/feat/<name>
+# Sync only the calibre plugin from upstream:
 #   git checkout upstream/main -- tools/calibre-plugin/
 ```
 
