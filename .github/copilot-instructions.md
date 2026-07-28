@@ -31,6 +31,8 @@ tools/                    ← Python scripts (LUT editor, upload, etc.)
 - **`platforms/esp32/`** = **real device**. `epd.h` drives the actual SSD1677 panel over SPI. No simulation needed.
 - **`lib/microreader/`** = **shared application logic**. `Application`, `Canvas`, `DisplayQueue`, `Loop`, screens — runs identically on both platforms. Do NOT modify core files for desktop-only display concerns.
 
+> **⚠️ AGENT RULE — Do NOT build or verify the desktop simulator.** We do **not** use the SDL2 desktop emulator for development or validation. Agents must **never** run the Desktop CMake build (`cmake -S platforms/desktop ...`) or rely on the simulator to check their work. All development, compilation, and testing happens **directly on the ESP32 device** (or QEMU for hardware-free runs). Skip the Desktop build commands entirely.
+
 ## EPUB content pipeline
 
 Located in `lib/microreader/content/`. This is the chain that turns an `.epub` file into rendered pages:
