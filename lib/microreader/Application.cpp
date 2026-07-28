@@ -360,7 +360,7 @@ void microreader::Application::save_settings_() {
   std::fprintf(f, "override_pub_fonts=%u\n", rs.override_publisher_fonts ? 1u : 0u);
   std::fprintf(f, "font_size=%u\n", static_cast<unsigned>(rs.font_size_idx));
   std::fprintf(f, "antialias_enabled=%u\n", rs.antialias_enabled ? 1u : 0u);
-  std::fprintf(f, "avg_page_time=%lu\n", static_cast<unsigned long>(rs.avg_page_time_ms));
+  std::fprintf(f, "avg_ms_per_char=%lu\n", static_cast<unsigned long>(rs.avg_ms_per_char));
 
   // Menu list format
   std::fprintf(f, "list_format=%u\n", static_cast<unsigned>(menu_.list_format()));
@@ -453,8 +453,16 @@ void microreader::Application::load_settings_() {
       rs.font_size_idx = uval < kMaxFontSizes ? static_cast<uint8_t>(uval) : 1;
     else if (std::sscanf(line, "antialias_enabled=%u", &uval) == 1)
       rs.antialias_enabled = (uval != 0);
-    else if (std::sscanf(line, "avg_page_time=%u", &uval) == 1)
-      rs.avg_page_time_ms = uval;
+    else if (std::sscanf(line, "avg_ms_per_char=%u", &uval) == 1)
+      rs.avg_ms_per_char = uval;
+    // Migration: old format stored avg_page_time_ms (ms-per-page). Convert to
+    // ms-per-char Q16 by assuming ~500 chars/page (the old heuristic). This is
+    // a rough bridge so users don't lose their calibrated reading speed on
+    // upgrade; it will be replaced by a real measurement after one page turn.
+    else if (std::sscanf(line, "avg_page_time=%u", &uval) == 1 && uval > 0) {
+      const uint64_t q16 = (static_cast<uint64_t>(uval) << 16) / 500u;
+      rs.avg_ms_per_char = static_cast<uint32_t>(q16);
+    }
     else if (std::sscanf(line, "list_format=%u", &uval) == 1)
       menu_.set_list_format(uval <= 2 ? static_cast<BookListFormat>(uval) : BookListFormat::TitleAndAuthor);
     else if (std::sscanf(line, "sort_order=%u", &uval) == 1)

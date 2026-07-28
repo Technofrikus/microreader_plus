@@ -259,6 +259,20 @@ static std::string make_book_key_legacy(const EpubMetadata& meta, const char* ep
 // ETA tracking
 // ---------------------------------------------------------------------------
 
+// Counts visible text characters (UTF-8 bytes) on the current page by summing
+// LayoutWord.len over all PageTextItem lines. This matches the char_count metric
+// stored in the MRB index, so the ETA is consistent with progress_pct().
+uint32_t ReaderScreen::count_page_chars_() const {
+  uint32_t chars = 0;
+  for (const auto& item : page_.items) {
+    if (const PageTextItem* ti = std::get_if<PageTextItem>(&item)) {
+      for (const LayoutWord& w : ti->line.words)
+        chars += w.len;
+    }
+  }
+  return chars;
+}
+
 void ReaderScreen::track_page_time_() {
   if (page_display_frames_ == 0)
     return;
@@ -269,16 +283,24 @@ void ReaderScreen::track_page_time_() {
 
   // Apply safeguards: only count if within valid range
   if (elapsed_ms >= kMinPageTimeMs && elapsed_ms <= kMaxPageTimeMs) {
-    // Add to circular buffer
-    page_times_[page_time_count_ % kMaxPageTimes] = elapsed_ms;
-    if (page_time_count_ < kMaxPageTimes)
-      ++page_time_count_;
-    has_valid_eta_ = true;
-    // Update global average
-    uint64_t total_time = 0;
-    for (int i = 0; i < page_time_count_; ++i)
-      total_time += page_times_[i];
-    reader_settings_.avg_page_time_ms = static_cast<uint32_t>(total_time / page_time_count_);
+    // Convert page time to ms-per-char (Q16 fixed-point) using the character
+    // count of the page that was just displayed. Pages with no text (e.g. image-
+    // only pages) are skipped — they would produce a degenerate ratio.
+    const uint32_t page_chars = count_page_chars_();
+    if (page_chars > 0) {
+      const uint64_t ms_per_char_q16 =
+          (static_cast<uint64_t>(elapsed_ms) << kMsPerCharShift) / page_chars;
+      ms_per_char_history_[page_time_count_ % kMaxPageTimes] =
+          static_cast<uint32_t>(ms_per_char_q16);
+      if (page_time_count_ < kMaxPageTimes)
+        ++page_time_count_;
+      has_valid_eta_ = true;
+      // Update persisted global average (Q16 fixed-point)
+      uint64_t total = 0;
+      for (int i = 0; i < page_time_count_; ++i)
+        total += ms_per_char_history_[i];
+      reader_settings_.avg_ms_per_char = static_cast<uint32_t>(total / page_time_count_);
+    }
   }
   // Reset frame counter for next page
   page_display_frames_ = 0;
@@ -288,10 +310,11 @@ void ReaderScreen::reset_eta_() {
   page_time_count_ = 0;
   has_valid_eta_ = false;
   page_display_frames_ = 0;
-  // Load persisted average if available
-  if (reader_settings_.avg_page_time_ms > 0) {
+  // Load persisted average if available — pre-fills the history buffer so the
+  // ETA is usable immediately on book open, before new measurements arrive.
+  if (reader_settings_.avg_ms_per_char > 0) {
     for (int i = 0; i < kMaxPageTimes; ++i)
-      page_times_[i] = reader_settings_.avg_page_time_ms;
+      ms_per_char_history_[i] = reader_settings_.avg_ms_per_char;
     page_time_count_ = kMaxPageTimes;
     has_valid_eta_ = true;
   }

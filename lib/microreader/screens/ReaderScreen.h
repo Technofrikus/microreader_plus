@@ -153,11 +153,18 @@ class ReaderScreen final : public IScreen {
   uint8_t hold_prev_frames_ = 0;
   std::vector<PageLink> page_links_;
 
-  // ETA tracking
+  // ETA tracking — measures ms-per-char (reading speed) instead of ms-per-page.
+  // ms-per-char is independent of font size, padding, and image content, so the
+  // ETA stays stable when display settings change. The page display time (in
+  // frames) is still tracked as before; only the per-sample unit changes.
   static constexpr int kMaxPageTimes = 20;
   static constexpr uint32_t kMinPageTimeMs = 5000;   // minimum page display time to count (5s)
   static constexpr uint32_t kMaxPageTimeMs = 300000; // maximum page display time to count (5min)
-  uint32_t page_times_[kMaxPageTimes] = {0};
+  // ms-per-char stored as fixed-point Q16 (value = stored / 65536). This keeps
+  // sub-millisecond precision (a fast reader does ~5-10 ms/char) in a uint32.
+  static constexpr uint32_t kMsPerCharShift = 16;
+  static constexpr uint32_t kMsPerCharScale = 1u << kMsPerCharShift;
+  uint32_t ms_per_char_history_[kMaxPageTimes] = {0};
   int page_time_count_ = 0;
   int page_display_frames_ = 0;
   bool has_valid_eta_ = false;
@@ -226,71 +233,63 @@ class ReaderScreen final : public IScreen {
 
   // Returns estimated time to end of chapter in minutes (0 if not available)
   int eta_minutes_chapter() const {
-    if (!has_valid_eta_ || page_time_count_ < 2)
-      return 0;
-    // Calculate average page time
-    uint64_t total_time = 0;
-    for (int i = 0; i < page_time_count_; ++i)
-      total_time += page_times_[i];
-    uint32_t avg_ms = static_cast<uint32_t>(total_time / page_time_count_);
-    if (avg_ms == 0)
-      return 0;
-
-    // Count remaining pages in chapter
     if (!chapter_src_)
       return 0;
-    uint32_t remaining_pages = 0;
-    // Rough estimate: total paragraphs in chapter minus current, divided by paragraphs per page
-    // This is an approximation since pages can contain multiple paragraphs
-    uint32_t total_para = chapter_src_->paragraph_count();
-    uint32_t current_para = page_pos_.paragraph;
-    if (current_para >= total_para)
+    const uint32_t chapter_chars = mrb_.chapter_char_count(static_cast<uint16_t>(chapter_idx_));
+    if (chapter_chars == 0)
       return 0;
-    // Assume roughly 1-2 paragraphs per page on average
-    remaining_pages = (total_para - current_para + 1) / 2; // rough estimate
-
-    uint64_t eta_ms = (uint64_t)remaining_pages * avg_ms;
-    return static_cast<int>(eta_ms / 60000u); // convert to minutes
+    if (page_.at_chapter_end)
+      return 0;
+    const uint64_t cur =
+        chapter_src_->char_before_para(page_pos_.paragraph) + page_pos_.text_offset;
+    if (cur >= chapter_chars)
+      return 0;
+    return eta_minutes_(chapter_chars - cur);
   }
 
   // Returns estimated time to end of book in minutes (0 if not available)
   int eta_minutes_book() const {
-    if (!has_valid_eta_ || page_time_count_ < 2)
-      return 0;
-    // Calculate average page time
-    uint64_t total_time = 0;
-    for (int i = 0; i < page_time_count_; ++i)
-      total_time += page_times_[i];
-    uint32_t avg_ms = static_cast<uint32_t>(total_time / page_time_count_);
-    if (avg_ms == 0)
-      return 0;
-
-    // Count remaining pages in book (rough estimate)
-    // Use character-based progress to estimate remaining pages
     if (mrb_.paragraph_count() == 0)
       return 0;
-
-    // Get total characters and current position
-    uint64_t total_chars = mrb_.total_char_count();
+    const uint64_t total_chars = mrb_.total_char_count();
     if (total_chars == 0)
       return 0;
-
+    const bool is_last_chapter = chapter_idx_ + 1 >= mrb_.chapter_count();
+    if (page_.at_chapter_end && is_last_chapter)
+      return 0;
     uint64_t chars_before = 0;
     for (size_t i = 0; i < chapter_idx_; ++i)
       chars_before += mrb_.chapter_char_count(static_cast<uint16_t>(i));
-    uint64_t chars_in_current = (chapter_src_ ? chapter_src_->char_before_para(page_pos_.paragraph) : 0) + page_pos_.text_offset;
-    uint64_t remaining_chars = total_chars - chars_before - chars_in_current;
-
-    // Estimate pages per character based on current page
-    // This is a rough heuristic: assume ~500 chars per page on average
-    uint32_t chars_per_page = 500;
-    uint32_t remaining_pages = static_cast<uint32_t>(remaining_chars / chars_per_page) + 1;
-
-    uint64_t eta_ms = (uint64_t)remaining_pages * avg_ms;
-    return static_cast<int>(eta_ms / 60000u); // convert to minutes
+    const uint64_t cur =
+        chars_before + (chapter_src_ ? chapter_src_->char_before_para(page_pos_.paragraph) : 0) + page_pos_.text_offset;
+    if (cur >= total_chars)
+      return 0;
+    return eta_minutes_(total_chars - cur);
   }
 
  private:
+  // Counts the visible text characters (UTF-8 bytes, matching MRB char_count)
+  // on the currently displayed page. Images and HR rules are ignored — image
+  // reading time is not expressible in chars and averages out over the buffer.
+  uint32_t count_page_chars_() const;
+
+  // Shared ETA core: given remaining characters, returns minutes to read them
+  // based on the average ms-per-char from the history buffer. Returns 0 if no
+  // valid measurement is available.
+  int eta_minutes_(uint64_t remaining_chars) const {
+    if (!has_valid_eta_ || page_time_count_ < 2 || remaining_chars == 0)
+      return 0;
+    uint64_t total = 0;
+    for (int i = 0; i < page_time_count_; ++i)
+      total += ms_per_char_history_[i];
+    const uint64_t avg_q16 = total / static_cast<uint64_t>(page_time_count_);
+    if (avg_q16 == 0)
+      return 0;
+    // eta_ms = remaining_chars * avg_ms_per_char = remaining_chars * avg_q16 / 2^16
+    const uint64_t eta_ms = (remaining_chars * avg_q16) >> kMsPerCharShift;
+    return static_cast<int>(eta_ms / 60000u);
+  }
+
   void track_page_time_();
   void reset_eta_();
 };

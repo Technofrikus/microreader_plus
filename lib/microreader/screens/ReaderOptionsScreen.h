@@ -99,7 +99,10 @@ struct ReaderSettings {
   bool eta_chapter_scope() const {
     return progress_mode == ProgressMode::PercentChapter;
   }
-  uint32_t avg_page_time_ms = 0; // Global average page time in ms
+  // Global average reading speed in ms-per-char, stored as Q16 fixed-point
+  // (real value = stored / 65536). Persists across sessions so the ETA is
+  // usable immediately on book open. Replaces the former avg_page_time_ms.
+  uint32_t avg_ms_per_char = 0;
 };
 
 // A hyperlink found on the current reader page.
