@@ -113,6 +113,8 @@ Button0 = back (screen returns false → pop)
 Button1 = select
 Button2 = down / next page
 Button3 = up / prev page
+Up (side, Vol+) = long-press (800 ms) toggles portrait/landscape rotation (hotkey)
+Down (side, Vol-) = short press = prev page in reader
 ```
 
 ## Core systems
@@ -172,7 +174,7 @@ cmake --build build2 --config Debug
 .\build2\Debug\unit_tests.exe
 ```
 
-~375 tests, runs in <1 second. Covers ZipReader, XmlReader, CssParser, EpubParser, ImageDecoder, TextLayout with synthetic fixtures only. **Always run this first.**
+~589 tests, runs in <1 second. Covers ZipReader, XmlReader, CssParser, EpubParser, ImageDecoder, TextLayout, and Input (ButtonState::consume / detect_long_press) with synthetic fixtures only. **Always run this first.**
 
 VS Code task shortcut: **Run Unit Tests** (builds + runs automatically).
 
@@ -241,9 +243,12 @@ Test fixtures in `test/fixtures/` (synthetic EPUBs). Real books in `test/books/`
 - **Display**: SSD1677 e-ink, 800×480 physical, rotated → 480×800 portrait, 1-bit packed (100-byte row stride)
 - **SD card**: FAT32 via SPI (shares bus with display)
 - **Buttons**: ADC-based with hardware auto-repeat
+- **Rotate hotkey (long-press Up)**: Holding the **Up (left side / Vol+)** button for `Application::kRotateHoldMs` (800 ms) toggles portrait↔landscape. Implemented in `Application::update()` via `ButtonState::detect_long_press()`; the Up press is `consume()`d so it never also scrolls/navigates. Persists through the existing `set_rotate_display()` (writes `settings`). Screens override `IScreen::on_rotation_changed()` to re-render in the new orientation (`ReaderScreen` re-lays the page; `ListMenuScreen` redraws the list). A two-button *simultaneous* chord (e.g. Up+Down) is **NOT possible** on this hardware — the side buttons share one ADC resistor-ladder channel and only one is reported per sample (see `platforms/esp32/input.h`).
+- **Conflict with MainMenu's Up long-press**: The MainMenu also uses a long-press of Up (`up_uses_long_press_`) to go up one folder level. To avoid both firing on the same hold, the menu *defers* its folder-navigation decision to **release** and only navigates when the hold was **below** `Application::kRotateHoldMs` (800 ms). So: short tap → move selection up one; medium hold (500–800 ms) → go up one folder; long hold (≥800 ms) → the rotate hotkey claims it. Do **not** re-add an immediate (while-held) `on_long_up()` fire in `ListMenuScreen`, or it will race the rotate hotkey again.
 
 ## Known issues & gotchas
 
+- **Terminal `cd` parameter is REQUIRED**: When invoking the `terminal` tool, you MUST pass the `cd` parameter with an absolute path (e.g. `cd: /Users/tf/Nextcloud/gitfolder/microreader-plus/test`). Do NOT put `cd` inside the command string, and do NOT omit `cd` — the tool rejects input without it ("tool input was not fully received").
 - **ESP32 CMake source list**: New `.cpp` files MUST be added to `platforms/esp32/CMakeLists.txt` explicitly. PIO's LDF auto-discovery does not work for this project structure.
 - **CMake exit code 1**: PIO/CMake may return exit code 1 from miniz deprecation warnings on stderr. This is not an actual error — build succeeds.
 - **Desktop CMake policy warning**: Use `-DCMAKE_POLICY_VERSION_MINIMUM:STRING=3.5` to silence.
