@@ -1071,6 +1071,65 @@ void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRun
       }
       break;
     }
+    case StatusInfo::BatteryIcon:
+      // Icon-only slot: no text. The glyph is drawn by draw_battery_icon_().
+      out[0] = '\0';
+      break;
+  }
+}
+
+// --- Battery icon (scaled to the status-bar size) ---------------------------
+// Mirrors the procedural battery glyph from ListMenuScreen::draw_bottom_() but
+// scales with StatusSize and omits the percent text. Drawn as a 1-bit outline
+// with a charge-level fill. Cost: a handful of fill_rect/fill_row calls, only
+// on page turns (e-reader repaints), so it is effectively free.
+int ReaderScreen::battery_icon_width_(StatusSize size) const {
+  switch (size) {
+    case StatusSize::Large:  return 30;
+    case StatusSize::Medium: return 24;
+    default:                 return 18;
+  }
+}
+
+int ReaderScreen::battery_icon_height_(StatusSize size) const {
+  switch (size) {
+    case StatusSize::Large:  return 14;
+    case StatusSize::Medium: return 11;
+    default:                 return 8;
+  }
+}
+
+void ReaderScreen::draw_battery_icon_(DrawBuffer& buf, int x, int y, StatusSize size, int pct) const {
+  const int w = battery_icon_width_(size);
+  const int h = battery_icon_height_(size);
+  const int nub = std::max(1, h / 4);  // small terminal on the right
+  const int nub_w = std::max(1, w / 12);
+
+  // Outline (rounded-ish corners): top/bottom edges + left/right edges.
+  buf.fill_rect(x + 1, y, w - 2, 1, false);
+  buf.fill_rect(x + 1, y + h - 1, w - 2, 1, false);
+  buf.fill_rect(x, y + 1, 1, h - 2, false);
+  buf.fill_rect(x + w - 1, y + 1, 1, h - 2, false);
+  // Terminal nub on the right.
+  buf.fill_rect(x + w, y + (h - nub) / 2, nub_w, nub, false);
+
+  // Charge fill: width tracks pct (clamped 0..100). Empty/unknown → outline only.
+  if (pct >= 0) {
+    const int inner_x = x + 2;
+    const int inner_w = w - 4;
+    const int filled = (pct * inner_w) / 100;
+    if (filled > 0) {
+      const int fy0 = y + 2;
+      const int fy1 = y + h - 2;
+      // Sloped right edge: fuller = wider, matching the main-menu glyph style.
+      const int max_fill = inner_w;
+      for (int ry = fy0; ry < fy1; ++ry) {
+        const int slope = (ry - fy0 < (fy1 - fy0) / 2) ? (ry - fy0) : (fy1 - 1 - ry);
+        const int extra = std::min(slope, 2);
+        const int x2 = inner_x + std::min(filled + extra, max_fill);
+        buf.fill_row(ry, inner_x, x2, false);
+      }
+    }
   }
 }
 
@@ -1129,17 +1188,29 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runti
         format_status_(reader_settings_.status_middle, mid, sizeof(mid), runtime);
         format_status_(reader_settings_.status_right, right, sizeof(right), runtime);
 
-        if (left[0] != '\0') {
-          buf.draw_text_proportional(pad, baseline, left, std::strlen(left), status_font, false);
-        }
-        if (mid[0] != '\0') {
-          const int mw = static_cast<int>(status_font.word_width(mid, std::strlen(mid), FontStyle::Regular));
-          buf.draw_text_proportional(W90 / 2 - mw / 2, baseline, mid, std::strlen(mid), status_font, false);
-        }
-        if (right[0] != '\0') {
-          const int rw = static_cast<int>(status_font.word_width(right, std::strlen(right), FontStyle::Regular));
-          buf.draw_text_proportional(W90 - pad - rw, baseline, right, std::strlen(right), status_font, false);
-        }
+        // Slot x-positions (left edge of the content for each slot).
+        const int icon_w = battery_icon_width_(reader_settings_.status_size);
+        const int left_x = pad;
+        const int mid_x = W90 / 2 - icon_w / 2;
+        const int right_x = W90 - pad - icon_w;
+
+        // Vertical placement: align the icon's bottom with the text baseline.
+        const int icon_top = baseline - battery_icon_height_(reader_settings_.status_size);
+
+        auto draw_slot = [&](StatusInfo info, const char* text, int x) {
+          if (info == StatusInfo::BatteryIcon) {
+            const int pct = (runtime && runtime->battery_percentage().has_value())
+                                ? static_cast<int>(*runtime->battery_percentage())
+                                : -1;
+            draw_battery_icon_(buf, x, icon_top, reader_settings_.status_size, pct);
+          } else if (text[0] != '\0') {
+            buf.draw_text_proportional(x, baseline, text, std::strlen(text), status_font, false);
+          }
+        };
+
+        draw_slot(reader_settings_.status_left, left, left_x);
+        draw_slot(reader_settings_.status_middle, mid, mid_x);
+        draw_slot(reader_settings_.status_right, right, right_x);
         buf.set_rotation_transform(saved_rotation);
       }
     }

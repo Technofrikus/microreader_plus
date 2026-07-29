@@ -204,8 +204,15 @@ class ReaderScreen final : public IScreen {
   // Draws the progress indicator and nav hints into the bottom margin.
   void draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runtime);
   // Formats one status-bar slot's text into `out` (null-terminated).
-  // `runtime` may be null (e.g. in some test paths); Battery falls back to "--%".
+  // `runtime` may be null (e.g. in some test paths); Battery falls back to "--%",
+  // BatteryIcon leaves `out` empty (drawn as a glyph instead).
   void format_status_(StatusInfo info, char* out, size_t outsz, IRuntime* runtime) const;
+  // Battery-icon glyph dimensions (scaled to the status-bar size).
+  int battery_icon_width_(StatusSize size) const;
+  int battery_icon_height_(StatusSize size) const;
+  // Draws a 1-bit battery icon at (x, y) = top-left, charge level `pct` (0..100,
+  // or <0 when unknown). Scaled by `size`.
+  void draw_battery_icon_(DrawBuffer& buf, int x, int y, StatusSize size, int pct) const;
   // Build page_links_ from current page_ content. Called from render_page_().
   void collect_page_links_();
   // Deferred grayscale pass: writes LSB/MSB planes to BW/RED RAM and triggers
