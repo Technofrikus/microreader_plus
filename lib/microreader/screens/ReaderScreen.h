@@ -123,6 +123,7 @@ class ReaderScreen final : public IScreen {
   std::string pos_path_;       // path to .pos bookmark: <data_dir>/data/<book_key>.pos
   std::string book_key_;       // sanitized title (content-derived), drives .pos filename
   DrawBuffer* buf_ = nullptr;  // set in start(), cleared in stop()
+  IRuntime* runtime_ = nullptr;  // set in start()/resume()/update() for battery reads
   Book book_;
   MrbReader mrb_;
   std::unique_ptr<MrbChapterSource> chapter_src_;
@@ -201,7 +202,10 @@ class ReaderScreen final : public IScreen {
   // Returns the bottom padding required for the progress indicator and nav hints.
   uint16_t bottom_padding_(bool landscape) const;
   // Draws the progress indicator and nav hints into the bottom margin.
-  void draw_bottom_(DrawBuffer& buf, bool landscape);
+  void draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runtime);
+  // Formats one status-bar slot's text into `out` (null-terminated).
+  // `runtime` may be null (e.g. in some test paths); Battery falls back to "--%".
+  void format_status_(StatusInfo info, char* out, size_t outsz, IRuntime* runtime) const;
   // Build page_links_ from current page_ content. Called from render_page_().
   void collect_page_links_();
   // Deferred grayscale pass: writes LSB/MSB planes to BW/RED RAM and triggers

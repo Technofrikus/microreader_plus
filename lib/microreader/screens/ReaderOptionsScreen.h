@@ -45,16 +45,41 @@ enum class ProgressBarMode : uint8_t {
   Book = 2,
 };
 
+// Content shown in one of the three status-bar slots (left / middle / right).
+// All values are cheap to compute per page turn (no extra I/O or allocation).
+enum class StatusInfo : uint8_t {
+  None = 0,
+  PercentBook = 1,      // whole-book reading percentage
+  PercentChapter = 2,   // current-chapter percentage
+  EtaBook = 3,          // estimated time to finish the book
+  EtaChapter = 4,       // estimated time to finish the chapter
+  Battery = 5,          // battery percentage (reuses the main-menu battery reading)
+};
+
+// Status-bar text size — maps onto the existing UI font assets (small/medium/large).
+enum class StatusSize : uint8_t {
+  Small = 0,
+  Medium = 1,
+  Large = 2,
+};
+
 struct ReaderSettings {
   AlignOverride align_override = AlignOverride::Book;
   SpacingOverride spacing_override = SpacingOverride::Spacing_1_0x;
   uint8_t padding_h_idx = 1;                           // horizontal padding preset index (left & right)
   uint8_t padding_v_idx = 1;                           // vertical top padding preset index
   uint8_t font_size_idx = 1;                           // base font size preset index (1 = Normal/24px)
-  ProgressMode progress_mode = ProgressMode::None;  // reading progress indicator mode (percentage display)
-  ProgressBarMode progress_bar_mode = ProgressBarMode::None; // New setting
+  ProgressMode progress_mode = ProgressMode::None;  // (legacy) reading progress indicator mode
+  ProgressBarMode progress_bar_mode = ProgressBarMode::None; // (legacy) thin progress bar scope
   bool override_publisher_fonts = false;               // ignore publisher's font sizes
   bool antialias_enabled = true;                       // grayscale anti-aliasing on text
+
+  // Three-slot status bar. Each slot independently shows one StatusInfo value.
+  // Defaults match the previous single-centred behaviour plus the requested layout.
+  StatusInfo status_left = StatusInfo::EtaChapter;
+  StatusInfo status_middle = StatusInfo::PercentChapter;
+  StatusInfo status_right = StatusInfo::EtaBook;
+  StatusSize status_size = StatusSize::Small;          // text size for the whole status bar
 
   static constexpr uint16_t kHPaddingPresets[] = {4, 12, 24, 40};
   static constexpr uint16_t kVPaddingPresets[] = {0, 4, 12, 20};
@@ -66,6 +91,12 @@ struct ReaderSettings {
   static constexpr const char* kAlignNames[] = {"Book", "Justify", "Left", "Center", "Right"};
   static constexpr const char* kSpacingNames[] = {"Book", "0.8x", "0.9x", "1.0x", "1.1x", "1.2x"};
   static constexpr const char* kFontSizeNames[] = {"20", "24", "26", "28", "30", "32", "34", "36"};
+
+  static constexpr const char* kStatusInfoNames[] = {"None", "Book %", "Chapter %", "Book ETA",
+                                                     "Chapter ETA", "Battery"};
+  static constexpr const char* kStatusSizeNames[] = {"Small", "Medium", "Large"};
+  static constexpr uint8_t kNumStatusInfo = 6;
+  static constexpr uint8_t kNumStatusSize = 3;
 
   static constexpr uint8_t kNumPresets = 4;
   static constexpr uint8_t kNumAlignPresets = 5;
@@ -83,10 +114,12 @@ struct ReaderSettings {
   }
   // Bottom padding reserved for the progress indicator.
   uint16_t progress_bottom() const {
-    if (progress_mode != ProgressMode::None && progress_mode != ProgressMode::EtaChapter && progress_mode != ProgressMode::EtaBook)
-      return 18;  // Percentage with optional ETA
-    if (progress_mode == ProgressMode::EtaChapter || progress_mode == ProgressMode::EtaBook)
-      return 16;  // ETA only (shorter text)
+    // Any status-bar text (left/middle/right) needs room for the text line.
+    const bool has_status_text =
+        status_left != StatusInfo::None || status_middle != StatusInfo::None || status_right != StatusInfo::None;
+    const uint16_t text_h = (status_size == StatusSize::Large) ? 22 : (status_size == StatusSize::Medium) ? 20 : 18;
+    if (has_status_text)
+      return static_cast<uint16_t>(text_h + (progress_bar_mode != ProgressBarMode::None ? 4 : 0));
     if (progress_bar_mode != ProgressBarMode::None)
       return 8;  // Bar only
     return 6;
@@ -176,7 +209,10 @@ class ReaderOptionsScreen final : public ListMenuScreen {
   int idx_line_spacing_ = -1;
   int idx_font_size_ = -1;
   int idx_progress_bar_ = -1;  // ProgressBar On/Off toggle
-  int idx_progress_ = -1;      // Progress mode (None, Percent, Percent+ETA)
+  int idx_status_left_ = -1;   // Status-bar left slot content
+  int idx_status_middle_ = -1; // Status-bar middle slot content
+  int idx_status_right_ = -1;  // Status-bar right slot content
+  int idx_status_size_ = -1;   // Status-bar text size
   int idx_pub_fonts_ = -1;
   int idx_chapters_ = -1;
   int idx_rotate_display_ = -1;

@@ -8,6 +8,8 @@
 #include "../Application.h"
 #include "../HeapLog.h"
 #include "../display/ui_font_small.h"
+#include "../display/ui_font_medium.h"
+#include "../display/ui_font_large.h"
 
 #ifdef ESP_PLATFORM
 #include <sys/stat.h>
@@ -357,6 +359,7 @@ void ReaderScreen::reset_eta_() {
 
 void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   buf_ = &buf;
+  runtime_ = &runtime;
   book_key_.clear();
   pos_path_.clear();
   MR_LOGI("reader", "start: path='%s'", path_.c_str());
@@ -499,6 +502,7 @@ show_error:
 
 void ReaderScreen::resume(DrawBuffer& buf, IRuntime& runtime) {
   buf_ = &buf;
+  runtime_ = &runtime;
   if (!open_ok_)
     return;
 
@@ -565,6 +569,7 @@ void ReaderScreen::stop() {
 }
 
 void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime& runtime) {
+  runtime_ = &runtime;
   if (!open_ok_) {
     // Auto-pop if the book was never found (no display was touched).
     // Otherwise wait for back button so user can see the error message.
@@ -967,7 +972,7 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
     }
   }
 
-  draw_bottom_(buf, landscape);
+  draw_bottom_(buf, landscape, runtime_);
 
   // ── Timing
   // ──────────────────────────────────────────────────────────────
@@ -997,14 +1002,79 @@ uint16_t ReaderScreen::bottom_padding_(bool landscape) const {
   // Text is 16px tall, drawn at kBarY - 20 (kBarY = H - kBarH).
   // Total reserved from bottom = kBarH (bar) + 20 (text offset above bar).
   const uint16_t text_reserve = static_cast<uint16_t>(kBarH + 20);
-  if (reader_settings_.progress_mode == ProgressMode::None && reader_settings_.progress_bar_mode == ProgressBarMode::None)
+  const bool has_status_text =
+      reader_settings_.status_left != StatusInfo::None || reader_settings_.status_middle != StatusInfo::None ||
+      reader_settings_.status_right != StatusInfo::None;
+  if (!has_status_text && reader_settings_.progress_bar_mode == ProgressBarMode::None)
     return std::max(base, static_cast<uint16_t>(16 + reader_settings_.v_padding() + 2));
   if (reader_settings_.progress_bar_mode != ProgressBarMode::None)
     return std::max(base, static_cast<uint16_t>(text_reserve + reader_settings_.v_padding()));
   return base;
 }
 
-void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape) {
+void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRuntime* runtime) const {
+  out[0] = '\0';
+  switch (info) {
+    case StatusInfo::None:
+      break;
+    case StatusInfo::PercentBook:
+      snprintf(out, outsz, "%d%%", progress_pct());
+      break;
+    case StatusInfo::PercentChapter:
+      snprintf(out, outsz, "%d%%", chapter_progress_pct());
+      break;
+    case StatusInfo::EtaBook: {
+      int eta = eta_minutes_book();
+      if (eta > 0) {
+        if (eta >= 60) {
+          int hrs = eta / 60;
+          int mins = eta % 60;
+          if (mins > 0)
+            snprintf(out, outsz, "%dh %dm", hrs, mins);
+          else
+            snprintf(out, outsz, "%dh", hrs);
+        } else {
+          snprintf(out, outsz, "%dmin", eta);
+        }
+      } else {
+        snprintf(out, outsz, "---");
+      }
+      break;
+    }
+    case StatusInfo::EtaChapter: {
+      int eta = eta_minutes_chapter();
+      if (eta > 0) {
+        if (eta >= 60) {
+          int hrs = eta / 60;
+          int mins = eta % 60;
+          if (mins > 0)
+            snprintf(out, outsz, "%dh %dm", hrs, mins);
+          else
+            snprintf(out, outsz, "%dh", hrs);
+        } else {
+          snprintf(out, outsz, "%dmin", eta);
+        }
+      } else {
+        snprintf(out, outsz, "---");
+      }
+      break;
+    }
+    case StatusInfo::Battery: {
+      if (runtime) {
+        auto pct = runtime->battery_percentage();
+        if (pct.has_value())
+          snprintf(out, outsz, "%d%%", static_cast<int>(*pct));
+        else
+          snprintf(out, outsz, "--%%");
+      } else {
+        snprintf(out, outsz, "--%%");
+      }
+      break;
+    }
+  }
+}
+
+void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runtime) {
   const int W = buf.width();
   const int H = buf.height();
 
@@ -1013,7 +1083,7 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape) {
     const int kBarH = landscape ? 5 : 4;
     const int kBarY = H - kBarH;
 
-    // Draw progress bar if enabled
+    // Draw progress bar if enabled (unchanged behaviour).
     if (reader_settings_.progress_bar_mode != ProgressBarMode::None) {
       int pct = (reader_settings_.progress_bar_mode == ProgressBarMode::Chapter)
                     ? chapter_progress_pct()
@@ -1023,92 +1093,55 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape) {
       buf.fill_rect(bar_w, kBarY, W - bar_w, kBarH, true);  // unfilled portion (white)
     }
 
-    // Draw percentage with optional ETA if mode is not None
-    if (reader_settings_.progress_mode != ProgressMode::None) {
-      // Use scope-appropriate percentage: chapter for chapter ETA, book for book ETA
-      int pct = (reader_settings_.progress_mode == ProgressMode::PercentChapter ||
-                 reader_settings_.progress_mode == ProgressMode::EtaChapter)
-                    ? chapter_progress_pct()
-                    : progress_pct();
+    // Three-slot status text: left / middle / right.
+    // Drawn in the same portrait (Deg90) coordinate frame as the nav hints so
+    // the slots land at the physical bottom edge (left/middle/right) regardless
+    // of the current buffer rotation. Drawing them in the raw buffer frame would
+    // rotate left/right slots 90° and push them off the top/bottom edges.
+    const bool has_status_text =
+        reader_settings_.status_left != StatusInfo::None ||
+        reader_settings_.status_middle != StatusInfo::None ||
+        reader_settings_.status_right != StatusInfo::None;
+    if (has_status_text) {
+      // Pick the status-bar font by the user-selected size (reuses UI assets).
+      BitmapFont status_font;
+      if (reader_settings_.status_size == StatusSize::Large)
+        status_font.init(kFontData_ui_large_mbf, kFontData_ui_large_mbf_size);
+      else if (reader_settings_.status_size == StatusSize::Medium)
+        status_font.init(kFontData_ui_medium_mbf, kFontData_ui_medium_mbf_size);
+      else
+        status_font.init(kFontData_ui_small_mbf, kFontData_ui_small_mbf_size);
+      if (status_font.valid()) {
+        const Rotation saved_rotation = buf.rotation();
+        buf.set_rotation_transform(Rotation::Deg90);
+        const int W90 = buf.width();
+        const int H90 = buf.height();
 
-      // Text position: above the bar with margin to avoid overlap
-      // Text is 16px tall, bar is at kBarY. Move text up by 20px.
-      const int text_y = (reader_settings_.progress_bar_mode != ProgressBarMode::None) ? kBarY - 14 : (landscape ? H - 18 : H - 16);
+        // Baseline: just above the progress bar (if any), else near the bottom.
+        const int bar_h = (reader_settings_.progress_bar_mode != ProgressBarMode::None) ? 4 : 0;
+        const int text_bottom = H90 - bar_h - 2;  // baseline sits this far from bottom
+        const int baseline = text_bottom - static_cast<int>(status_font.y_advance()) +
+                             static_cast<int>(status_font.baseline());
+        const int pad = 6;
 
-      // Format ETA: >60min shows as hours and minutes
-      // Percentage with optional ETA
-      char pct_str[32];
-      if (reader_settings_.progress_mode == ProgressMode::Percent) {
-        snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
-      } else if (reader_settings_.progress_mode == ProgressMode::PercentChapter) {
-        int eta = eta_minutes_chapter();
-        if (eta > 0) {
-          if (eta >= 60) {
-            int hrs = eta / 60;
-            int mins = eta % 60;
-            if (mins > 0)
-              snprintf(pct_str, sizeof(pct_str), "%d%% %dh %dm", pct, hrs, mins);
-            else
-              snprintf(pct_str, sizeof(pct_str), "%d%% %dh", pct, hrs);
-          } else {
-            snprintf(pct_str, sizeof(pct_str), "%d%% %dmin", pct, eta);
-          }
-        } else {
-          snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+        char left[32], mid[32], right[32];
+        format_status_(reader_settings_.status_left, left, sizeof(left), runtime);
+        format_status_(reader_settings_.status_middle, mid, sizeof(mid), runtime);
+        format_status_(reader_settings_.status_right, right, sizeof(right), runtime);
+
+        if (left[0] != '\0') {
+          buf.draw_text_proportional(pad, baseline, left, std::strlen(left), status_font, false);
         }
-      } else if (reader_settings_.progress_mode == ProgressMode::PercentBook) {
-        int eta = eta_minutes_book();
-        if (eta > 0) {
-          if (eta >= 60) {
-            int hrs = eta / 60;
-            int mins = eta % 60;
-            if (mins > 0)
-              snprintf(pct_str, sizeof(pct_str), "%d%% %dh %dm", pct, hrs, mins);
-            else
-              snprintf(pct_str, sizeof(pct_str), "%d%% %dh", pct, hrs);
-          } else {
-            snprintf(pct_str, sizeof(pct_str), "%d%% %dmin", pct, eta);
-          }
-        } else {
-          snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+        if (mid[0] != '\0') {
+          const int mw = static_cast<int>(status_font.word_width(mid, std::strlen(mid), FontStyle::Regular));
+          buf.draw_text_proportional(W90 / 2 - mw / 2, baseline, mid, std::strlen(mid), status_font, false);
         }
-      } else if (reader_settings_.progress_mode == ProgressMode::EtaChapter) {
-        // ETA only (chapter)
-        int eta = eta_minutes_chapter();
-        if (eta > 0) {
-          if (eta >= 60) {
-            int hrs = eta / 60;
-            int mins = eta % 60;
-            if (mins > 0)
-              snprintf(pct_str, sizeof(pct_str), "%dh %dm", hrs, mins);
-            else
-              snprintf(pct_str, sizeof(pct_str), "%dh", hrs);
-          } else {
-            snprintf(pct_str, sizeof(pct_str), "%dmin", eta);
-          }
-        } else {
-          snprintf(pct_str, sizeof(pct_str), "---");
+        if (right[0] != '\0') {
+          const int rw = static_cast<int>(status_font.word_width(right, std::strlen(right), FontStyle::Regular));
+          buf.draw_text_proportional(W90 - pad - rw, baseline, right, std::strlen(right), status_font, false);
         }
-      } else { // EtaBook
-        // ETA only (book)
-        int eta = eta_minutes_book();
-        if (eta > 0) {
-          if (eta >= 60) {
-            int hrs = eta / 60;
-            int mins = eta % 60;
-            if (mins > 0)
-              snprintf(pct_str, sizeof(pct_str), "%dh %dm", hrs, mins);
-            else
-              snprintf(pct_str, sizeof(pct_str), "%dh", hrs);
-          } else {
-            snprintf(pct_str, sizeof(pct_str), "%dmin", eta);
-          }
-        } else {
-          snprintf(pct_str, sizeof(pct_str), "---");
-        }
+        buf.set_rotation_transform(saved_rotation);
       }
-      // Draw text without background to avoid white box covering the bar
-      buf.draw_text_centered(W / 2, text_y, pct_str, true, false);
     }
   }
 

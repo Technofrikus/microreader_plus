@@ -449,6 +449,10 @@ void microreader::Application::save_settings_() {
   std::fprintf(f, "spacing_override=%u\n", static_cast<unsigned>(rs.spacing_override));
   std::fprintf(f, "progress=%u\n", static_cast<unsigned>(rs.progress_mode));
   std::fprintf(f, "progress_bar=%u\n", static_cast<unsigned>(rs.progress_bar_mode));
+  std::fprintf(f, "status_left=%u\n", static_cast<unsigned>(rs.status_left));
+  std::fprintf(f, "status_middle=%u\n", static_cast<unsigned>(rs.status_middle));
+  std::fprintf(f, "status_right=%u\n", static_cast<unsigned>(rs.status_right));
+  std::fprintf(f, "status_size=%u\n", static_cast<unsigned>(rs.status_size));
   std::fprintf(f, "override_pub_fonts=%u\n", rs.override_publisher_fonts ? 1u : 0u);
   std::fprintf(f, "font_size=%u\n", static_cast<unsigned>(rs.font_size_idx));
   std::fprintf(f, "antialias_enabled=%u\n", rs.antialias_enabled ? 1u : 0u);
@@ -539,6 +543,14 @@ void microreader::Application::load_settings_() {
     // progress_scope is now encoded in progress_mode (2=Chapter, 3=Book), ignore old key
     else if (std::sscanf(line, "progress_bar=%u", &uval) == 1)
       rs.progress_bar_mode = (uval <= 2) ? static_cast<ProgressBarMode>(uval) : ProgressBarMode::None;
+    else if (std::sscanf(line, "status_left=%u", &uval) == 1)
+      rs.status_left = (uval < ReaderSettings::kNumStatusInfo) ? static_cast<StatusInfo>(uval) : StatusInfo::None;
+    else if (std::sscanf(line, "status_middle=%u", &uval) == 1)
+      rs.status_middle = (uval < ReaderSettings::kNumStatusInfo) ? static_cast<StatusInfo>(uval) : StatusInfo::None;
+    else if (std::sscanf(line, "status_right=%u", &uval) == 1)
+      rs.status_right = (uval < ReaderSettings::kNumStatusInfo) ? static_cast<StatusInfo>(uval) : StatusInfo::None;
+    else if (std::sscanf(line, "status_size=%u", &uval) == 1)
+      rs.status_size = (uval < ReaderSettings::kNumStatusSize) ? static_cast<StatusSize>(uval) : StatusSize::Small;
     else if (std::sscanf(line, "override_pub_fonts=%u", &uval) == 1)
       rs.override_publisher_fonts = (uval != 0);
     else if (std::sscanf(line, "font_size=%u", &uval) == 1)

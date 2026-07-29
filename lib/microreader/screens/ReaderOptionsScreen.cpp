@@ -192,8 +192,9 @@ void ReaderOptionsScreen::on_start() {
   subtitle3_ = "";
 
   clear_items();
-  idx_justify_ = idx_padding_h_ = idx_padding_v_ = idx_line_spacing_ = idx_progress_bar_ = idx_progress_ =
-      idx_chapters_ = idx_pub_fonts_ = idx_rotate_display_ = idx_links_ = -1;
+  idx_justify_ = idx_padding_h_ = idx_padding_v_ = idx_line_spacing_ = idx_progress_bar_ = idx_status_left_ =
+      idx_status_middle_ = idx_status_right_ = idx_status_size_ = idx_chapters_ = idx_pub_fonts_ =
+      idx_rotate_display_ = idx_links_ = -1;
 
   char tmp[40];
 
@@ -263,22 +264,29 @@ void ReaderOptionsScreen::on_start() {
 
     add_separator();
 
-    // ProgressBar toggle (None/Chapter/Book)
+    // ProgressBar toggle (None/Chapter/Book) — the thin bar, kept separate.
     idx_progress_bar_ = count();
     const char* bar_name = (settings_->progress_bar_mode == ProgressBarMode::None)    ? "None"
                            : (settings_->progress_bar_mode == ProgressBarMode::Chapter) ? "Chapter"
                                                                                         : "Book";
     add_item(fmt_setting(tmp, sizeof(tmp), "Progress Bar", bar_name));
 
-    // Progress mode (None, ETA Chapter, ETA Book, Percent, Percent+ETA Chapter, Percent+ETA Book)
-    idx_progress_ = count();
-    const char* prog_name = settings_->progress_mode == ProgressMode::None              ? "None"
-                            : settings_->progress_mode == ProgressMode::EtaChapter         ? "ETA(Ch)"
-                            : settings_->progress_mode == ProgressMode::EtaBook            ? "ETA(Book)"
-                            : settings_->progress_mode == ProgressMode::Percent              ? "Percent"
-                            : settings_->progress_mode == ProgressMode::PercentChapter     ? "Percent + ETA (Chapter)"
-                                                                                                       : "Percent + ETA (Book)";
-    add_item(fmt_setting(tmp, sizeof(tmp), "Progress", prog_name));
+    // Three status-bar slots (left / middle / right) + text size.
+    idx_status_left_ = count();
+    add_item(fmt_setting(tmp, sizeof(tmp), "Status Left",
+                         ReaderSettings::kStatusInfoNames[static_cast<uint8_t>(settings_->status_left)]));
+
+    idx_status_middle_ = count();
+    add_item(fmt_setting(tmp, sizeof(tmp), "Status Middle",
+                         ReaderSettings::kStatusInfoNames[static_cast<uint8_t>(settings_->status_middle)]));
+
+    idx_status_right_ = count();
+    add_item(fmt_setting(tmp, sizeof(tmp), "Status Right",
+                         ReaderSettings::kStatusInfoNames[static_cast<uint8_t>(settings_->status_right)]));
+
+    idx_status_size_ = count();
+    add_item(fmt_setting(tmp, sizeof(tmp), "Status Size",
+                         ReaderSettings::kStatusSizeNames[static_cast<uint8_t>(settings_->status_size)]));
 
     idx_rotate_display_ = count();
     add_item(fmt_setting(tmp, sizeof(tmp), "Display", app_ && app_->rotate_display() ? "Landscape" : "Portrait"));
@@ -362,8 +370,23 @@ void ReaderOptionsScreen::on_select(int index) {
     refresh_items_(index);
     return;
   }
-  if (index == idx_progress_) {
-    settings_->progress_mode = static_cast<ProgressMode>((static_cast<uint8_t>(settings_->progress_mode) + 1) % 6);
+  if (index == idx_status_left_) {
+    settings_->status_left = static_cast<StatusInfo>((static_cast<uint8_t>(settings_->status_left) + 1) % ReaderSettings::kNumStatusInfo);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_status_middle_) {
+    settings_->status_middle = static_cast<StatusInfo>((static_cast<uint8_t>(settings_->status_middle) + 1) % ReaderSettings::kNumStatusInfo);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_status_right_) {
+    settings_->status_right = static_cast<StatusInfo>((static_cast<uint8_t>(settings_->status_right) + 1) % ReaderSettings::kNumStatusInfo);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_status_size_) {
+    settings_->status_size = static_cast<StatusSize>((static_cast<uint8_t>(settings_->status_size) + 1) % ReaderSettings::kNumStatusSize);
     refresh_items_(index);
     return;
   }
@@ -431,8 +454,23 @@ void ReaderOptionsScreen::on_long_select(int index) {
     refresh_items_(index);
     return;
   }
-  if (index == idx_progress_) {
-    settings_->progress_mode = static_cast<ProgressMode>((static_cast<uint8_t>(settings_->progress_mode) + 5) % 6);
+  if (index == idx_status_left_) {
+    settings_->status_left = static_cast<StatusInfo>((static_cast<uint8_t>(settings_->status_left) + ReaderSettings::kNumStatusInfo - 1) % ReaderSettings::kNumStatusInfo);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_status_middle_) {
+    settings_->status_middle = static_cast<StatusInfo>((static_cast<uint8_t>(settings_->status_middle) + ReaderSettings::kNumStatusInfo - 1) % ReaderSettings::kNumStatusInfo);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_status_right_) {
+    settings_->status_right = static_cast<StatusInfo>((static_cast<uint8_t>(settings_->status_right) + ReaderSettings::kNumStatusInfo - 1) % ReaderSettings::kNumStatusInfo);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_status_size_) {
+    settings_->status_size = static_cast<StatusSize>((static_cast<uint8_t>(settings_->status_size) + ReaderSettings::kNumStatusSize - 1) % ReaderSettings::kNumStatusSize);
     refresh_items_(index);
     return;
   }
