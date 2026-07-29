@@ -13,6 +13,7 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 | 5 | Added ETA estimation in the reader screen (chapter and book) | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
 | 6 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
 | 7 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
+| 8 | Rotate the screen (portrait ↔ landscape) by long-pressing the Select button while reading | — |
 
 ### Tips for merging upstream changes
 
@@ -32,6 +33,7 @@ This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/mi
 - **Long-press UP (in MainMenu):** Navigate up one folder level.
 - **Long-press BACK (in MainMenu):** Delete the selected book.
 - **Long-press BACK (in Last Opened list):** Remove the selected book from the "Last Opened" list.
+- **Long-press SELECT (in Reader):** Rotate the screen between portrait and landscape (hold ~0.5 s). A short tap instead opens the reader options menu.
 - **Long-hold SELECT (in Reader):** Cycle through text selection settings in reverse (backward).
 
 ### Content management
