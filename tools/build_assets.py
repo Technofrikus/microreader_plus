@@ -25,6 +25,7 @@ import zlib
 DEFAULT_ASSETS = [
     ("bookerly.bin", "resources/fonts/bookerly.bin"),
     ("alegreya.bin", "resources/fonts/alegreya.bin"),
+    ("cartisse.bin", "resources/fonts/cartisse.bin"),
     ("sleep_0.mgr", "resources/sleep/sleep_0.mgr"),
     ("sleep_1.mgr", "resources/sleep/sleep_1.mgr"),
     ("sleep_2.mgr", "resources/sleep/sleep_2.mgr"),

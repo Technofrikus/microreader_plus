@@ -80,7 +80,7 @@ static std::string get_sleep_image_label(const std::string& path) {
 
 static std::string get_font_label(const std::string& font_path) {
   std::string label = "Font: ";
-  if (font_path == "Bookerly" || font_path == "Alegreya") {
+  if (font_path == "Bookerly" || font_path == "Alegreya" || font_path == "Cartisse") {
     label += font_path;
   } else {
     const char* p = font_path.c_str();
@@ -100,6 +100,7 @@ void SettingsScreen::on_start() {
   sd_fonts_.clear();
   sd_fonts_.push_back("Bookerly");
   sd_fonts_.push_back("Alegreya");
+  sd_fonts_.push_back("Cartisse");
   font_sel_idx_ = 0;
 #ifdef ESP_PLATFORM
   DIR* d = opendir("/sdcard/fonts");

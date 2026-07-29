@@ -591,6 +591,12 @@ void microreader::Application::load_settings_() {
   }
   std::fclose(f);
 
+  // Default built-in font: if the user has never selected one (no persisted
+  // custom_font= line), fall back to Cartisse.  An explicit empty string still
+  // means "use the firmware default" (Cartisse), so treat both the same.
+  if (custom_font_path_.empty())
+    custom_font_path_ = "Cartisse";
+
   if (has_old_keys && (!read_new_reader_ctrl || !read_new_menu_ctrl)) {
     if (!read_new_reader_ctrl)
       reader_controls_ = static_cast<ControlMode>((!old_inv_side ? 1 : 0) | (!old_inv_bpage ? 2 : 0));
