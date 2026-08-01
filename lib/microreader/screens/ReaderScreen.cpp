@@ -1153,10 +1153,8 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runti
     }
 
     // Three-slot status text: left / middle / right.
-    // Drawn in the same portrait (Deg90) coordinate frame as the nav hints so
-    // the slots land at the physical bottom edge (left/middle/right) regardless
-    // of the current buffer rotation. Drawing them in the raw buffer frame would
-    // rotate left/right slots 90° and push them off the top/bottom edges.
+    // Drawn in the current rotation frame (like the progress bar) so the slots
+    // sit along the physical bottom edge in both portrait and landscape.
     const bool has_status_text =
         reader_settings_.status_left != StatusInfo::None ||
         reader_settings_.status_middle != StatusInfo::None ||
@@ -1171,14 +1169,10 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runti
       else
         status_font.init(kFontData_ui_small_mbf, kFontData_ui_small_mbf_size);
       if (status_font.valid()) {
-        const Rotation saved_rotation = buf.rotation();
-        buf.set_rotation_transform(Rotation::Deg90);
-        const int W90 = buf.width();
-        const int H90 = buf.height();
-
-        // Baseline: just above the progress bar (if any), else near the bottom.
+        // Use the current rotation frame (W/H already reflect it) so the status
+        // bar follows the bottom edge in both portrait and landscape.
         const int bar_h = (reader_settings_.progress_bar_mode != ProgressBarMode::None) ? 4 : 0;
-        const int text_bottom = H90 - bar_h - 2;  // baseline sits this far from bottom
+        const int text_bottom = H - bar_h - 2;  // baseline sits this far from bottom
         const int baseline = text_bottom - static_cast<int>(status_font.y_advance()) +
                              static_cast<int>(status_font.baseline());
         const int pad = 6;
@@ -1191,8 +1185,8 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runti
         // Slot x-positions (left edge of the content for each slot).
         const int icon_w = battery_icon_width_(reader_settings_.status_size);
         const int left_x = pad;
-        const int mid_x = W90 / 2 - icon_w / 2;
-        const int right_x = W90 - pad - icon_w;
+        const int mid_x = W / 2 - icon_w / 2;
+        const int right_x = W - pad - icon_w;
 
         // Vertical placement: align the icon's bottom with the text baseline.
         const int icon_top = baseline - battery_icon_height_(reader_settings_.status_size);
@@ -1211,7 +1205,6 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runti
         draw_slot(reader_settings_.status_left, left, left_x);
         draw_slot(reader_settings_.status_middle, mid, mid_x);
         draw_slot(reader_settings_.status_right, right, right_x);
-        buf.set_rotation_transform(saved_rotation);
       }
     }
   }
