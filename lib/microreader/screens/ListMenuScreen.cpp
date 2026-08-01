@@ -438,11 +438,19 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
     ++press_count;
     if (btn == logical_up_front || btn == logical_up_side) {
       if (up_uses_long_press_) {
-        // Folder-browsing menu: defer the UP press. It may become a long-press
-        // (go up one folder) or a short tap (move selection up one). We must
-        // wait until release (or the long-press threshold) to decide, so a
-        // long-press never first scrolls the list.
+        // Folder-browsing menu: a tap moves the selection up ONE STEP
+        // IMMEDIATELY (responsive, like DOWN), while a sustained hold still
+        // triggers on_long_up() (go up one folder level). We must NOT defer the
+        // tap to release: doing so made quick repeated taps feel sluggish
+        // because each press only registered on release and could be absorbed
+        // by the long-press arming. The long-press is decided in the hold
+        // section below; a tap that releases early simply does nothing extra
+        // there (the step was already taken on press).
         if (!back_held_) {
+          if (n > 0) {
+            move_up();
+            moved = true;
+          }
           up_press_pending_ = true;
           hold_ms_up_ = 0;
           long_up_triggered_ = false;
@@ -506,9 +514,10 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
   const bool down_held = !back_held_ && (buttons.is_down(logical_down_front) || buttons.is_down(logical_down_side));
 
   // Up button handling depends on the menu mode:
-  //  - Folder-browsing menu (up_uses_long_press_): a held UP goes up one folder
-  //    (long-press) or, on release before the threshold, moves the selection up
-  //    one (short tap). Auto-repeat scrolling is intentionally disabled.
+  //  - Folder-browsing menu (up_uses_long_press_): a tap moves the selection up
+  //    one step immediately (responsive), and a sustained hold (past the
+  //    threshold) triggers on_long_up() to go up one folder level. Auto-repeat
+  //    scrolling is intentionally disabled so a long hold never scrolls.
   //  - Other list menus: behave like DOWN — auto-repeat scroll while held.
   if (up_uses_long_press_) {
     if (up_held) {
@@ -520,15 +529,11 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
         moved = true;
       }
     } else if (up_press_pending_) {
-      // Released before the long-press threshold → treat as a short tap.
+      // Released before the long-press threshold → short tap. The one-step move
+      // was already performed on press (above), so there is nothing to do here
+      // except clear the pending state. A sustained hold is handled by the
+      // up_held branch, which fires on_long_up() and consumes the pending flag.
       up_press_pending_ = false;
-      hold_ms_up_ = 0;
-      long_up_triggered_ = false;
-      if (n > 0 && !back_held_) {
-        move_up();
-        moved = true;
-      }
-    } else {
       hold_ms_up_ = 0;
       long_up_triggered_ = false;
     }
