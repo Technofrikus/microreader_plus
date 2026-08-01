@@ -485,10 +485,6 @@ void MainMenu::populate_list_() {
       at_root ? recent_books_(kRecentCount, bpool) : std::vector<MenuEntry>();
   recent_count_ = static_cast<int>(recent.size());
   if (!recent.empty()) {
-    SeparatorInfo hdr;
-    hdr.before_count = real_count;
-    hdr.label = "Recent";
-    separators_.push_back(hdr);
     for (auto& r : recent) {
       entries_.push_back(std::move(r));
       ++real_count;

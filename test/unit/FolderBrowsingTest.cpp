@@ -88,30 +88,28 @@ TEST_F(FolderBrowsingTest, MainMenu_FolderList_FormatAndSorting) {
   menu.test_on_start();
 
   // Root layout (alphabetical sort):
-  //   [0] "Recent" header (separator)
-  //   [1] Root Book Title   (recent, order 2)
-  //   [2] Dune              (recent, order 1)
-  //   [3] thin divider (separator)
-  //   [4] /Fiction
-  //   [5] /Sci-Fi
-  //   [6] Root Book Title   (the root folder's own book)
+  //   [0] Root Book Title   (recent, order 2)
+  //   [1] Dune              (recent, order 1)
+  //   [2] thin divider (separator)
+  //   [3] /Fiction
+  //   [4] /Sci-Fi
+  //   [5] Root Book Title   (the root folder's own book)
   int n = menu.count();
-  EXPECT_EQ(n, 7);
+  EXPECT_EQ(n, 6);
 
-  EXPECT_EQ(menu.get_item_label(0), "Recent");
-  EXPECT_EQ(menu.get_item_label(1), "Root Book Title");
-  EXPECT_EQ(menu.get_item_label(2), "Dune");
-  EXPECT_EQ(menu.get_item_label(3), "");  // thin divider
+  EXPECT_EQ(menu.get_item_label(0), "Root Book Title");
+  EXPECT_EQ(menu.get_item_label(1), "Dune");
+  EXPECT_EQ(menu.get_item_label(2), "");  // thin divider
   // Folders must have leading /
-  EXPECT_EQ(menu.get_item_label(4), "/Fiction");
-  EXPECT_EQ(menu.get_item_label(5), "/Sci-Fi");
-  EXPECT_EQ(menu.get_item_label(6), "Root Book Title");
+  EXPECT_EQ(menu.get_item_label(3), "/Fiction");
+  EXPECT_EQ(menu.get_item_label(4), "/Sci-Fi");
+  EXPECT_EQ(menu.get_item_label(5), "Root Book Title");
 
   // Initial selection lands on the most recent book (root_book, order 2).
-  EXPECT_EQ(menu.selected_index(), 1);
+  EXPECT_EQ(menu.selected_index(), 0);
 
-  // Select /Fiction (index 4) -> navigate into Fiction
-  menu.test_select(4);
+  // Select /Fiction (index 3) -> navigate into Fiction
+  menu.test_select(3);
   EXPECT_STREQ(menu.current_dir(), (root_dir_ / "Fiction").string().c_str());
 
   // In Fiction (not root): no Recent section — just /.. and dune.epub
@@ -122,9 +120,9 @@ TEST_F(FolderBrowsingTest, MainMenu_FolderList_FormatAndSorting) {
   // Select /.. (index 0) -> navigate up to root_dir
   menu.test_select(0);
   EXPECT_STREQ(menu.current_dir(), root_dir_.string().c_str());
-  EXPECT_EQ(menu.count(), 7);
-  // Highlight should be restored to /Fiction (now index 4)
-  EXPECT_EQ(menu.selected_index(), 4);
+  EXPECT_EQ(menu.count(), 6);
+  // Highlight should be restored to /Fiction (now index 3)
+  EXPECT_EQ(menu.selected_index(), 3);
 
   BookIndex::instance().clear_entries();
 }
@@ -157,30 +155,28 @@ TEST_F(FolderBrowsingTest, MainMenu_RecentSection_ShowsGlobalRecentBooksAtRoot) 
   menu.test_on_start();
 
   // Root layout (alphabetical sort):
-  //   [0] "Recent" header
-  //   [1] Dune        (order 3)
-  //   [2] Foundation  (order 2)
-  //   [3] Root Book Title (order 1)
-  //   [4] thin divider
-  //   [5] /Fiction
-  //   [6] /Sci-Fi
-  //   [7] Root Book Title (root folder's own book)
-  EXPECT_EQ(menu.count(), 8);
-  EXPECT_EQ(menu.get_item_label(0), "Recent");
-  EXPECT_EQ(menu.get_item_label(1), "Dune");
-  EXPECT_EQ(menu.get_item_label(2), "Foundation");
-  EXPECT_EQ(menu.get_item_label(3), "Root Book Title");
-  EXPECT_EQ(menu.get_item_label(4), "");
-  EXPECT_EQ(menu.get_item_label(5), "/Fiction");
-  EXPECT_EQ(menu.get_item_label(6), "/Sci-Fi");
-  EXPECT_EQ(menu.get_item_label(7), "Root Book Title");
+  //   [0] Dune        (order 3)
+  //   [1] Foundation  (order 2)
+  //   [2] Root Book Title (order 1)
+  //   [3] thin divider
+  //   [4] /Fiction
+  //   [5] /Sci-Fi
+  //   [6] Root Book Title (root folder's own book)
+  EXPECT_EQ(menu.count(), 7);
+  EXPECT_EQ(menu.get_item_label(0), "Dune");
+  EXPECT_EQ(menu.get_item_label(1), "Foundation");
+  EXPECT_EQ(menu.get_item_label(2), "Root Book Title");
+  EXPECT_EQ(menu.get_item_label(3), "");
+  EXPECT_EQ(menu.get_item_label(4), "/Fiction");
+  EXPECT_EQ(menu.get_item_label(5), "/Sci-Fi");
+  EXPECT_EQ(menu.get_item_label(6), "Root Book Title");
 
-  // Cursor lands on the restored book (root_book, the recent entry at index 3).
-  EXPECT_EQ(menu.selected_index(), 3);
+  // Cursor lands on the restored book (root_book, the recent entry at index 2).
+  EXPECT_EQ(menu.selected_index(), 2);
 
   // Selecting a Recent entry opens the book directly (no folder navigation).
   // Dune is in Fiction/, so opening it must jump straight to the Reader.
-  menu.test_select(1);
+  menu.test_select(0);
   EXPECT_STREQ(menu.last_selected_book_path().c_str(), dune_path.c_str());
 
   BookIndex::instance().clear_entries();
@@ -206,7 +202,7 @@ TEST_F(FolderBrowsingTest, MainMenu_RecentSection_NotShownInSubfolder) {
   menu.test_on_start();
 
   // Navigate into Fiction. The Recent section must NOT appear in a subfolder.
-  menu.test_select(4);  // /Fiction (index 4 at root)
+  menu.test_select(3);  // /Fiction (index 3 at root)
   EXPECT_STREQ(menu.current_dir(), (root_dir_ / "Fiction").string().c_str());
   EXPECT_EQ(menu.count(), 2);
   EXPECT_EQ(menu.get_item_label(0), "/..");
@@ -235,12 +231,12 @@ TEST_F(FolderBrowsingTest, MainMenu_ReturnFromRecents_StaysAtRoot) {
   menu.set_initial_selection(root_book_path.c_str());
   menu.test_on_start();
 
-  // Root layout: [0] Recent, [1] Dune, [2] Root Book Title, [3] divider,
-  //              [4] /Fiction, [5] /Sci-Fi, [6] Root Book Title
-  EXPECT_EQ(menu.count(), 7);
+  // Root layout: [0] Dune, [1] Root Book Title, [2] divider,
+  //              [3] /Fiction, [4] /Sci-Fi, [5] Root Book Title
+  EXPECT_EQ(menu.count(), 6);
 
-  // Open Dune from the Recent section (index 1).
-  menu.test_select(1);
+  // Open Dune from the Recent section (index 0).
+  menu.test_select(0);
   EXPECT_STREQ(menu.last_selected_book_path().c_str(), dune_path.c_str());
 
   // Simulate returning from the Reader: pause() -> stop() then resume() -> start().
@@ -251,8 +247,8 @@ TEST_F(FolderBrowsingTest, MainMenu_ReturnFromRecents_StaysAtRoot) {
   // Because Dune was opened from recents, we stay at the root (not Fiction/),
   // and the cursor lands back on Dune in the Recent section.
   EXPECT_STREQ(menu.current_dir(), root_dir_.string().c_str());
-  EXPECT_EQ(menu.count(), 7);
-  EXPECT_EQ(menu.selected_index(), 1);
+  EXPECT_EQ(menu.count(), 6);
+  EXPECT_EQ(menu.selected_index(), 0);
 
   BookIndex::instance().clear_entries();
 }
@@ -278,7 +274,7 @@ TEST_F(FolderBrowsingTest, MainMenu_ReturnFromFolder_StaysInFolder) {
   menu.test_on_start();
 
   // Navigate into Fiction, then open Dune from within the folder (index 1).
-  menu.test_select(4);  // /Fiction
+  menu.test_select(3);  // /Fiction
   EXPECT_STREQ(menu.current_dir(), (root_dir_ / "Fiction").string().c_str());
   menu.test_select(1);  // Dune
   EXPECT_STREQ(menu.last_selected_book_path().c_str(), dune_path.c_str());
