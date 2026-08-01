@@ -449,7 +449,9 @@ class EInkDisplay : public microreader::IDisplay {
   }
 
   bool is_busy() const override {
-    return gpio_get_level(EPD_BUSY) == 1;
+    // X3: BUSY is active-LOW (idle=HIGH, busy=LOW). X4 (SSD1677): busy=HIGH.
+    return config_.model == microreader::DeviceModel::X3 ? gpio_get_level(EPD_BUSY) == 0
+                                            : gpio_get_level(EPD_BUSY) == 1;
   }
 
   // Custom grayscale LUT buffer (112 bytes, matches kLutSize in serial_communication.h)
