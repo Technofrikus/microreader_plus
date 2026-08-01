@@ -131,6 +131,13 @@ class MainMenu : public ListMenuScreen {
   std::string current_dir_;
   std::string initial_selection_;   // path to pre-select after scan
   std::string last_selected_path_;  // path of the most recently opened book
+  // Number of recent entries added at the top of the current list (0 when not
+  // at root). Used to detect whether a book was opened from the Recent section.
+  int recent_count_ = 0;
+  // True when the last opened book was selected from the Recent section, so a
+  // return to the menu restores the cursor there (root) instead of navigating
+  // into the book's parent folder.
+  bool opened_from_recents_ = false;
   DrawBuffer* buf_ = nullptr;
   BookListFormat list_format_ = BookListFormat::TitleOnly;
   BookSortOrder sort_order_ = BookSortOrder::Alphabetical;
@@ -142,23 +149,44 @@ class MainMenu : public ListMenuScreen {
   // the list in place without requiring the user to navigate away and back.
   uint64_t cached_generation_ = 0;
 
+  // Number of globally-most-recent books shown in a pinned section at the root.
+  static constexpr int kRecentCount = 3;
+
   std::vector<MenuEntry> entries_;
   mutable std::string label_buf_;
-  int separator_visual_index_ = -1;
+
+  // Visual separators (non-selectable). Each holds its insertion point in the
+  // real-entry stream (before_count = number of real entries preceding it) plus
+  // its computed position in the combined visual list, and an optional centered
+  // label (empty = thin line).
+  struct SeparatorInfo {
+    int before_count = -1;  // number of real entries preceding this separator
+    int visual_index = -1;  // position in the combined visual list
+    std::string label;
+  };
+  std::vector<SeparatorInfo> separators_;
 
   int entries_index_for(int visual) const {
-    if (separator_visual_index_ < 0 || visual < separator_visual_index_) return visual;
-    return visual - 1;
+    if (visual < 0) return visual;
+    int real = visual;
+    for (const auto& s : separators_)
+      if (s.visual_index <= visual) --real;
+    return real;
   }
 
   int visual_for_entries(int real) const {
-    if (separator_visual_index_ < 0 || real < separator_visual_index_) return real;
-    return real + 1;
+    if (real < 0) return real;
+    int visual = real;
+    for (const auto& s : separators_)
+      if (s.before_count <= real) ++visual;
+    return visual;
   }
 
   void scan_directory_(DrawBuffer& buf);
   void populate_list_();
   bool directory_has_epubs_(const std::string& dir_path) const;
+  MenuEntry make_book_entry_(const std::string& path) const;
+  std::vector<MenuEntry> recent_books_(int count, const StringPool& bpool) const;
 };
 
 }  // namespace microreader

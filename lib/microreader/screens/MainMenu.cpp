@@ -150,6 +150,10 @@ void MainMenu::on_select(int index) {
     request_redraw();
   } else {
     last_selected_path_ = e.path;
+    // A book selected from the Recent section (the first recent_count_ entries)
+    // should restore the cursor to recents on return, not navigate into its
+    // parent folder.
+    opened_from_recents_ = real < recent_count_;
     app_->record_book_opened(e.path);
     app_->reader()->set_path(e.path.c_str());
     app_->push_screen(ScreenId::Reader);
@@ -249,17 +253,18 @@ void MainMenu::scan_directory_(DrawBuffer& buf) {
 }
 
 int MainMenu::count() const {
-  int n = static_cast<int>(entries_.size());
-  if (separator_visual_index_ >= 0) ++n;
-  return n;
+  return static_cast<int>(entries_.size()) + static_cast<int>(separators_.size());
 }
 
 bool MainMenu::is_separator(int index) const {
-  return separator_visual_index_ >= 0 && index == separator_visual_index_;
+  for (const auto& s : separators_)
+    if (s.visual_index == index) return true;
+  return false;
 }
 
 std::string_view MainMenu::get_item_label(int index) const {
-  if (is_separator(index)) return {};
+  for (const auto& s : separators_)
+    if (s.visual_index == index) return s.label;
   int real = entries_index_for(index);
   if (real < 0 || real >= static_cast<int>(entries_.size()))
     return {};
@@ -318,12 +323,69 @@ bool MainMenu::directory_has_epubs_(const std::string& dir_path) const {
   return false;
 }
 
+MainMenu::MenuEntry MainMenu::make_book_entry_(const std::string& path) const {
+  MenuEntry e;
+  e.type = EntryType::Book;
+  e.name = filename_sv(path);
+  e.path = path;
+  const StringPool& bpool = BookIndex::instance().pool();
+  const BookIndexEntry* idx = BookIndex::instance().find_entry(path);
+  if (idx) {
+    e.title_ref = idx->title;
+    e.author_ref = idx->author;
+    e.last_open_order = idx->last_open_order;
+  }
+
+  std::string_view title = e.title_ref.view(bpool);
+  std::string_view author = e.author_ref.view(bpool);
+
+  if (list_format_ == BookListFormat::TitleOnly) {
+    if (!title.empty()) e.display_name = title;
+    else e.display_name = filename_sv(e.path);
+  } else if (list_format_ == BookListFormat::Filename) {
+    e.display_name = filename_sv(e.path);
+  } else { // TitleAndAuthor
+    if (!title.empty() && !author.empty()) {
+      e.display_name = std::string(title) + " - " + std::string(author);
+    } else if (!title.empty()) {
+      e.display_name = title;
+    } else {
+      e.display_name = filename_sv(e.path);
+    }
+  }
+  return e;
+}
+
+std::vector<MainMenu::MenuEntry> MainMenu::recent_books_(int count, const StringPool& bpool) const {
+  std::vector<const BookIndexEntry*> opened;
+  for (const auto& e : BookIndex::instance().entries())
+    if (e.last_open_order > 0)
+      opened.push_back(&e);
+  std::stable_sort(opened.begin(), opened.end(),
+                   [](const BookIndexEntry* a, const BookIndexEntry* b) {
+                     return a->last_open_order > b->last_open_order;
+                   });
+
+  std::vector<MenuEntry> result;
+  for (const auto* e : opened) {
+    if (static_cast<int>(result.size()) >= count) break;
+    result.push_back(make_book_entry_(e->path.to_string(bpool)));
+  }
+  return result;
+}
+
 void MainMenu::populate_list_() {
   clear_items();
   entries_.clear();
-  separator_visual_index_ = -1;
+  separators_.clear();
 
   if (books_dir_.empty()) return;
+
+  // If the last opened book was selected from the Recent section, keep the
+  // cursor at the root (where the recent entry lives) instead of navigating
+  // into the book's parent folder on return.
+  const bool stay_at_root = opened_from_recents_;
+  opened_from_recents_ = false;
 
   // Check if books_dir_ has a /books subfolder to default to
 #ifndef ESP_PLATFORM
@@ -345,10 +407,10 @@ void MainMenu::populate_list_() {
     std::string target_path = initial_selection_;
     std::string parent_dir = get_parent_dir(target_path);
 
-    if (is_sub_dir_of(parent_dir, books_dir_)) {
-      current_dir_ = parent_dir;
-    } else {
+    if (stay_at_root || !is_sub_dir_of(parent_dir, books_dir_)) {
       current_dir_ = books_dir_;
+    } else {
+      current_dir_ = parent_dir;
     }
   }
 
@@ -410,7 +472,34 @@ void MainMenu::populate_list_() {
   });
 
   const StringPool& bpool = BookIndex::instance().pool();
+  const bool at_root = is_same_dir(current_dir_, books_dir_);
 
+  separators_.clear();
+  int real_count = 0;
+
+  // ── Recent section (root folder only) ─────────────────────────────────────
+  // Pins the globally-most-recently-opened books at the top so they can be
+  // jumped to without navigating folders. Only shown at the root; subfolders
+  // keep the plain folder list.
+  std::vector<MenuEntry> recent =
+      at_root ? recent_books_(kRecentCount, bpool) : std::vector<MenuEntry>();
+  recent_count_ = static_cast<int>(recent.size());
+  if (!recent.empty()) {
+    SeparatorInfo hdr;
+    hdr.before_count = real_count;
+    hdr.label = "Recent";
+    separators_.push_back(hdr);
+    for (auto& r : recent) {
+      entries_.push_back(std::move(r));
+      ++real_count;
+    }
+    // Thin divider below the recent section.
+    SeparatorInfo div;
+    div.before_count = real_count;
+    separators_.push_back(div);
+  }
+
+  // ── Folder entries ────────────────────────────────────────────────────────
   if (!is_same_dir(current_dir_, books_dir_)) {
     MenuEntry up_entry;
     up_entry.type = EntryType::Directory;
@@ -418,6 +507,7 @@ void MainMenu::populate_list_() {
     up_entry.path = get_parent_dir(current_dir_);
     up_entry.display_name = "/..";
     entries_.push_back(std::move(up_entry));
+    ++real_count;
   }
 
   for (const auto& d : subdirs) {
@@ -431,40 +521,13 @@ void MainMenu::populate_list_() {
     e.path = fullpath;
     e.display_name = "/" + d;
     entries_.push_back(std::move(e));
+    ++real_count;
   }
 
+  // ── Book entries ──────────────────────────────────────────────────────────
   std::vector<MenuEntry> book_entries;
   for (const auto& f : epubs) {
-    MenuEntry e;
-    e.type = EntryType::Book;
-    e.name = f;
-    e.path = current_dir_ + "/" + f;
-    const BookIndexEntry* idx = BookIndex::instance().find_entry(e.path);
-    if (idx) {
-      e.title_ref = idx->title;
-      e.author_ref = idx->author;
-      e.last_open_order = idx->last_open_order;
-    }
-
-    std::string_view title = e.title_ref.view(bpool);
-    std::string_view author = e.author_ref.view(bpool);
-
-    if (list_format_ == BookListFormat::TitleOnly) {
-      if (!title.empty()) e.display_name = title;
-      else e.display_name = filename_sv(e.path);
-    } else if (list_format_ == BookListFormat::Filename) {
-      e.display_name = filename_sv(e.path);
-    } else { // TitleAndAuthor
-      if (!title.empty() && !author.empty()) {
-        e.display_name = std::string(title) + " - " + std::string(author);
-      } else if (!title.empty()) {
-        e.display_name = title;
-      } else {
-        e.display_name = filename_sv(e.path);
-      }
-    }
-
-    book_entries.push_back(std::move(e));
+    book_entries.push_back(make_book_entry_(current_dir_ + "/" + f));
   }
 
   if (sort_order_ == BookSortOrder::LastOpened) {
@@ -491,19 +554,32 @@ void MainMenu::populate_list_() {
                      });
   }
 
-  int num_folders = static_cast<int>(entries_.size());
+  const int book_start = real_count;
   for (auto& b : book_entries) {
     entries_.push_back(std::move(b));
+    ++real_count;
   }
 
+  // Separator between opened and never-opened books (LastOpened sort only).
   if (sort_order_ == BookSortOrder::LastOpened && !book_entries.empty()) {
     for (int i = 0; i < static_cast<int>(book_entries.size()); ++i) {
       if (i > 0 && book_entries[i].last_open_order == 0 &&
           book_entries[i - 1].last_open_order > 0) {
-        separator_visual_index_ = num_folders + i;
+        SeparatorInfo s;
+        s.before_count = book_start + i;
+        separators_.push_back(s);
         break;
       }
     }
+  }
+
+  // Compute each separator's position in the combined visual list.
+  std::stable_sort(separators_.begin(), separators_.end(),
+                   [](const SeparatorInfo& a, const SeparatorInfo& b) {
+                     return a.before_count < b.before_count;
+                   });
+  for (size_t i = 0; i < separators_.size(); ++i) {
+    separators_[i].visual_index = separators_[i].before_count + static_cast<int>(i);
   }
 
   if (!initial_selection_.empty()) {

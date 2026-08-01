@@ -165,6 +165,7 @@ add_executable(microreader_tests
     integration/HrBackwardTest.cpp
     unit/LinksScreenTest.cpp
     unit/BookIndexTest.cpp
+    unit/FolderBrowsingTest.cpp
 )
 target_include_directories(microreader_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/support
