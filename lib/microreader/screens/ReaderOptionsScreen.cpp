@@ -317,6 +317,9 @@ void ReaderOptionsScreen::refresh_items_(int restore_selection) {
   prev_selected_ = restore_selection;
   prev_idx_links_ = idx_links_;
   on_start();  // on_start() applies shift correction and calls set_selected().
+  // on_start() → clear_items() resets scroll_offset_ to 0. Restore it so the
+  // cycled setting stays visible instead of snapping the list back to the top.
+  ensure_visible_();
 }
 
 void ReaderOptionsScreen::on_select(int index) {
