@@ -325,18 +325,30 @@ void ReaderScreen::track_page_time_() {
     // only pages) are skipped — they would produce a degenerate ratio.
     const uint32_t page_chars = count_page_chars_();
     if (page_chars > 0) {
-      const uint64_t ms_per_char_q16 =
-          (static_cast<uint64_t>(elapsed_ms) << kMsPerCharShift) / page_chars;
-      ms_per_char_history_[page_time_count_ % kMaxPageTimes] =
-          static_cast<uint32_t>(ms_per_char_q16);
-      if (page_time_count_ < kMaxPageTimes)
-        ++page_time_count_;
-      has_valid_eta_ = true;
-      // Update persisted global average (Q16 fixed-point)
-      uint64_t total = 0;
-      for (int i = 0; i < page_time_count_; ++i)
-        total += ms_per_char_history_[i];
-      reader_settings_.avg_ms_per_char = static_cast<uint32_t>(total / page_time_count_);
+      // Clamp the raw sample to a sane range before it can skew the average or
+      // overflow the Q16 value (a 5-min page with very few chars would wrap).
+      uint64_t ms_per_char_q16 = (static_cast<uint64_t>(elapsed_ms) << kMsPerCharShift) / page_chars;
+      if (ms_per_char_q16 < kMinMsPerCharQ16)
+        ms_per_char_q16 = kMinMsPerCharQ16;
+      else if (ms_per_char_q16 > kMaxMsPerCharQ16)
+        ms_per_char_q16 = kMaxMsPerCharQ16;
+      const uint32_t sample_q16 = static_cast<uint32_t>(ms_per_char_q16);
+
+      // Exponential moving average: avg = avg + alpha * (sample - avg).
+      // Recent pages dominate, so the ETA adapts to the current pace quickly.
+      if (!has_valid_eta_) {
+        avg_ms_per_char_ = sample_q16;
+        has_valid_eta_ = true;
+      } else {
+        const uint32_t delta = sample_q16 > avg_ms_per_char_ ? sample_q16 - avg_ms_per_char_
+                                                             : avg_ms_per_char_ - sample_q16;
+        const uint32_t correction = static_cast<uint32_t>((static_cast<uint64_t>(delta) * kEtaAlphaQ16) >> kMsPerCharShift);
+        avg_ms_per_char_ = sample_q16 > avg_ms_per_char_ ? avg_ms_per_char_ + correction
+                                                         : avg_ms_per_char_ - correction;
+      }
+      // Persist the running average so the ETA is usable immediately on the
+      // next book open.
+      reader_settings_.avg_ms_per_char = avg_ms_per_char_;
     }
   }
   // Reset start timestamp for next page (will be re-stamped on render)
@@ -344,15 +356,13 @@ void ReaderScreen::track_page_time_() {
 }
 
 void ReaderScreen::reset_eta_() {
-  page_time_count_ = 0;
   has_valid_eta_ = false;
+  avg_ms_per_char_ = 0;
   page_display_start_ms_ = 0;
-  // Load persisted average if available — pre-fills the history buffer so the
-  // ETA is usable immediately on book open, before new measurements arrive.
+  // Load persisted average if available — seeds the EMA so the ETA is usable
+  // immediately on book open, before new measurements arrive.
   if (reader_settings_.avg_ms_per_char > 0) {
-    for (int i = 0; i < kMaxPageTimes; ++i)
-      ms_per_char_history_[i] = reader_settings_.avg_ms_per_char;
-    page_time_count_ = kMaxPageTimes;
+    avg_ms_per_char_ = reader_settings_.avg_ms_per_char;
     has_valid_eta_ = true;
   }
 }

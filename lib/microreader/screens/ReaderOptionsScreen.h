@@ -127,12 +127,6 @@ struct ReaderSettings {
   }
 
   // Check if ETA is shown and which scope
-  bool has_eta() const {
-    return progress_mode == ProgressMode::PercentChapter || progress_mode == ProgressMode::PercentBook;
-  }
-  bool eta_chapter_scope() const {
-    return progress_mode == ProgressMode::PercentChapter;
-  }
   // Global average reading speed in ms-per-char, stored as Q16 fixed-point
   // (real value = stored / 65536). Persists across sessions so the ETA is
   // usable immediately on book open. Replaces the former avg_page_time_ms.

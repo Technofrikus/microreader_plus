@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include <climits>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -173,20 +175,28 @@ class ReaderScreen final : public IScreen {
   // measured with a real monotonic clock (esp_timer_get_time on ESP32,
   // steady_clock on desktop) rather than a frame counter, so it stays accurate
   // even when the main loop stalls on SD I/O or chapter conversion.
-  static constexpr int kMaxPageTimes = 20;
   static constexpr uint32_t kMinPageTimeMs = 5000;   // minimum page display time to count (5s)
   static constexpr uint32_t kMaxPageTimeMs = 300000; // maximum page display time to count (5min)
   // ms-per-char stored as fixed-point Q16 (value = stored / 65536). This keeps
   // sub-millisecond precision (a fast reader does ~5-10 ms/char) in a uint32.
   static constexpr uint32_t kMsPerCharShift = 16;
   static constexpr uint32_t kMsPerCharScale = 1u << kMsPerCharShift;
-  uint32_t ms_per_char_history_[kMaxPageTimes] = {0};
-  int page_time_count_ = 0;
+  // Per-page sample clamp (Q16). Guards against degenerate pages (very few
+  // chars shown for a long time, or dense pages flipped quickly) that would
+  // otherwise skew the average or overflow the Q16 sample value.
+  static constexpr uint32_t kMinMsPerCharQ16 = 1u << kMsPerCharShift;      // ~1 ms/char
+  static constexpr uint32_t kMaxMsPerCharQ16 = 60u << kMsPerCharShift;     // ~60 ms/char
+  // EMA smoothing factor (Q16). alpha = 2/(N+1) with N=10 gives an effective
+  // ~10-page window: recent pages dominate, so the ETA tracks the current pace
+  // and recovers quickly from a burst of fast page flips.
+  static constexpr uint32_t kEtaAlphaQ16 = (2u << kMsPerCharShift) / 11u;  // ~0.1818
+  // Single running average (Q16). No ring buffer needed.
+  uint32_t avg_ms_per_char_ = 0;
+  bool has_valid_eta_ = false;
   // Monotonic-ms timestamp captured when the current page was first rendered.
   // 0 means "no page shown yet". Wraps every ~49.7 days; the elapsed-time
   // math is wrap-safe as long as a single page is shown for < 49 days.
   uint32_t page_display_start_ms_ = 0;
-  bool has_valid_eta_ = false;
 
   // Monotonic milliseconds since boot (esp_timer_get_time on ESP32,
   // steady_clock on desktop). Used for ETA page-time measurement.
@@ -310,20 +320,17 @@ class ReaderScreen final : public IScreen {
   uint32_t count_page_chars_() const;
 
   // Shared ETA core: given remaining characters, returns minutes to read them
-  // based on the average ms-per-char from the history buffer. Returns 0 if no
-  // valid measurement is available.
+  // based on the EMA ms-per-char. Returns 0 if no valid measurement is available.
   int eta_minutes_(uint64_t remaining_chars) const {
-    if (!has_valid_eta_ || page_time_count_ < 2 || remaining_chars == 0)
-      return 0;
-    uint64_t total = 0;
-    for (int i = 0; i < page_time_count_; ++i)
-      total += ms_per_char_history_[i];
-    const uint64_t avg_q16 = total / static_cast<uint64_t>(page_time_count_);
-    if (avg_q16 == 0)
+    if (!has_valid_eta_ || remaining_chars == 0 || avg_ms_per_char_ == 0)
       return 0;
     // eta_ms = remaining_chars * avg_ms_per_char = remaining_chars * avg_q16 / 2^16
-    const uint64_t eta_ms = (remaining_chars * avg_q16) >> kMsPerCharShift;
-    return static_cast<int>(eta_ms / 60000u);
+    // Guard against uint64 overflow: skip the estimate if the product would wrap.
+    if (remaining_chars > UINT64_MAX / avg_ms_per_char_)
+      return 0;
+    const uint64_t eta_ms = (remaining_chars * avg_ms_per_char_) >> kMsPerCharShift;
+    const uint64_t eta_min = eta_ms / 60000u;
+    return eta_min > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(eta_min);
   }
 
   void track_page_time_();
