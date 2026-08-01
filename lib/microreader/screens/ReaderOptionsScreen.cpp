@@ -334,6 +334,12 @@ void ReaderOptionsScreen::on_select(int index) {
     refresh_items_(index);
     return;
   }
+  if (index == idx_line_spacing_) {
+    settings_->spacing_override = static_cast<SpacingOverride>((static_cast<uint8_t>(settings_->spacing_override) + 1) %
+                                                               ReaderSettings::kNumSpacingPresets);
+    refresh_items_(index);
+    return;
+  }
   if (index == idx_pub_fonts_) {
     settings_->override_publisher_fonts = !settings_->override_publisher_fonts;
     refresh_items_(index);
@@ -415,6 +421,11 @@ void ReaderOptionsScreen::on_long_select(int index) {
 
   if (index == idx_justify_) {
     settings_->align_override = static_cast<AlignOverride>((static_cast<uint8_t>(settings_->align_override) + ReaderSettings::kNumAlignPresets - 1) % ReaderSettings::kNumAlignPresets);
+    refresh_items_(index);
+    return;
+  }
+  if (index == idx_line_spacing_) {
+    settings_->spacing_override = static_cast<SpacingOverride>((static_cast<uint8_t>(settings_->spacing_override) + ReaderSettings::kNumSpacingPresets - 1) % ReaderSettings::kNumSpacingPresets);
     refresh_items_(index);
     return;
   }
