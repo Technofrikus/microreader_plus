@@ -1051,12 +1051,12 @@ void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRun
       } else if (eta >= 60) {
         int hrs = eta / 60;
         int mins = eta % 60;
-        if (mins > 0)
-          snprintf(out, outsz, "%dh %dm", hrs, mins);
-        else
+        if (mins == 0)
           snprintf(out, outsz, "%dh", hrs);
+        else
+          snprintf(out, outsz, "%dh %dm", hrs, mins);
       } else {
-        snprintf(out, outsz, "%dmin", eta);
+        snprintf(out, outsz, "%dm", eta);
       }
       break;
     }
@@ -1069,12 +1069,12 @@ void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRun
       } else if (eta >= 60) {
         int hrs = eta / 60;
         int mins = eta % 60;
-        if (mins > 0)
-          snprintf(out, outsz, "%dh %dm", hrs, mins);
-        else
+        if (mins == 0)
           snprintf(out, outsz, "%dh", hrs);
+        else
+          snprintf(out, outsz, "%dh %dm", hrs, mins);
       } else {
-        snprintf(out, outsz, "%dmin", eta);
+        snprintf(out, outsz, "%dm", eta);
       }
       break;
     }
@@ -1203,27 +1203,45 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runti
 
         // Slot x-positions (left edge of the content for each slot).
         const int icon_w = battery_icon_width_(reader_settings_.status_size);
-        const int left_x = pad;
-        const int mid_x = W / 2 - icon_w / 2;
+        const int left_x = pad + icon_w;
+        const int mid_x = W / 2;
         const int right_x = W - pad - icon_w;
 
         // Vertical placement: align the icon's bottom with the text baseline.
         const int icon_top = baseline - battery_icon_height_(reader_settings_.status_size);
 
-        auto draw_slot = [&](StatusInfo info, const char* text, int x) {
+        auto draw_slot = [&](StatusInfo info, const char* text, int x, int align) {
           if (info == StatusInfo::BatteryIcon) {
             const int pct = (runtime && runtime->battery_percentage().has_value())
                                 ? static_cast<int>(*runtime->battery_percentage())
                                 : -1;
-            draw_battery_icon_(buf, x, icon_top, reader_settings_.status_size, pct);
+            // Align the icon the same way as text for this slot.
+            int icon_x = x;
+            if (align == 1)
+              icon_x = x - icon_w / 2;       // center
+            else if (align == -1)
+              icon_x = x - icon_w;           // right edge at x
+            draw_battery_icon_(buf, icon_x, icon_top, reader_settings_.status_size, pct);
           } else if (text[0] != '\0') {
-            buf.draw_text_proportional(x, baseline, text, std::strlen(text), status_font, false);
+            int draw_x = x;
+            if (align == 1) {
+              // Centered slot: anchor the text center on x.
+              const int tw = static_cast<int>(status_font.word_width(text, std::strlen(text), FontStyle::Regular));
+              draw_x = x - tw / 2;
+            } else if (align == -1) {
+              // Right slot: anchor the right edge so longer strings (e.g.
+              // "1h 30m") don't overflow off-screen and clip the minutes.
+              const int tw = static_cast<int>(status_font.word_width(text, std::strlen(text), FontStyle::Regular));
+              draw_x = x - tw;
+            }
+            // align == 0 (left slot): keep left-anchored at x.
+            buf.draw_text_proportional(draw_x, baseline, text, std::strlen(text), status_font, false);
           }
         };
 
-        draw_slot(reader_settings_.status_left, left, left_x);
-        draw_slot(reader_settings_.status_middle, mid, mid_x);
-        draw_slot(reader_settings_.status_right, right, right_x);
+        draw_slot(reader_settings_.status_left, left, left_x, 0);
+        draw_slot(reader_settings_.status_middle, mid, mid_x, 1);
+        draw_slot(reader_settings_.status_right, right, right_x, -1);
       }
     }
   }
