@@ -144,6 +144,8 @@ static BookResult test_book(const std::string& path) {
 class OtherBooksTest : public ::testing::TestWithParam<std::string> {};
 
 TEST_P(OtherBooksTest, ParsesSuccessfully) {
+  if (!fs::exists(GetParam()))
+    GTEST_SKIP() << "No real books found in test/books/other";
   auto r = test_book(GetParam());
 
   // Must open
@@ -169,7 +171,10 @@ TEST_P(OtherBooksTest, ParsesSuccessfully) {
 
 static std::vector<std::string> get_other_books() {
   std::string dir = workspace_root() + "/microreader2/test/books/other";
-  return discover_epubs(dir);
+  auto books = discover_epubs(dir);
+  if (books.empty())
+    books.push_back("__missing__");  // sentinel so the parameterized suite stays instantiated
+  return books;
 }
 
 INSTANTIATE_TEST_SUITE_P(OtherBooks, OtherBooksTest, ::testing::ValuesIn(get_other_books()),
@@ -191,6 +196,8 @@ INSTANTIATE_TEST_SUITE_P(OtherBooks, OtherBooksTest, ::testing::ValuesIn(get_oth
 class GutenbergBooksTest : public ::testing::TestWithParam<std::string> {};
 
 TEST_P(GutenbergBooksTest, ParsesSuccessfully) {
+  if (!fs::exists(GetParam()))
+    GTEST_SKIP() << "No real books found in test/books/gutenberg";
   auto r = test_book(GetParam());
 
   ASSERT_TRUE(r.opened) << "Failed to open: " << r.path << " — " << r.error;
@@ -203,7 +210,10 @@ TEST_P(GutenbergBooksTest, ParsesSuccessfully) {
 
 static std::vector<std::string> get_gutenberg_books() {
   std::string dir = workspace_root() + "/microreader2/test/books/gutenberg";
-  return discover_epubs(dir);
+  auto books = discover_epubs(dir);
+  if (books.empty())
+    books.push_back("__missing__");  // sentinel so the parameterized suite stays instantiated
+  return books;
 }
 
 INSTANTIATE_TEST_SUITE_P(GutenbergBooks, GutenbergBooksTest, ::testing::ValuesIn(get_gutenberg_books()),
@@ -223,6 +233,8 @@ INSTANTIATE_TEST_SUITE_P(GutenbergBooks, GutenbergBooksTest, ::testing::ValuesIn
 class LegacyBooksTest : public ::testing::TestWithParam<std::string> {};
 
 TEST_P(LegacyBooksTest, ParsesSuccessfully) {
+  if (!fs::exists(GetParam()))
+    GTEST_SKIP() << "No real books found in microreader/resources/books or TrustyReader/sd";
   auto r = test_book(GetParam());
 
   ASSERT_TRUE(r.opened) << "Failed to open: " << r.path << " — " << r.error;
@@ -239,6 +251,8 @@ static std::vector<std::string> get_legacy_books() {
     auto books = discover_epubs(dir);
     all.insert(all.end(), books.begin(), books.end());
   }
+  if (all.empty())
+    all.push_back("__missing__");  // sentinel so the parameterized suite stays instantiated
   return all;
 }
 

@@ -255,7 +255,8 @@ TEST(HtmlExportTest, ExportSmallFolderToHtml) {
   ASSERT_TRUE(load_desktop_fonts(font_set, prop_fonts, font_data));
 
   fs::path input_dir = fs::path(small_books_dir());
-  ASSERT_TRUE(fs::exists(input_dir));
+  if (!fs::exists(input_dir))
+    GTEST_SKIP() << "test/books/small not found: " << input_dir;
 
   fs::path output_root = fs::path(repo_root()) / "test" / "output" / "html_export_folder";
   std::error_code ec;
@@ -263,7 +264,8 @@ TEST(HtmlExportTest, ExportSmallFolderToHtml) {
   ASSERT_TRUE(fs::exists(output_root) || !ec) << "output_root=" << output_root << " ec=" << ec.message();
 
   auto books = discover_epubs(input_dir);
-  ASSERT_FALSE(books.empty());
+  if (books.empty())
+    GTEST_SKIP() << "No EPUBs found in " << input_dir;  // real books are gitignored/absent
 
   printf("\nExporting %zu books:\n", books.size());
   std::vector<BookStats> all_stats;
@@ -283,7 +285,8 @@ TEST(HtmlExportTest, ExportAliceIllustrated) {
   ASSERT_TRUE(load_desktop_fonts(font_set, prop_fonts, font_data));
 
   fs::path epub_path = fs::path(small_books_dir()) / "alice-illustrated.epub";
-  ASSERT_TRUE(fs::exists(epub_path)) << "alice-illustrated.epub not found in test/books/small/";
+  if (!fs::exists(epub_path))
+    GTEST_SKIP() << "alice-illustrated.epub not found in test/books/small/";
 
   fs::path output_root = fs::path(repo_root()) / "test" / "output" / "alice_illustrated";
   std::error_code ec;
@@ -302,7 +305,8 @@ TEST(HtmlExportTest, ExportPiranesi) {
   ASSERT_TRUE(load_desktop_fonts(font_set, prop_fonts, font_data));
 
   fs::path epub_path = fs::path(repo_root()) / "sd" / "books" / "Piranesi.epub";
-  ASSERT_TRUE(fs::exists(epub_path)) << "Piranesi.epub not found in sd/books/";
+  if (!fs::exists(epub_path))
+    GTEST_SKIP() << "Piranesi.epub not found in sd/books/";
 
   fs::path output_root = fs::path(repo_root()) / "test" / "output" / "piranesi";
   std::error_code ec;
@@ -321,7 +325,8 @@ TEST(HtmlExportTest, ExportRegressionTest) {
   ASSERT_TRUE(load_desktop_fonts(font_set, prop_fonts, font_data));
 
   fs::path epub_path = fs::path(books_dir()) / "regression_test.epub";
-  ASSERT_TRUE(fs::exists(epub_path)) << "regression_test.epub not found in test/books/";
+  if (!fs::exists(epub_path))
+    GTEST_SKIP() << "regression_test.epub not found in test/books/";
 
   fs::path output_root = fs::path(repo_root()) / "test" / "output" / "regression_test";
   std::error_code ec;

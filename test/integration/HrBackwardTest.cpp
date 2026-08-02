@@ -72,7 +72,8 @@ size_t count_hrs(const PageContent& pc) {
 // ---------------------------------------------------------------------------
 TEST(HrBackwardTest, AliceIllustrated_HrPreservedFromNextChapter) {
   fs::path epub_path = fs::path(small_books_dir()) / "alice-illustrated.epub";
-  ASSERT_TRUE(fs::exists(epub_path)) << "alice-illustrated.epub missing";
+  if (!fs::exists(epub_path))
+    GTEST_SKIP() << "alice-illustrated.epub missing";
 
   Book book;
   ASSERT_EQ(book.open(epub_path.string().c_str()), EpubError::Ok);

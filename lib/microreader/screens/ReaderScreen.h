@@ -23,7 +23,7 @@ namespace microreader {
 // corner showing the raw ETA internals (ms/char, page time, char counts, ETA
 // minutes). Defaults to OFF so the shipping firmware stays clean and small.
 #ifndef MR_ETA_DEBUG
-#define MR_ETA_DEBUG 1
+#define MR_ETA_DEBUG 0
 #endif
 
 // Simple EPUB page viewer.

@@ -29,7 +29,8 @@ namespace fs = std::filesystem;
 // ---------------------------------------------------------------------------
 TEST(DebugLayoutTest, AliceIllustrated) {
   fs::path epub_path = fs::path(small_books_dir()) / "alice-illustrated.epub";
-  ASSERT_TRUE(fs::exists(epub_path)) << "alice-illustrated.epub not found in test/books/small/";
+  if (!fs::exists(epub_path))
+    GTEST_SKIP() << "alice-illustrated.epub not found in test/books/small/";
 
   // ── Open book and convert to MRB ────────────────────────────────────────
   Book book;
@@ -173,7 +174,8 @@ TEST(DebugLayoutTest, AliceIllustrated) {
 // ---------------------------------------------------------------------------
 TEST(DebugLayoutTest, PositionRestoreAtCroppedImage) {
   fs::path epub_path = fs::path(small_books_dir()) / "alice-illustrated.epub";
-  ASSERT_TRUE(fs::exists(epub_path)) << "alice-illustrated.epub not found in test/books/small/";
+  if (!fs::exists(epub_path))
+    GTEST_SKIP() << "alice-illustrated.epub not found in test/books/small/";
 
   Book book;
   ASSERT_EQ(book.open(epub_path.string().c_str()), EpubError::Ok);
@@ -359,7 +361,8 @@ TEST(DebugLayoutTest, BorderHrSanityCheck) {
 
   // animal.epub: chapter headers have border-top-style:solid → should produce HRs
   fs::path animal_path = fs::path(small_books_dir()) / "animal.epub";
-  ASSERT_TRUE(fs::exists(animal_path)) << "animal.epub not found";
+  if (!fs::exists(animal_path))
+    GTEST_SKIP() << "animal.epub not found";
   int animal_hrs = count_hr_items_in_book(animal_path, out_dir / "border_hr_animal.txt");
   ASSERT_GE(animal_hrs, 0) << "animal.epub failed to open/convert";
   std::cout << "animal.epub HR items: " << animal_hrs << "  -> " << (out_dir / "border_hr_animal.txt") << "\n";
@@ -367,7 +370,8 @@ TEST(DebugLayoutTest, BorderHrSanityCheck) {
 
   // alice-illustrated.epub: border is only on box containers, NOT border-top-style → should be 0
   fs::path alice_path = fs::path(small_books_dir()) / "alice-illustrated.epub";
-  ASSERT_TRUE(fs::exists(alice_path)) << "alice-illustrated.epub not found";
+  if (!fs::exists(alice_path))
+    GTEST_SKIP() << "alice-illustrated.epub not found";
   int alice_hrs = count_hr_items_in_book(alice_path, out_dir / "border_hr_alice.txt");
   ASSERT_GE(alice_hrs, 0) << "alice-illustrated.epub failed to open/convert";
   std::cout << "alice-illustrated.epub HR items: " << alice_hrs << "  -> " << (out_dir / "border_hr_alice.txt") << "\n";

@@ -157,7 +157,8 @@ TEST(DitherComparison, AllSdBooks) {
   }
   std::sort(epubs.begin(), epubs.end());
 
-  ASSERT_FALSE(epubs.empty()) << "No EPUBs found in " << books_dir;
+  if (epubs.empty())
+    GTEST_SKIP() << "No EPUBs found in " << books_dir;  // real books are gitignored/absent
 
   int books_with_images = 0;
   for (auto& epub : epubs) {
