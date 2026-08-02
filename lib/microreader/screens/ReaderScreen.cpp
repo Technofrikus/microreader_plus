@@ -880,6 +880,11 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
   opts.padding_bottom = bottom_padding_(landscape);
   opts.padding_left = reader_settings_.h_padding();
   opts.padding_top = static_cast<uint16_t>(kPaddingTop + reader_settings_.v_padding());
+#if MR_ETA_DEBUG
+  // Reserve space at the top for the ETA debug overlay so book text is pushed
+  // below it instead of overlapping.
+  opts.padding_top = static_cast<uint16_t>(opts.padding_top + kEtaDebugTopReserve);
+#endif
   opts.line_height_multiplier_percent = reader_settings_.line_height_multiplier_percent();
   opts.center_text = true;
   opts.override_publisher_fonts = reader_settings_.override_publisher_fonts;
@@ -984,6 +989,10 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
 
   draw_bottom_(buf, landscape, runtime_);
 
+#if MR_ETA_DEBUG
+  draw_eta_debug_(buf);
+#endif
+
   // ── Timing
   // ──────────────────────────────────────────────────────────────
   int n_words = 0;
@@ -1035,37 +1044,37 @@ void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRun
       break;
     case StatusInfo::EtaBook: {
       int eta = eta_minutes_book();
-      if (eta > 0) {
-        if (eta >= 60) {
-          int hrs = eta / 60;
-          int mins = eta % 60;
-          if (mins > 0)
-            snprintf(out, outsz, "%dh %dm", hrs, mins);
-          else
-            snprintf(out, outsz, "%dh", hrs);
-        } else {
-          snprintf(out, outsz, "%dmin", eta);
-        }
-      } else {
+      if (eta < 0) {
         snprintf(out, outsz, "---");
+      } else if (eta == 0) {
+        snprintf(out, outsz, "<1m");
+      } else if (eta >= 60) {
+        int hrs = eta / 60;
+        int mins = eta % 60;
+        if (mins > 0)
+          snprintf(out, outsz, "%dh %dm", hrs, mins);
+        else
+          snprintf(out, outsz, "%dh", hrs);
+      } else {
+        snprintf(out, outsz, "%dmin", eta);
       }
       break;
     }
     case StatusInfo::EtaChapter: {
       int eta = eta_minutes_chapter();
-      if (eta > 0) {
-        if (eta >= 60) {
-          int hrs = eta / 60;
-          int mins = eta % 60;
-          if (mins > 0)
-            snprintf(out, outsz, "%dh %dm", hrs, mins);
-          else
-            snprintf(out, outsz, "%dh", hrs);
-        } else {
-          snprintf(out, outsz, "%dmin", eta);
-        }
-      } else {
+      if (eta < 0) {
         snprintf(out, outsz, "---");
+      } else if (eta == 0) {
+        snprintf(out, outsz, "<1m");
+      } else if (eta >= 60) {
+        int hrs = eta / 60;
+        int mins = eta % 60;
+        if (mins > 0)
+          snprintf(out, outsz, "%dh %dm", hrs, mins);
+        else
+          snprintf(out, outsz, "%dh", hrs);
+      } else {
+        snprintf(out, outsz, "%dmin", eta);
       }
       break;
     }
@@ -1253,6 +1262,107 @@ void ReaderScreen::draw_bottom_(DrawBuffer& buf, bool landscape, IRuntime* runti
 
   buf.set_rotation_transform(saved_rotation);
 }
+
+#if MR_ETA_DEBUG
+void ReaderScreen::draw_eta_debug_(DrawBuffer& buf) const {
+  // Overlay along the top edge of the page, mirroring the status bar at the
+  // bottom. Uses the small UI font so it needs no extra assets. Metrics are
+  // laid out left-to-right and wrap to a second row when they exceed the page
+  // width, so nothing runs off the right edge.
+  BitmapFont dbg_font;
+  dbg_font.init(kFontData_ui_small_mbf, kFontData_ui_small_mbf_size);
+  if (!dbg_font.valid())
+    return;
+
+  const int W = buf.width();
+  // 4px extra inset below the side pad: the bezel above the screen clips the
+  // top rows, so shift the whole block down a bit.
+  const int top = 4;
+
+  // ms/char (Q16) as a readable decimal, e.g. "8.3".
+  char ms_per_char[16];
+  {
+    const uint32_t q = avg_ms_per_char_;
+    const uint32_t whole = q >> kMsPerCharShift;
+    const uint32_t frac = ((q & (kMsPerCharScale - 1)) * 10u) >> kMsPerCharShift;
+    std::snprintf(ms_per_char, sizeof(ms_per_char), "%u.%u", (unsigned)whole,
+                  (unsigned)frac);
+  }
+
+  const uint32_t page_chars = count_page_chars_();
+  const uint32_t chapter_chars =
+      mrb_.chapter_char_count(static_cast<uint16_t>(chapter_idx_));
+  const uint32_t chap_pos =
+      (chapter_src_ ? chapter_src_->char_before_para(page_pos_.paragraph) : 0) +
+      page_pos_.text_offset;
+  // Calculated page time: ms/c * char count. This is the estimated reading
+  // time for this page based on the EMA ms-per-char, not wall-clock time
+  // (which is meaningless on e-ink since the screen doesn't update between
+  // page turns).
+  const uint64_t page_ms =
+      (has_valid_eta_ && page_chars > 0)
+          ? (static_cast<uint64_t>(page_chars) * avg_ms_per_char_) >> kMsPerCharShift
+          : 0;
+
+  // Formats a non-negative integer with thousands separators, e.g. 1234567 ->
+  // "1,234,567".
+  auto with_thousands = [](char* out, size_t outsz, uint32_t v) {
+    char tmp[16];
+    std::snprintf(tmp, sizeof(tmp), "%u", (unsigned)v);
+    const size_t len = std::strlen(tmp);
+    size_t o = 0;
+    for (size_t i = 0; i < len; ++i) {
+      if (i > 0 && (len - i) % 3 == 0 && o < outsz - 1)
+        out[o++] = ',';
+      if (o < outsz - 1)
+        out[o++] = tmp[i];
+    }
+    out[o] = '\0';
+  };
+
+  // Calculated page time in seconds with 2 decimals, e.g. "12.34s".
+  char page_secs[16];
+  std::snprintf(page_secs, sizeof(page_secs), "%u.%02us",
+                (unsigned)(page_ms / 1000), (unsigned)((page_ms % 1000) / 10));
+
+  char chap_pos_s[16], chap_total_s[16], page_chars_s[16];
+  with_thousands(chap_pos_s, sizeof(chap_pos_s), chap_pos);
+  with_thousands(chap_total_s, sizeof(chap_total_s), chapter_chars);
+  with_thousands(page_chars_s, sizeof(page_chars_s), page_chars);
+
+  // Each metric is a small self-contained segment. Only the metrics not already
+  // shown on the status bar are included here. They are joined into a single
+  // line with a pipe separator and centered horizontally.
+  char seg[3][48];
+  std::snprintf(seg[0], sizeof(seg[0]), "ms/c %s v%d", ms_per_char,
+                has_valid_eta_ ? 1 : 0);
+  std::snprintf(seg[1], sizeof(seg[1]), "page %s %sch", page_secs,
+                page_chars_s);
+  std::snprintf(seg[2], sizeof(seg[2]), "chap %s/%s", chap_pos_s,
+                chap_total_s);
+  const int n = 3;
+
+  // Measure the full line (segments plus " | " separators) so we can center it.
+  int total_w = 0;
+  for (int i = 0; i < n; ++i) {
+    total_w += static_cast<int>(dbg_font.word_width(seg[i], std::strlen(seg[i]), FontStyle::Regular));
+    if (i < n - 1)
+      total_w += static_cast<int>(dbg_font.word_width(" | ", 3, FontStyle::Regular));
+  }
+  const int start_x = (W - total_w) / 2;
+
+  int cursor = start_x;
+  const int baseline = top + static_cast<int>(dbg_font.baseline());
+  for (int i = 0; i < n; ++i) {
+    buf.draw_text_proportional(cursor, baseline, seg[i], std::strlen(seg[i]), dbg_font, false);
+    cursor += static_cast<int>(dbg_font.word_width(seg[i], std::strlen(seg[i]), FontStyle::Regular));
+    if (i < n - 1) {
+      buf.draw_text_proportional(cursor, baseline, " | ", 3, dbg_font, false);
+      cursor += static_cast<int>(dbg_font.word_width(" | ", 3, FontStyle::Regular));
+    }
+  }
+}
+#endif
 
 bool ReaderScreen::render_current_page(DrawBuffer& buf) {
   if (!open_ok_)

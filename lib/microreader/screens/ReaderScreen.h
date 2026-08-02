@@ -18,6 +18,14 @@
 
 namespace microreader {
 
+// Compile-time ETA debug overlay. When enabled (via build flag -DMR_ETA_DEBUG=1,
+// or by flipping this to 1), ReaderScreen draws a small overlay in the top-left
+// corner showing the raw ETA internals (ms/char, page time, char counts, ETA
+// minutes). Defaults to OFF so the shipping firmware stays clean and small.
+#ifndef MR_ETA_DEBUG
+#define MR_ETA_DEBUG 1
+#endif
+
 // Simple EPUB page viewer.
 // Renders text using the 8Ã—8 bitmap font scaled 2Ã— (16Ã—16 glyphs).
 // Button2 = next page, Button3 = prev page, Button0 = back to menu.
@@ -94,6 +102,15 @@ class ReaderScreen final : public IScreen {
   static constexpr int kPaddingBottom = 14;
   static constexpr int kPaddingLeft = 12;
   static constexpr int kParaSpacing = 8;
+
+#if MR_ETA_DEBUG
+  // Height reserved at the top of the page for the ETA debug overlay. Enough
+  // for a single row of the small UI font (the metrics fit on one line).
+  static constexpr int kEtaDebugTopReserve = 20;
+  // Horizontal inset from the left/right screen edges for the overlay text.
+  // Avoids the bezel area above the screen.
+  static constexpr int kEtaDebugSidePad = 5;
+#endif
 
   // Build the fixed fallback font used when no proportional font is loaded.
   static FixedFont make_fixed_font() {
@@ -217,6 +234,10 @@ class ReaderScreen final : public IScreen {
   // `runtime` may be null (e.g. in some test paths); Battery falls back to "--%",
   // BatteryIcon leaves `out` empty (drawn as a glyph instead).
   void format_status_(StatusInfo info, char* out, size_t outsz, IRuntime* runtime) const;
+#if MR_ETA_DEBUG
+  // Draws the ETA debug overlay (top-left) showing the raw ETA internals.
+  void draw_eta_debug_(DrawBuffer& buf) const;
+#endif
   // Battery-icon glyph dimensions (scaled to the status-bar size).
   int battery_icon_width_(StatusSize size) const;
   int battery_icon_height_(StatusSize size) const;
@@ -277,39 +298,36 @@ class ReaderScreen final : public IScreen {
     return chapter_chars > 0 ? static_cast<int>(cur * 100u / chapter_chars) : 0;
   }
 
-  // Returns estimated time to end of chapter in minutes (0 if not available)
+  // Returns estimated time to end of chapter in minutes (-1 if not available,
+  // 0 if less than 1 minute).
   int eta_minutes_chapter() const {
     if (!chapter_src_)
-      return 0;
+      return -1;
     const uint32_t chapter_chars = mrb_.chapter_char_count(static_cast<uint16_t>(chapter_idx_));
     if (chapter_chars == 0)
-      return 0;
-    if (page_.at_chapter_end)
-      return 0;
+      return -1;
     const uint64_t cur =
         chapter_src_->char_before_para(page_pos_.paragraph) + page_pos_.text_offset;
     if (cur >= chapter_chars)
-      return 0;
+      return eta_minutes_(0);  // at/after end of chapter → <1m
     return eta_minutes_(chapter_chars - cur);
   }
 
-  // Returns estimated time to end of book in minutes (0 if not available)
+  // Returns estimated time to end of book in minutes (-1 if not available,
+  // 0 if less than 1 minute).
   int eta_minutes_book() const {
     if (mrb_.paragraph_count() == 0)
-      return 0;
+      return -1;
     const uint64_t total_chars = mrb_.total_char_count();
     if (total_chars == 0)
-      return 0;
-    const bool is_last_chapter = chapter_idx_ + 1 >= mrb_.chapter_count();
-    if (page_.at_chapter_end && is_last_chapter)
-      return 0;
+      return -1;
     uint64_t chars_before = 0;
     for (size_t i = 0; i < chapter_idx_; ++i)
       chars_before += mrb_.chapter_char_count(static_cast<uint16_t>(i));
     const uint64_t cur =
         chars_before + (chapter_src_ ? chapter_src_->char_before_para(page_pos_.paragraph) : 0) + page_pos_.text_offset;
     if (cur >= total_chars)
-      return 0;
+      return eta_minutes_(0);  // at/after end of book → <1m
     return eta_minutes_(total_chars - cur);
   }
 
@@ -320,14 +338,18 @@ class ReaderScreen final : public IScreen {
   uint32_t count_page_chars_() const;
 
   // Shared ETA core: given remaining characters, returns minutes to read them
-  // based on the EMA ms-per-char. Returns 0 if no valid measurement is available.
+  // based on the EMA ms-per-char. Returns -1 if no valid measurement is
+  // available, 0 if the remaining time is less than 1 minute.
   int eta_minutes_(uint64_t remaining_chars) const {
-    if (!has_valid_eta_ || remaining_chars == 0 || avg_ms_per_char_ == 0)
+    if (!has_valid_eta_ || avg_ms_per_char_ == 0)
+      return -1;
+    // At the very end (no chars left), the remaining time is under a minute.
+    if (remaining_chars == 0)
       return 0;
     // eta_ms = remaining_chars * avg_ms_per_char = remaining_chars * avg_q16 / 2^16
     // Guard against uint64 overflow: skip the estimate if the product would wrap.
     if (remaining_chars > UINT64_MAX / avg_ms_per_char_)
-      return 0;
+      return -1;
     const uint64_t eta_ms = (remaining_chars * avg_ms_per_char_) >> kMsPerCharShift;
     const uint64_t eta_min = eta_ms / 60000u;
     return eta_min > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(eta_min);
