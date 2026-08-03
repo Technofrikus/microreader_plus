@@ -313,6 +313,23 @@ class ReaderScreen final : public IScreen {
     return eta_minutes_(chapter_chars - cur);
   }
 
+  // 1-based index of the current top paragraph within the chapter (0 if none).
+  uint32_t chapter_para() const {
+    if (!chapter_src_ || chapter_src_->paragraph_count() == 0)
+      return 0;
+    return page_pos_.paragraph + 1;
+  }
+
+  // 1-based index of the current top paragraph within the whole book (0 if none).
+  uint32_t book_para() const {
+    if (mrb_.paragraph_count() == 0)
+      return 0;
+    uint32_t before = 0;
+    for (size_t i = 0; i < chapter_idx_; ++i)
+      before += mrb_.chapter_paragraph_count(static_cast<uint16_t>(i));
+    return before + chapter_para();
+  }
+
   // Returns estimated time to end of book in minutes (-1 if not available,
   // 0 if less than 1 minute).
   int eta_minutes_book() const {

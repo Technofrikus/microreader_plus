@@ -1094,6 +1094,24 @@ void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRun
       // Icon-only slot: no text. The glyph is drawn by draw_battery_icon_().
       out[0] = '\0';
       break;
+    case StatusInfo::ParaChapter:
+      snprintf(out, outsz, "%u", static_cast<unsigned int>(chapter_para()));
+      break;
+    case StatusInfo::ParaBook:
+      snprintf(out, outsz, "%u", static_cast<unsigned int>(book_para()));
+      break;
+    case StatusInfo::ParaChapterTotal: {
+      const uint32_t cur = chapter_para();
+      const uint32_t total = chapter_src_ ? static_cast<uint32_t>(chapter_src_->paragraph_count()) : 0;
+      snprintf(out, outsz, "%u/%u", static_cast<unsigned int>(cur), static_cast<unsigned int>(total));
+      break;
+    }
+    case StatusInfo::ParaBookTotal: {
+      const uint32_t cur = book_para();
+      const uint32_t total = mrb_.paragraph_count();
+      snprintf(out, outsz, "%u/%u", static_cast<unsigned int>(cur), static_cast<unsigned int>(total));
+      break;
+    }
   }
 }
 

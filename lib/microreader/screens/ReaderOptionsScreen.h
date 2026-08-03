@@ -55,6 +55,10 @@ enum class StatusInfo : uint8_t {
   EtaChapter = 4,    // estimated time to finish the chapter
   Battery = 5,        // battery percentage as text (reuses the main-menu battery reading)
   BatteryIcon = 6,    // battery as a glyph only (no percent text), scaled to status size
+  ParaChapter = 7,    // current paragraph within the chapter (1-based)
+  ParaBook = 8,       // current paragraph within the whole book (1-based)
+  ParaChapterTotal = 9,  // current paragraph / total paragraphs in the chapter
+  ParaBookTotal = 10,    // current paragraph / total paragraphs in the book
 };
 
 // Status-bar text size — maps onto the existing UI font assets (small/medium/large).
@@ -94,9 +98,11 @@ struct ReaderSettings {
   static constexpr const char* kFontSizeNames[] = {"20", "24", "26", "28", "30", "32", "34", "36"};
 
   static constexpr const char* kStatusInfoNames[] = {"None", "Book %", "Chapter %", "Book ETA",
-                                                     "Chapter ETA", "Battery", "Battery Icon"};
+                                                     "Chapter ETA", "Battery", "Battery Icon",
+                                                     "Chapter Para", "Book Para", "Chapter Para/Total",
+                                                     "Book Para/Total"};
   static constexpr const char* kStatusSizeNames[] = {"Small", "Medium", "Large"};
-  static constexpr uint8_t kNumStatusInfo = 7;
+  static constexpr uint8_t kNumStatusInfo = 11;
   static constexpr uint8_t kNumStatusSize = 3;
 
   static constexpr uint8_t kNumPresets = 4;
