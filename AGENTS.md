@@ -120,6 +120,7 @@ Down (side, Vol-) = short press = prev page in reader
 ## Core systems
 
 - **DisplayQueue**: dual-buffer (ground_truth + target) phase-based animation. Commands progress over N phases before committing.
+- **Refresh modes** (`DrawBuffer.h`): `refresh()` uses the fast/partial waveform; `full_refresh()` defaults to `RefreshMode::Half` (the slower, cleaner half-refresh waveform). A runtime setting **Half Refresh** (Settings → Appearance: `Never`/`Pages`/`Always`, persisted as `half_refresh=%u` in the settings file) controls whether `refresh()` upgrades to a half refresh. `refresh_page()` is the page-turn variant that honors `Pages` mode; the ReaderScreen uses `refresh_page()` for page turns and `refresh()` elsewhere. `DrawBuffer::HalfRefreshMode` defaults to `Never` (fast path).
 - **Canvas**: z-ordered scene graph with damage-rect redraw. Elements: `CanvasRect`, `CanvasCircle`, `CanvasText`.
 - **Proportional font system** (`BitmapFont.h`, `BitmapFontFormat.h`, `DrawBuffer.h`):
   - **MBF format**: Custom binary font format. One file per pixel size, each containing up to 4 styles (Regular/Bold/Italic/BoldItalic). Generated from TTF via `tools/generate_font.py`.

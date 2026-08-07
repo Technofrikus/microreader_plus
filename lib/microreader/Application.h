@@ -175,6 +175,14 @@ class Application {
     save_settings_();
   }
 
+  DrawBuffer::HalfRefreshMode half_refresh_mode() const {
+    return half_refresh_mode_;
+  }
+  void set_half_refresh_mode(DrawBuffer::HalfRefreshMode m) {
+    half_refresh_mode_ = m;
+    save_settings_();
+  }
+
   int menu_font_size() const {
     return menu_font_size_;
   }
@@ -273,6 +281,7 @@ class Application {
   ControlMode reader_controls_ = ControlMode::Default;
   ControlMode menu_controls_ = ControlMode::Default;
   bool rotate_display_ = false;
+  DrawBuffer::HalfRefreshMode half_refresh_mode_ = DrawBuffer::HalfRefreshMode::Never;
 
   int menu_font_size_ = 0;
   uint16_t open_counter_ = 0;  // monotonically increasing; incremented each time a book is opened
