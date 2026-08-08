@@ -702,6 +702,22 @@ class DrawBuffer {
   };
 
   void show_mgr2_sleep_(Mgr2Source_& src, bool deep_sleep_after) {
+    // Clear residual ghosting from prior page refreshes before rendering the
+    // grayscale sleep image. The grayscale refresh is a single differential
+    // pass; if the panel isn't in a known clean state (e.g. after half
+    // refreshes that leave particles in intermediate states), residual
+    // ghosting bleeds into the sleep image. Drive the panel to clean white
+    // first so the grayscale waveform starts from a well-defined baseline.
+    //
+    // Only needed when half-refresh is enabled: fast/partial refreshes leave
+    // the panel clean enough (main's behavior had no ghosting), while half
+    // refreshes leave residue the grayscale pass can't fully clear. Gating
+    // avoids the ~2s full-refresh delay on the SSD1677 when it isn't needed.
+    if (half_refresh_mode_ != HalfRefreshMode::Never) {
+      fill(true);
+      full_refresh(RefreshMode::Full);
+    }
+
     if (config_.model == DeviceModel::X3) {
       // X3: render MGR2 as 4-level grayscale via dual-plane (NEW=LSB, OLD=MSB).
       // IMG LUTs drive all 4 transitions to distinct gray levels (~908ms).
