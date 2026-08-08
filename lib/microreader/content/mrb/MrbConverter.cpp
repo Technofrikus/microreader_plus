@@ -290,7 +290,6 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
 
 #ifdef ESP_PLATFORM
     long ch_ms = (long)((esp_timer_get_time() - ch_start) / 1000);
-    long wr_ms = (long)(ctx.write_us / 1000);
     total_paras += ctx.para_count;
     if (ch_ms > slowest_ms) {
       slowest_ms = ch_ms;
@@ -530,7 +529,6 @@ void benchmark_image_decode(Book& book, uint8_t* work_buf) {
   // 480×800 → stride=60, output=48 000 bytes (fits in scratch_buf1).
   static constexpr uint16_t kMaxW = DeviceConfig::x4().logical_width();
   static constexpr uint16_t kMaxH = DeviceConfig::x4().logical_height();
-  IZipFile& file = book.file();
   const ZipReader& zip = book.epub().zip();
 
   ESP_LOGI(TAG, "=== IMAGE DECODE TEST START ===");

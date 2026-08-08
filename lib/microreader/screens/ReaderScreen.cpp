@@ -317,6 +317,10 @@ void ReaderScreen::track_page_time_() {
   // Wrap-safe: unsigned subtraction yields the correct delta as long as the
   // page was shown for less than ~49.7 days (uint32 wrap period).
   uint32_t elapsed_ms = now_ms_() - page_display_start_ms_;
+  // Record the measured wall-clock time for the debug overlay, regardless of
+  // whether the sample passes the min/max guards (so the raw reading time is
+  // always visible).
+  last_page_elapsed_ms_ = elapsed_ms;
 
   // Apply safeguards: only count if within valid range
   if (elapsed_ms >= kMinPageTimeMs && elapsed_ms <= kMaxPageTimeMs) {
@@ -1361,6 +1365,14 @@ void ReaderScreen::draw_eta_debug_(DrawBuffer& buf) const {
   std::snprintf(page_secs, sizeof(page_secs), "%u.%02us",
                 (unsigned)(page_ms / 1000), (unsigned)((page_ms % 1000) / 10));
 
+  // Measured wall-clock time the previous page was actually displayed, in
+  // seconds with 2 decimals, e.g. "14.87s". This is the real reading time
+  // (from the monotonic clock) as opposed to the calculated estimate above.
+  char measured_secs[16];
+  std::snprintf(measured_secs, sizeof(measured_secs), "%u.%02us",
+                (unsigned)(last_page_elapsed_ms_ / 1000),
+                (unsigned)((last_page_elapsed_ms_ % 1000) / 10));
+
   char chap_pos_s[16], chap_total_s[16], page_chars_s[16];
   with_thousands(chap_pos_s, sizeof(chap_pos_s), chap_pos);
   with_thousands(chap_total_s, sizeof(chap_total_s), chapter_chars);
@@ -1369,14 +1381,15 @@ void ReaderScreen::draw_eta_debug_(DrawBuffer& buf) const {
   // Each metric is a small self-contained segment. Only the metrics not already
   // shown on the status bar are included here. They are joined into a single
   // line with a pipe separator and centered horizontally.
-  char seg[3][48];
+  char seg[4][48];
   std::snprintf(seg[0], sizeof(seg[0]), "ms/c %s v%d", ms_per_char,
                 has_valid_eta_ ? 1 : 0);
   std::snprintf(seg[1], sizeof(seg[1]), "page %s %sch", page_secs,
                 page_chars_s);
-  std::snprintf(seg[2], sizeof(seg[2]), "chap %s/%s", chap_pos_s,
+  std::snprintf(seg[2], sizeof(seg[2]), "meas %s", measured_secs);
+  std::snprintf(seg[3], sizeof(seg[3]), "chap %s/%s", chap_pos_s,
                 chap_total_s);
-  const int n = 3;
+  const int n = 4;
 
   // Measure the full line (segments plus " | " separators) so we can center it.
   int total_w = 0;

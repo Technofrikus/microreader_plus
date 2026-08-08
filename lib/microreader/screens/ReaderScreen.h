@@ -23,7 +23,7 @@ namespace microreader {
 // corner showing the raw ETA internals (ms/char, page time, char counts, ETA
 // minutes). Defaults to OFF so the shipping firmware stays clean and small.
 #ifndef MR_ETA_DEBUG
-#define MR_ETA_DEBUG 0
+#define MR_ETA_DEBUG 1
 #endif
 
 // Simple EPUB page viewer.
@@ -202,7 +202,7 @@ class ReaderScreen final : public IScreen {
   // chars shown for a long time, or dense pages flipped quickly) that would
   // otherwise skew the average or overflow the Q16 sample value.
   static constexpr uint32_t kMinMsPerCharQ16 = 1u << kMsPerCharShift;      // ~1 ms/char
-  static constexpr uint32_t kMaxMsPerCharQ16 = 60u << kMsPerCharShift;     // ~60 ms/char
+  static constexpr uint32_t kMaxMsPerCharQ16 = 120u << kMsPerCharShift;    // ~120 ms/char
   // EMA smoothing factor (Q16). alpha = 2/(N+1) with N=10 gives an effective
   // ~10-page window: recent pages dominate, so the ETA tracks the current pace
   // and recovers quickly from a burst of fast page flips.
@@ -214,6 +214,10 @@ class ReaderScreen final : public IScreen {
   // 0 means "no page shown yet". Wraps every ~49.7 days; the elapsed-time
   // math is wrap-safe as long as a single page is shown for < 49 days.
   uint32_t page_display_start_ms_ = 0;
+  // Measured wall-clock time (ms) the previous page was displayed, captured in
+  // track_page_time_(). Used by the ETA debug overlay to compare the real
+  // reading time against the calculated estimate.
+  uint32_t last_page_elapsed_ms_ = 0;
 
   // Monotonic milliseconds since boot (esp_timer_get_time on ESP32,
   // steady_clock on desktop). Used for ETA page-time measurement.
