@@ -97,11 +97,6 @@ class DesktopEmulatorDisplay final : public microreader::IDisplay {
 
   void set_grayscale_1p(bool /*v*/) override {}
 
-  void sleep_clear_fast2(const uint8_t*, bool /*turnOffScreen*/ = false) override {
-    // Desktop emulator: nothing to clear; the sim buffer is overwritten by the
-    // next draw. No-op keeps the interface complete.
-  }
-
   void grayscale_refresh_1pass(bool /*turnOffScreen*/ = false) override {
     if (gray_bw_.empty() || gray_red_.empty())
       return;

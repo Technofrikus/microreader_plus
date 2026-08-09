@@ -44,16 +44,6 @@ class IDisplay {
 
   virtual void grayscale_refresh_1pass(bool turnOffScreen = false) {}
 
-  // Drive the panel to a clean BLACK baseline using the fastest ghost-clearing
-  // waveform available. On X3 this is the FAST2 LUT (7 frames, ~228ms) instead
-  // of the FULL LUT (26 frames, ~473ms); on X4 it falls back to a full white
-  // refresh. A black drive (rather than white) gives a stronger ghost-clear
-  // because it pulls residual mid-state particles in the opposite direction
-  // before the grayscale sleep image is drawn. `white_pixels` is the framebuffer
-  // (unused on X3, which generates its own fill); X4 uses it for a white clear.
-  // Does NOT power the panel off — the caller shows the sleep image afterwards.
-  virtual void sleep_clear_fast2(const uint8_t* white_pixels, bool turnOffScreen = false) = 0;
-
   virtual void set_grayscale_1p(bool /*v*/) {}
 
   virtual void revert_grayscale(const uint8_t* prev_pixels) {
@@ -846,30 +836,6 @@ class DrawBuffer {
   }
 
   void show_mgr2_sleep_(Mgr2Source_& src, bool deep_sleep_after) {
-    // Clear residual ghosting from prior page refreshes before rendering the
-    // grayscale sleep image. The grayscale refresh is a single differential
-    // pass; if the panel isn't in a known clean state (e.g. after half
-    // refreshes that leave particles in intermediate states), residual
-    // ghosting bleeds into the sleep image. Drive the panel to clean white
-    // first so the grayscale waveform starts from a well-defined baseline.
-    //
-    // Only needed when half-refresh is enabled: fast/partial refreshes leave
-    // the panel clean enough (main's behavior had no ghosting), while half
-    // refreshes leave residue the grayscale pass can't fully clear. Gating
-    // avoids the clear delay on the SSD1677 when it isn't needed.
-    //
-    // We use white_clear_fast2() (X3: FAST2 LUT, ~228ms) instead of a FULL
-    // refresh (~473ms) — it drives a real white inversion that removes the
-    // ghosting residue at less than half the cost.
-    if (half_refresh_mode_ != HalfRefreshMode::Never) {
-      MR_TIME_STEP("sleep", "clear_white", {
-        fill(false);  // drive to BLACK (not white) for stronger ghost clearing
-        display_.sleep_clear_fast2(active_());
-      });
-    } else {
-      MR_LOGI("sleep", "STEP:clear_white=skipped");
-    }
-
     if (config_.model == DeviceModel::X3) {
       // X3: render MGR2 as 4-level grayscale via dual-plane (NEW=LSB, OLD=MSB).
       // IMG LUTs drive all 4 transitions to distinct gray levels (~908ms).

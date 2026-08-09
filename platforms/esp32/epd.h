@@ -285,39 +285,6 @@ static const uint8_t kX3LutBbFast[] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-// ---- FAST2 (B&W differential, RP=3, 3 phases like GRAY) LUTs ----
-// GRAY structure (3 phases, 5 groups) but with correct B&W transition values from TURBO.
-static const uint8_t kX3LutVcomFast2[] = {
-    0x00, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-static const uint8_t kX3LutWwFast2[] = {
-    0x20, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-static const uint8_t kX3LutBwFast2[] = {
-    0xAA, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-static const uint8_t kX3LutWbFast2[] = {
-    0x55, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-static const uint8_t kX3LutBbFast2[] = {
-    0x10, 0x03, 0x02, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
 // ---- UltraFast (B&W differential, minimal groups for speed) LUTs ----
 // Two phases: TP=(4,2,4,4) RP=1 = 14 groups + TP=(3,1,0,0) RP=1 = 4 groups.
 // Total 18 groups (~343ms). Same VS values as TURBO.
@@ -497,7 +464,7 @@ class EInkDisplay : public microreader::IDisplay {
   int x3_region_sync_w_ = 0;
   int x3_region_sync_h_ = 0;
   int x3_region_sync_stride_ = 0;
-  enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, FAST2, ULTRAFAST };
+  enum class X3LutSet : uint8_t { NONE, FULL, TURBO, IMG, GRAY, FAST, ULTRAFAST };
   X3LutSet x3_loaded_luts_ = X3LutSet::NONE;
 
   const microreader::DeviceConfig config_;
@@ -711,39 +678,6 @@ class EInkDisplay : public microreader::IDisplay {
     setCustomLUT_(nullptr);  // clear flag; OTP LUT restored on next normal refresh
   }
 
-  void sleep_clear_fast2(const uint8_t* white_pixels, bool turnOffScreen = false) override {
-    in_grayscale_mode_ = false;
-    wakeIfNeeded();
-    waitWhileBusy();
-
-    if (config_.model == microreader::DeviceModel::X3) {
-      // FAST2 LUT (7 frames, ~228ms) instead of FULL (26 frames, ~473ms).
-      // Drive a real BLACK inversion (NEW=black, OLD=white) so the BW entry
-      // pulls any mid-state particles toward black, clearing ghosting left by
-      // prior partial refreshes more strongly than a white drive. The sleep
-      // image overwrites both RAMs afterwards, so we skip the redundant OLD
-      // re-sync. The user briefly sees a black screen before the sleep image.
-      if (x3_partial_mode_active_) {
-        sendCommand(CMD_X3_PARTIAL_OUT);
-        x3_partial_mode_active_ = false;
-      }
-      x3LoadLuts_(X3LutSet::FAST2);
-      sendCommand(CMD_X3_VCOM_DI);
-      sendData(0x29);
-      sendData(0x07);
-      x3SendFillPlane_(CMD_X3_WRITE_NEW, kBenchBlack);
-      x3SendFillPlane_(CMD_X3_WRITE_OLD, kBenchWhite);
-      x3Refresh_(turnOffScreen, true, "FAST2-CLEAR");
-      x3_loaded_luts_ = X3LutSet::NONE;
-      x3_red_ram_synced_ = false;
-      x3_first_refresh_ = false;
-      return;
-    }
-
-    // X4: no FAST2 LUT available — fall back to a full white refresh.
-    full_refresh(white_pixels, microreader::RefreshMode::Full, turnOffScreen);
-  }
-
   void grayscale_refresh_1pass(bool turnOffScreen = false) override {
     if (config_.model == microreader::DeviceModel::X3) {
       grayscale_refresh(turnOffScreen);
@@ -782,7 +716,6 @@ class EInkDisplay : public microreader::IDisplay {
     // partial_refresh(). Each set is benched with the value its real call path
     // uses, so the numbers reflect production behaviour.
     static const Entry kEntries[] = {
-        {X3LutSet::FAST2, "FAST2", 0x29, 7},
         {X3LutSet::GRAY, "GRAY", 0xA9, 7},
         {X3LutSet::ULTRAFAST, "ULTRAFAST", 0x29, 18},
         {X3LutSet::FAST, "FAST", 0x29, 18},
@@ -1543,10 +1476,6 @@ class EInkDisplay : public microreader::IDisplay {
       case X3LutSet::FAST:
         vcom = kX3LutVcomFast; ww = kX3LutWwFast; bw = kX3LutBwFast;
         wb = kX3LutWbFast; bb = kX3LutBbFast;
-        break;
-      case X3LutSet::FAST2:
-        vcom = kX3LutVcomFast2; ww = kX3LutWwFast2; bw = kX3LutBwFast2;
-        wb = kX3LutWbFast2; bb = kX3LutBbFast2;
         break;
       case X3LutSet::ULTRAFAST:
         vcom = kX3LutVcomUltraFast; ww = kX3LutWwUltraFast; bw = kX3LutBwUltraFast;

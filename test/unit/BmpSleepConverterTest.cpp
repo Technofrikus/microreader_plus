@@ -19,8 +19,6 @@ class PlaneCapturingDisplay final : public microreader::IDisplay {
  public:
   void full_refresh(const uint8_t*, microreader::RefreshMode, bool, bool) override {}
   void partial_refresh(const uint8_t*, const uint8_t*) override {}
-  void sleep_clear_fast2(const uint8_t*, bool) override {}
-
   void write_ram_bw(const uint8_t* data) override {
     last_bw_.assign(data, data + microreader::DeviceConfig::kMaxPixelBytes);
     bw_calls_++;

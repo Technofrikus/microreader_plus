@@ -20,8 +20,6 @@ class ScreenshotDisplay final : public microreader::IDisplay {
  public:
   void full_refresh(const uint8_t*, microreader::RefreshMode, bool, bool) override {}
   void partial_refresh(const uint8_t*, const uint8_t*) override {}
-  void sleep_clear_fast2(const uint8_t*, bool) override {}
-
   // Save the current render buffer as a 1-bpp uncompressed PNG (logical portrait orientation).
   // Uses deflate STORE blocks (no compression) — ~10x faster than stb for large books.
   // File size is ~50KB/page; binary B&W text is already sparse at 1 bit per pixel.
