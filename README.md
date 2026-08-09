@@ -118,7 +118,7 @@ Simply copy files to the SD card while it is connected to your computer, then re
 
 ## Sleep Screen
 
-The device displays an image when it enters deep sleep. Several images are built into the firmware. You can also add your own by placing BMP files in the `.sleep/` folder on the SD card.
+The device displays an image when it enters deep sleep. Several images are built into the firmware. You can also add your own by placing BMP files in the `sleep/` folder on the SD card.
 
 Supported BMP variants: 1 bpp monochrome, 4 bpp indexed, 8 bpp indexed, 16 bpp RGB565 / BGR555, 24 bpp BGR, 32 bpp BGRA. Use 800×480 pixels for best quality (landscape) or 480×800 (portrait — automatically rotated 90° CCW). Other sizes are scaled to fit.
 
@@ -130,13 +130,13 @@ The first time an image is shown it is converted and cached; subsequent sleeps l
 python tools/serial_cmd.py --port COM4 --upload-sleep "path/to/my_image.bmp"
 ```
 
-**Desktop emulator:** copy any `.bmp` file into `sd/.sleep/`.
+**Desktop emulator:** copy any `.bmp` file into `sd/sleep/`.
 
 ### Selecting a sleep image
 
 Open **Settings → Sleep Image**:
 
-- **Auto** — cycles through all images in `.sleep/`, picking a different one each sleep.
+- **Auto** — cycles through all images in `sleep/`, picking a different one each sleep.
 - **\<filename\>** — pins the device to that specific image.
 
 ## Calibre Plugin

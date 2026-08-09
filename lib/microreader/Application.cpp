@@ -222,7 +222,7 @@ void Application::do_sleep_(DrawBuffer& buf) {
   const long long t_scan = mr_now_us();
   std::vector<std::string> images;
 #ifdef ESP_PLATFORM
-  DIR* d = opendir("/sdcard/.sleep");
+  DIR* d = opendir("/sdcard/sleep");
   if (d) {
     struct dirent* ent;
     while ((ent = readdir(d)) != nullptr) {
@@ -231,16 +231,16 @@ void Application::do_sleep_(DrawBuffer& buf) {
       const char* ext = std::strrchr(ent->d_name, '.');
       if (!ext) continue;
       if (std::strcmp(ext, ".mgr") == 0) {
-        images.push_back(std::string("/sdcard/.sleep/") + ent->d_name);
+        images.push_back(std::string("/sdcard/sleep/") + ent->d_name);
       } else if (std::strcmp(ext, ".bmp") == 0 && data_dir_) {
-        images.push_back(std::string("bmp:/sdcard/.sleep/") + ent->d_name);
+        images.push_back(std::string("bmp:/sdcard/sleep/") + ent->d_name);
       }
     }
     closedir(d);
   }
 #else
   try {
-    for (const auto& entry : fs::directory_iterator("sd/.sleep")) {
+    for (const auto& entry : fs::directory_iterator("sd/sleep")) {
       const auto& p = entry.path();
       if (p.extension() == ".mgr")
         images.push_back(p.string());

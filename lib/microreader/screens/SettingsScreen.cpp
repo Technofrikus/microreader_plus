@@ -154,7 +154,7 @@ void SettingsScreen::on_start() {
   std::vector<std::string> sd_sleep;
 #ifdef ESP_PLATFORM
   {
-    DIR* sd = opendir("/sdcard/.sleep");
+    DIR* sd = opendir("/sdcard/sleep");
     if (sd) {
       struct dirent* ent;
       while ((ent = readdir(sd)) != nullptr) {
@@ -163,16 +163,16 @@ void SettingsScreen::on_start() {
         const char* ext = std::strrchr(ent->d_name, '.');
         if (!ext) continue;
         if (strcmp(ext, ".mgr") == 0)
-          sd_sleep.push_back(std::string("/sdcard/.sleep/") + ent->d_name);
+          sd_sleep.push_back(std::string("/sdcard/sleep/") + ent->d_name);
         else if (strcmp(ext, ".bmp") == 0)
-          sd_sleep.push_back(std::string("bmp:/sdcard/.sleep/") + ent->d_name);
+          sd_sleep.push_back(std::string("bmp:/sdcard/sleep/") + ent->d_name);
       }
       closedir(sd);
     }
   }
 #else
   try {
-    for (const auto& entry : fs::directory_iterator("sd/.sleep")) {
+    for (const auto& entry : fs::directory_iterator("sd/sleep")) {
       const auto& p = entry.path();
       if (p.extension() == ".mgr")
         sd_sleep.push_back(p.string());
@@ -707,9 +707,9 @@ void SettingsScreen::start_convert_() {
 
   const char* sleep_dir;
 #ifdef ESP_PLATFORM
-  sleep_dir = "/sdcard/.sleep";
+  sleep_dir = "/sdcard/sleep";
 #else
-  sleep_dir = "sd/.sleep";
+  sleep_dir = "sd/sleep";
 #endif
 
   // Remove ALL cached .mgr files (both legacy 2bpp .mgr and 1bpp .1b.mgr) so
