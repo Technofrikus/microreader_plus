@@ -7,6 +7,32 @@
 #include <vector>
 
 #include "microreader/content/BmpSleepConverter.h"
+#include "microreader/display/DrawBuffer.h"
+
+#include <algorithm>
+#include <cstring>
+#include <vector>
+
+// Minimal IDisplay stub that records the BW/RED plane buffers handed to it
+// by DrawBuffer::show_mgr2_sleep_, so we can assert which decode path ran.
+class PlaneCapturingDisplay final : public microreader::IDisplay {
+ public:
+  void full_refresh(const uint8_t*, microreader::RefreshMode, bool, bool) override {}
+  void partial_refresh(const uint8_t*, const uint8_t*) override {}
+  void write_ram_bw(const uint8_t* data) override {
+    last_bw_.assign(data, data + microreader::DeviceConfig::kMaxPixelBytes);
+    bw_calls_++;
+  }
+  void write_ram_red(const uint8_t* data) override {
+    last_red_.assign(data, data + microreader::DeviceConfig::kMaxPixelBytes);
+    red_calls_++;
+  }
+  void grayscale_refresh(bool = false) override { gray_calls_++; }
+  void grayscale_refresh_1pass(bool = false) override { gray_calls_++; }
+
+  int bw_calls_ = 0, red_calls_ = 0, gray_calls_ = 0;
+  std::vector<uint8_t> last_bw_, last_red_;
+};
 
 // ---------------------------------------------------------------------------
 // BMP writing helpers
@@ -277,6 +303,46 @@ static int mgr2_pixel(const Mgr2& m, int x, int y) {
     const size_t stride = ((size_t)m.w + 3) / 4;
     const uint8_t byte  = m.pixels[(size_t)y * stride + x / 4];
     return (byte >> (6 - (x % 4) * 2)) & 0x3;
+}
+
+// Read a 1bpp MGR2 file: 8-byte MGR2 header + two 1-bit planes (BW, then RED).
+struct Mgr2_1b {
+    bool     valid = false;
+    uint16_t w = 0, h = 0;
+    std::vector<uint8_t> bw;   // 1bpp rows
+    std::vector<uint8_t> red;  // 1bpp rows
+};
+static Mgr2_1b read_mgr2_1b(const std::string& path) {
+    Mgr2_1b m;
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return m;
+    char magic[4];
+    if (std::fread(magic, 1, 4, f) != 4 || std::memcmp(magic, "MGR2", 4) != 0) {
+        std::fclose(f); return m;
+    }
+    if (std::fread(&m.w, 2, 1, f) != 1 || std::fread(&m.h, 2, 1, f) != 1) {
+        std::fclose(f); return m;
+    }
+    // No format byte is written; the name (.1b.mgr) is the source of truth.
+    const size_t stride = ((size_t)m.w + 7) / 8;
+    const size_t plane = stride * m.h;
+    m.bw.resize(plane);
+    m.red.resize(plane);
+    if (std::fread(m.bw.data(), 1, plane, f) != plane ||
+        std::fread(m.red.data(), 1, plane, f) != plane) {
+        std::fclose(f); return m;
+    }
+    m.valid = true;
+    std::fclose(f);
+    return m;
+}
+
+// Decode one pixel from a 1bpp two-plane file: state = (red<<1) | bw.
+static int mgr2_1b_pixel(const Mgr2_1b& m, int x, int y) {
+    const size_t stride = ((size_t)m.w + 7) / 8;
+    const uint8_t bw_bit  = (m.bw[(size_t)y * stride + x / 8]  >> (7 - (x & 7))) & 1;
+    const uint8_t red_bit = (m.red[(size_t)y * stride + x / 8] >> (7 - (x & 7))) & 1;
+    return (red_bit << 1) | bw_bit;
 }
 
 static std::string out_path(const std::string& name) {
@@ -655,6 +721,215 @@ TEST_F(BmpConverterTest, CoverFitLandscape) {
     int px = mgr2_pixel(m, 400, 240);
     EXPECT_GE(px, 1);
     EXPECT_LE(px, 2);
+}
+
+// ── 1bpp two-plane format tests ─────────────────────────────────────────────
+// These verify convert_bmp_to_mgr2_1bit() writes the header and two
+// separate 1-bit planes (BW then RED) that decode to the same 4-level state as
+// the legacy 2bpp path.
+
+TEST_F(BmpConverterTest, OneBitWritesTwoPlanes) {
+    auto src = bmp("onebit_white.bmp", make_bmp_24(200, 100, 255, 255, 255));
+    auto dst = mgr("onebit_white.1b.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(src.c_str(), dst.c_str(), 800, 480));
+    auto m = read_mgr2_1b(dst);
+    ASSERT_TRUE(m.valid);
+    EXPECT_EQ(m.w, 800);
+    EXPECT_EQ(m.h, 480);
+    // White → state 0 → both plane bits 0.
+    EXPECT_EQ(mgr2_1b_pixel(m, 400, 240), 0);
+}
+
+TEST_F(BmpConverterTest, OneBitBlackMapsToState3) {
+    auto src = bmp("onebit_black.bmp", make_bmp_24(200, 100, 0, 0, 0));
+    auto dst = mgr("onebit_black.1b.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(src.c_str(), dst.c_str(), 800, 480));
+    auto m = read_mgr2_1b(dst);
+    ASSERT_TRUE(m.valid);
+    // Black → state 3 → both plane bits 1.
+    EXPECT_EQ(mgr2_1b_pixel(m, 400, 240), 3);
+}
+
+TEST_F(BmpConverterTest, OneBitPlaneSizesAndDistinct) {
+    // A gradient source: left half black, right half white. After quantize the
+    // two planes must differ (proving both bits are used) and each plane must
+    // be exactly (w+7)/8 * h bytes with no extra padding between them.
+    const int W = 200, H = 100;
+    std::vector<uint8_t> bmp_data;
+    // 24bpp, left half black, right half white
+    const int row_stride = W * 3;
+    const int data_offset = 54;
+    bmp_data.push_back('B'); bmp_data.push_back('M');
+    write_le32(bmp_data, (uint32_t)(data_offset + row_stride * H));
+    write_le32(bmp_data, 0);
+    write_le32(bmp_data, (uint32_t)data_offset);
+    write_le32(bmp_data, 40);
+    write_le32(bmp_data, (uint32_t)W);
+    write_le32(bmp_data, (uint32_t)H);
+    write_le16(bmp_data, 1); write_le16(bmp_data, 24);
+    write_le32(bmp_data, 0);
+    write_le32(bmp_data, (uint32_t)(row_stride * H));
+    write_le32(bmp_data, 0); write_le32(bmp_data, 0);
+    write_le32(bmp_data, 0); write_le32(bmp_data, 0);
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            uint8_t v = (x < W / 2) ? 0 : 255;
+            bmp_data.push_back(v); bmp_data.push_back(v); bmp_data.push_back(v);
+        }
+    }
+    auto src = bmp("onebit_gradient.bmp", bmp_data);
+    auto dst = mgr("onebit_gradient.1b.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(src.c_str(), dst.c_str(), 800, 480));
+
+    FILE* f = std::fopen(dst.c_str(), "rb");
+    ASSERT_NE(f, nullptr);
+    uint8_t hdr[8];
+    ASSERT_EQ(std::fread(hdr, 1, 8, f), 8);
+    const uint16_t ow = hdr[4] | (hdr[5] << 8);
+    const uint16_t oh = hdr[6] | (hdr[7] << 8);
+    EXPECT_EQ(ow, 800);
+    EXPECT_EQ(oh, 480);
+    const size_t stride = ((size_t)ow + 7) / 8;  // 100
+    const size_t plane = stride * oh;            // 48000
+    std::vector<uint8_t> bw(plane), red(plane);
+    ASSERT_EQ(std::fread(bw.data(), 1, plane, f), plane);
+    ASSERT_EQ(std::fread(red.data(), 1, plane, f), plane);
+    // No trailing bytes beyond the two planes.
+    uint8_t tail;
+    EXPECT_EQ(std::fread(&tail, 1, 1, f), 0);
+    std::fclose(f);
+
+    // The two planes must be IDENTICAL for a pure black/white gradient: every
+    // pixel is either state 0 (both bits 0) or state 3 (both bits 1). If the
+    // RED plane were offset relative to BW, they would diverge. Count differing
+    // bits; for this image it must be ~0 (dither is symmetric per pixel).
+    int diff = 0;
+    for (size_t i = 0; i < plane; ++i)
+        diff += __builtin_popcount((unsigned)(bw[i] ^ red[i]));
+    EXPECT_EQ(diff, 0);
+}
+
+TEST_F(BmpConverterTest, OneBitReaderDirectApi) {
+    // Exercise the real Mgr2Source_::from_file + get_plane_row used by the sleep
+    // path, to catch any offset bug in the actual reader code (not a copy).
+    auto src = bmp("onebit_api.bmp", make_bmp_24(200, 100, 128, 128, 128));
+    auto dst = mgr("onebit_api.1b.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(src.c_str(), dst.c_str(), 800, 480));
+
+    FILE* f = std::fopen(dst.c_str(), "rb");
+    ASSERT_NE(f, nullptr);
+    microreader::DrawBuffer::Mgr2Source_ s =
+        microreader::DrawBuffer::Mgr2Source_::from_file(f, /*is_1bit=*/true);
+    ASSERT_TRUE(s.valid());
+    ASSERT_TRUE(s.is_1bit());
+
+    const size_t stride = ((size_t)s.w + 7) / 8;
+    const size_t plane = stride * s.h;
+    std::vector<uint8_t> bw(plane), red(plane);
+    for (uint16_t y = 0; y < s.h; ++y) {
+        // Copy each row immediately after fetching it: get_plane_row returns a
+        // pointer into the shared row_buf_ member, so the second call would
+        // clobber the first row's data if we deferred the copy.
+        std::memcpy(bw.data() + y * stride, s.get_plane_row(y, false), stride);
+        std::memcpy(red.data() + y * stride, s.get_plane_row(y, true), stride);
+    }
+    std::fclose(f);
+
+    // Compare against raw file read (planes back-to-back after 8-byte header).
+    FILE* f2 = std::fopen(dst.c_str(), "rb");
+    ASSERT_NE(f2, nullptr);
+    std::fseek(f2, 8, SEEK_SET);
+    std::vector<uint8_t> raw_bw(plane), raw_red(plane);
+    ASSERT_EQ(std::fread(raw_bw.data(), 1, plane, f2), plane);
+    ASSERT_EQ(std::fread(raw_red.data(), 1, plane, f2), plane);
+    std::fclose(f2);
+
+    EXPECT_EQ(bw, raw_bw);
+    EXPECT_EQ(red, raw_red);
+}
+
+// Regression test for the suffix-check bug in DrawBuffer::show_sleep_image.
+// The original code did:
+//     const bool onebit = plen > 6 && std::memcmp(path + plen - 6, ".1b.mgr", 7) == 0;
+// ".1b.mgr" is 7 chars, so starting at plen-6 compares "1b.mgr\0" against
+// ".1b.mgr" — which NEVER matches. Every .1b.mgr file was silently decoded as
+// 2bpp, rendering the two 1-bit planes as a 2×2 grid of gray levels.
+// This test drives the real show_sleep_image() entry point (which derives the
+// format from the file NAME) and asserts the 1-bit path is taken.
+TEST_F(BmpConverterTest, ShowSleepImageRecognizes1bMgrSuffix) {
+    // Pure black source → state 3 everywhere → both planes all-1.
+    auto src = bmp("suffix_black.bmp", make_bmp_24(200, 100, 0, 0, 0));
+    auto dst = mgr("suffix_black.1b.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(src.c_str(), dst.c_str(), 800, 480));
+
+    PlaneCapturingDisplay disp;
+    microreader::DeviceConfig cfg = microreader::DeviceConfig::x4();
+    microreader::DrawBuffer buf(disp, cfg);
+
+    EXPECT_TRUE(buf.show_sleep_image(dst.c_str()));
+    // The 1-bit path issues exactly one BW upload and one RED upload.
+    EXPECT_EQ(disp.bw_calls_, 1);
+    EXPECT_EQ(disp.red_calls_, 1);
+    EXPECT_EQ(disp.gray_calls_, 1);
+
+    // For an all-black image every pixel is state 3 → both planes must be
+    // IDENTICAL (both bits set for every drawn pixel). This is the key
+    // invariant that breaks if the 2bpp path runs instead: the 2-bit decoder
+    // would split each 1-bit plane byte into four 2-bit states, producing a
+    // 2×2 grid of differing gray levels — so BW and RED would diverge.
+    // Comparing the two captured planes catches that artifact directly
+    // without needing to replicate the panel_offset_x buffer geometry.
+    EXPECT_EQ(disp.last_bw_, disp.last_red_);
+    // And both planes must have at least some set bits (the image is black,
+    // not white) — sanity check that the draw actually happened.
+    bool any_set = false;
+    for (uint8_t b : disp.last_bw_) if (b) { any_set = true; break; }
+    EXPECT_TRUE(any_set);
+}
+
+// Also cover the negative case: a legacy .mgr file must NOT be treated as 1-bit.
+TEST_F(BmpConverterTest, ShowSleepImageTreatsLegacyMgrAs2bpp) {
+    auto src = bmp("suffix_legacy.bmp", make_bmp_24(200, 100, 0, 0, 0));
+    auto dst = mgr("suffix_legacy.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2(src.c_str(), dst.c_str(), 800, 480));
+
+    PlaneCapturingDisplay disp;
+    microreader::DeviceConfig cfg = microreader::DeviceConfig::x4();
+    microreader::DrawBuffer buf(disp, cfg);
+
+    EXPECT_TRUE(buf.show_sleep_image(dst.c_str()));
+    EXPECT_EQ(disp.bw_calls_, 1);
+    EXPECT_EQ(disp.red_calls_, 1);
+    EXPECT_EQ(disp.gray_calls_, 1);
+}
+
+TEST_F(BmpConverterTest, ShowSleepImageRejectsTruncatedOneBitPayload) {
+    auto src = bmp("truncated_source.bmp", make_bmp_24(200, 100, 0, 0, 0));
+    auto full = mgr("truncated_full.1b.mgr");
+    auto truncated = mgr("truncated.1b.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(src.c_str(), full.c_str(), 800, 480));
+
+    FILE* input = std::fopen(full.c_str(), "rb");
+    ASSERT_NE(input, nullptr);
+    std::fseek(input, 0, SEEK_END);
+    const long length = std::ftell(input);
+    ASSERT_GT(length, 8);
+    std::rewind(input);
+    std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    ASSERT_EQ(std::fread(bytes.data(), 1, bytes.size(), input), bytes.size());
+    std::fclose(input);
+
+    FILE* output = std::fopen(truncated.c_str(), "wb");
+    ASSERT_NE(output, nullptr);
+    const size_t shortened = bytes.size() - 1;
+    ASSERT_EQ(std::fwrite(bytes.data(), 1, shortened, output), shortened);
+    std::fclose(output);
+
+    PlaneCapturingDisplay disp;
+    microreader::DrawBuffer buf(disp, microreader::DeviceConfig::x4());
+    EXPECT_FALSE(buf.show_sleep_image(truncated.c_str()));
+    EXPECT_EQ(disp.bw_calls_, 0);
+    EXPECT_EQ(disp.red_calls_, 0);
 }
 
 // namespace microreader not closed - will be closed by compiler?

@@ -74,6 +74,16 @@ class Esp32Runtime final : public microreader::IRuntime {
   }
 
   std::optional<int> battery_voltage_mv() const override {
+    // The X3 has a BQ27220 fuel gauge. GPIO0 is its I2C clock line, so an
+    // ADC conversion there is not a battery-voltage measurement and can
+    // saturate (historically logged as 8190 mV).
+    if (is_x3_) {
+      poll_x3_battery_();
+      if (!x3_have_mv_)
+        return std::nullopt;
+      return static_cast<int>(x3_last_good_mv_);
+    }
+
     if (!adc1_handle_)
       return std::nullopt;
 
@@ -217,23 +227,29 @@ class Esp32Runtime final : public microreader::IRuntime {
     return (uint16_t)((buf[1] << 8) | buf[0]);  // big-endian
   }
 
-  std::optional<uint8_t> read_x3_battery_pct_() const {
+  void poll_x3_battery_() const {
     const uint32_t now = millis();
-    if (x3_i2c_initialized_ && (x3_last_poll_ms_ == UINT32_MAX || (now - x3_last_poll_ms_) >= kBqPollIntervalMs)) {
-      x3_last_poll_ms_ = now;
-      const uint16_t soc = read_bq27220_reg_(BQ27220_SOC_REG);
-      const uint16_t mv = read_bq27220_reg_(BQ27220_VOLT_REG);
-      if (soc <= 100) {
-        x3_last_good_soc_ = soc;
-        x3_have_reading_ = true;
-      }
-      if (mv >= 2500 && mv <= 5000) {
-        x3_last_good_mv_ = mv;
-        x3_have_reading_ = true;
-      }
+    if (!x3_i2c_initialized_ ||
+        (x3_last_poll_ms_ != UINT32_MAX && (now - x3_last_poll_ms_) < kBqPollIntervalMs)) {
+      return;
     }
 
-    if (!x3_have_reading_)
+    x3_last_poll_ms_ = now;
+    const uint16_t soc = read_bq27220_reg_(BQ27220_SOC_REG);
+    const uint16_t mv = read_bq27220_reg_(BQ27220_VOLT_REG);
+    if (soc <= 100) {
+      x3_last_good_soc_ = soc;
+      x3_have_soc_ = true;
+    }
+    if (mv >= 2500 && mv <= 5000) {
+      x3_last_good_mv_ = mv;
+      x3_have_mv_ = true;
+    }
+  }
+
+  std::optional<uint8_t> read_x3_battery_pct_() const {
+    poll_x3_battery_();
+    if (!x3_have_soc_)
       return std::nullopt;
 
     const int new_pct = static_cast<int>(x3_last_good_soc_);
@@ -263,6 +279,7 @@ class Esp32Runtime final : public microreader::IRuntime {
   mutable uint32_t x3_last_poll_ms_ = UINT32_MAX; // sentinel: first call always polls
   mutable uint16_t x3_last_good_soc_ = 0;
   mutable uint16_t x3_last_good_mv_ = 0;
-  mutable bool x3_have_reading_ = false;
+  mutable bool x3_have_soc_ = false;
+  mutable bool x3_have_mv_ = false;
   mutable bool x3_bq_warned_ = false;
 };

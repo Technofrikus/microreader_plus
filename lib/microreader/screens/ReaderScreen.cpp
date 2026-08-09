@@ -639,7 +639,7 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
             layout_engine_.set_hyphenation_lang(detect_language(mrb_.metadata().language));
             render_page_(buf);
             page_display_start_ms_ = now_ms_();
-            buf.refresh();
+            buf.refresh_page();
             save_position_();
             return;
           }
@@ -708,7 +708,7 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
         }
         render_page_(buf);
         page_display_start_ms_ = now_ms_();
-        buf.refresh();
+        buf.refresh_page();
         save_position_();
       }
     } else {
@@ -720,7 +720,7 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
         nav_history_.clear();
         render_page_(buf);
         page_display_start_ms_ = now_ms_();
-        buf.refresh();
+        buf.refresh_page();
         return;
       }
       saved_chapter_idx_ = chapter_idx_;
@@ -760,7 +760,7 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
     render_page_(buf);
     // Stamp the start of this page's display for ETA measurement.
     page_display_start_ms_ = now_ms_();
-    buf.refresh();
+    buf.refresh_page();
     save_position_();
   }
 

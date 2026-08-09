@@ -56,6 +56,15 @@ static std::string get_rotate_display_label(bool rotated) {
   return std::string("Display: ") + (rotated ? "Landscape" : "Portrait");
 }
 
+static std::string get_half_refresh_label(DrawBuffer::HalfRefreshMode mode) {
+  const char* name = "Never";
+  if (mode == DrawBuffer::HalfRefreshMode::Pages)
+    name = "Pages";
+  else if (mode == DrawBuffer::HalfRefreshMode::Always)
+    name = "Always";
+  return std::string("Half Refresh: ") + name;
+}
+
 static std::string get_menu_font_label(int size) {
   return std::string("Menu Size: ") + (size == 0 ? "Small" : (size == 1 ? "Medium" : "Large"));
 }
@@ -195,6 +204,9 @@ void SettingsScreen::on_start() {
   // --- Appearance ---
   idx_rotate_display_ = count();
   add_item(get_rotate_display_label(app_ && app_->rotate_display()));
+
+  idx_half_refresh_ = count();
+  add_item(get_half_refresh_label(app_ ? app_->half_refresh_mode() : DrawBuffer::HalfRefreshMode::Never));
 
   idx_menu_font_ = count();
   add_item(get_menu_font_label(app_ ? app_->menu_font_size() : 0));
@@ -370,6 +382,16 @@ void SettingsScreen::on_select(int index) {
     }
     return;
   }
+  if (index == idx_half_refresh_) {
+    if (app_ && buf_) {
+      DrawBuffer::HalfRefreshMode v = static_cast<DrawBuffer::HalfRefreshMode>(
+          (static_cast<uint8_t>(app_->half_refresh_mode()) + 1) % 3);
+      app_->set_half_refresh_mode(v);
+      buf_->set_half_refresh_mode(v);
+      set_item_label(idx_half_refresh_, get_half_refresh_label(v));
+    }
+    return;
+  }
   if (index == idx_menu_font_) {
     if (app_) {
       int v = (app_->menu_font_size() + 1) % 3;
@@ -530,6 +552,16 @@ void SettingsScreen::on_long_select(int index) {
     }
     return;
   }
+  if (index == idx_half_refresh_) {
+    if (app_ && buf_) {
+      DrawBuffer::HalfRefreshMode v = static_cast<DrawBuffer::HalfRefreshMode>(
+          (static_cast<uint8_t>(app_->half_refresh_mode()) + 2) % 3);
+      app_->set_half_refresh_mode(v);
+      buf_->set_half_refresh_mode(v);
+      set_item_label(idx_half_refresh_, get_half_refresh_label(v));
+    }
+    return;
+  }
   if (index == idx_menu_font_) {
     if (app_) {
       int v = (app_->menu_font_size() + 2) % 3;
@@ -684,6 +716,36 @@ void SettingsScreen::start_convert_() {
   sleep_dir = "sd/.sleep";
 #endif
 
+  // Remove ALL cached .mgr files (both legacy 2bpp .mgr and 1bpp .1b.mgr) so
+  // the next sleep uses fresh 1bpp caches. They are regenerated below from the
+  // BMP sources, so nothing useful is lost.
+#ifdef ESP_PLATFORM
+  char cache_dir[256];
+  std::snprintf(cache_dir, sizeof(cache_dir), "%s/cache/sleep", data_dir_);
+  DIR* cd = opendir(cache_dir);
+  if (cd) {
+    struct dirent* cent;
+    while ((cent = readdir(cd)) != nullptr) {
+      const char* e = std::strrchr(cent->d_name, '.');
+      if (e && std::strcmp(e, ".mgr") == 0) {
+        char full[384];
+        std::snprintf(full, sizeof(full), "%s/%s", cache_dir, cent->d_name);
+        std::remove(full);
+      }
+    }
+    closedir(cd);
+  }
+#else
+  namespace fs = std::filesystem;
+  try {
+    std::string cdir = std::string(data_dir_) + "/cache/sleep";
+    for (const auto& entry : fs::directory_iterator(cdir)) {
+      if (entry.path().extension() == ".mgr")
+        fs::remove(entry.path());
+    }
+  } catch (...) {}
+#endif
+
 #ifdef ESP_PLATFORM
   DIR* d = opendir(sleep_dir);
   if (d) {
@@ -698,7 +760,7 @@ void SettingsScreen::start_convert_() {
       const char* dot = std::strrchr(ent->d_name, '.');
       int nlen = dot ? (int)(dot - ent->d_name) : (int)std::strlen(ent->d_name);
       char dst[384];
-      std::snprintf(dst, sizeof(dst), "%s/cache/sleep/%.*s.mgr", data_dir_, nlen, ent->d_name);
+      std::snprintf(dst, sizeof(dst), "%s/cache/sleep/%.*s.1b.mgr", data_dir_, nlen, ent->d_name);
       convert_srcs_.push_back(std::move(src));
       convert_dsts_.push_back(dst);
     }
@@ -711,7 +773,7 @@ void SettingsScreen::start_convert_() {
       if (entry.path().extension() != ".bmp")
         continue;
       convert_srcs_.push_back(entry.path().string());
-      convert_dsts_.push_back(std::string(data_dir_) + "/cache/sleep/" + entry.path().stem().string() + ".mgr");
+      convert_dsts_.push_back(std::string(data_dir_) + "/cache/sleep/" + entry.path().stem().string() + ".1b.mgr");
     }
   } catch (...) {}
 #endif
@@ -748,7 +810,7 @@ void SettingsScreen::tick_convert_(const ButtonState& buttons) {
 
   // Convert one image per tick
   const DeviceConfig& cfg = buf_->config();
-  if (convert_bmp_to_mgr2(convert_srcs_[convert_idx_].c_str(),
+  if (convert_bmp_to_mgr2_1bit(convert_srcs_[convert_idx_].c_str(),
                            convert_dsts_[convert_idx_].c_str(),
                            cfg.physical_width, cfg.physical_height))
     ++convert_ok_;

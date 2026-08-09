@@ -63,7 +63,17 @@ EPUB file (ZIP on SD card)
 | `MrbWriter.h/.cpp` | Writes `.mrb` binary files. `BufferedFileWriter` batches into 4KB buffer. Paragraphs are doubly-linked (prev/next offsets). Uses **deferred paragraph writing**: each paragraph is serialized into `pending_para_` buffer, then flushed when the *next* paragraph arrives (so `next_offset` can be filled in without seeking). This eliminates all backward seeks in `end_chapter()`. |
 | `MrbConverter.h/.cpp` | Orchestrates EPUB→MRB conversion: iterates spine chapters, streams paragraphs via `ParagraphSink` callback from `EpubParser` → `MrbWriter`. Exposes `convert_epub_to_mrb()` and `convert_epub_to_mrb_streaming()`. |
 | `HtmlExporter.h/.cpp` | Exports a `Book` to a self-contained HTML file using the `TextLayout` engine to paginate content exactly as the reader would. Used by `HtmlExportTest`. Options control page size, padding, chapter limit, and debug output. |
-| `BmpSleepConverter.h/.cpp` | Converts BMP files to MGR2 format (2bpp, 4-level grayscale) for sleep screen images. Supports 1bpp, 2bpp, 4bpp, 8bpp (indexed), 16bpp (RGB565/BGR555), 24bpp, and 32bpp (BI_RGB/BI_BITFIELDS) formats. Two output modes: (1) **COVER mode** (both out_w/out_h > 0) scales the image to fill the target then crops the minimal excess — used with the device's native resolution (X3: 792×528, X4: 800×480) so no white borders appear; (2) **auto-size mode** (out_w=0 or out_h=0) outputs the source dimensions after rotation. |
+| `BmpSleepConverter.h/.cpp` | Converts BMP files to MGR2 format (2bpp, 4-level grayscale) for sleep screen images. Supports 1bpp, 2bpp, 4bpp, 8bpp (indexed), 16bpp (RGB565/BGR555), 24bpp, and 32bpp (BI_RGB/BI_BITFIELDS) formats. Two output modes: (1) **COVER mode** (both out_w/out_h > 0) scales the image to fill the target then crops the minimal excess — used with the device's native resolution (X3: 792×528, X4: 800×480) so no white borders appear; (2) **auto-size mode** (out_w=0 or out_h=0) outputs the source dimensions after rotation. Also has a 1bpp two-plane output mode (`.1b.mgr`: BW plane then RED plane, each 1-bit packed) — the format is decided by the file NAME, not a header byte. |
+
+### Sleep image upload pipeline (1bpp fast path)
+
+`DrawBuffer::show_mgr2_sleep_()` renders `.1b.mgr` sleep images via a dual-plane grayscale refresh. The 1bpp path has three upload strategies, tried in order:
+
+1. **Direct upload** (memory-backed + native resolution only): when the source is `mem_`-backed (embedded asset / mmap) AND `src_stride == config_.stride`, no x/y offset, and `panel_offset_x == 0`, the source buffer is handed straight to `display_.write_ram_bw()`/`write_ram_red()` — no `fill(false)`, no per-pixel copy, no framebuffer round-trip. ~50ms per plane (pure SPI cost) vs ~241ms with the old per-pixel loop. **File-backed sources must NOT use this path** — `get_plane_row()` returns a pointer into a 256-byte `row_buf_` containing one row, and the display reads the full ~52KB plane from it, reading past the buffer into garbage.
+2. **Byte-aligned memcpy**: when `x_offset % 8 == 0`, per-row `memcpy` replaces the bit-extract loop. ~50x faster than per-pixel OR on ESP32-C3.
+3. **Per-pixel fallback**: the original bit-extract loop, used only when the source isn't byte-aligned with the framebuffer.
+
+On X3, `EInkDisplay::write_ram_bw()`/`write_ram_red()` use `x3SendMirroredPlaneChunked_()` instead of `x3SendMirroredPlane_()`: it pre-mirrors the plane into a lazily-allocated ~52KB buffer (`x3_mirror_buf_`) and sends it in a few large SPI transactions (4092-byte chunks) instead of one per row, cutting per-row transaction setup overhead (~5-10ms over 528 rows). Falls back to per-row sends if the mirror buffer can't be allocated. **CS must stay LOW for the entire plane write** — the X3 controller's RAM address auto-increment does not persist across CS toggles, so toggling CS per chunk makes every chunk overwrite address 0.
 
 ### Memory constraints (critical for ESP32-C3)
 
@@ -120,6 +130,7 @@ Down (side, Vol-) = short press = prev page in reader
 ## Core systems
 
 - **DisplayQueue**: dual-buffer (ground_truth + target) phase-based animation. Commands progress over N phases before committing.
+- **Refresh modes** (`DrawBuffer.h`): `refresh()` uses the fast/partial waveform; `full_refresh()` defaults to `RefreshMode::Half` (the slower, cleaner half-refresh waveform). A runtime setting **Half Refresh** (Settings → Appearance: `Never`/`Pages`/`Always`, persisted as `half_refresh=%u` in the settings file) controls whether `refresh()` upgrades to a half refresh. `refresh_page()` is the page-turn variant that honors `Pages` mode; the ReaderScreen uses `refresh_page()` for page turns and `refresh()` elsewhere. `DrawBuffer::HalfRefreshMode` defaults to `Never` (fast path).
 - **Canvas**: z-ordered scene graph with damage-rect redraw. Elements: `CanvasRect`, `CanvasCircle`, `CanvasText`.
 - **Proportional font system** (`BitmapFont.h`, `BitmapFontFormat.h`, `DrawBuffer.h`):
   - **MBF format**: Custom binary font format. One file per pixel size, each containing up to 4 styles (Regular/Bold/Italic/BoldItalic). Generated from TTF via `tools/generate_font.py`.
@@ -290,6 +301,7 @@ Device commands (sent via `serial_cmd.py` — see interactive commands below):
 | Image bench | Run image size-read benchmark for a book |
 | Invalidate font | Zero font partition CRC, force re-provisioning |
 | Render bench | Render benchmark on current page |
+| Waveform bench | Time every X3 LUT set (`V`); X3-only, flashes the screen |
 | Set model | Set device model (X3/X4) and reboot |
 | Flash bench | Flash erase+write benchmark |
 
@@ -311,7 +323,37 @@ Interactive commands in `serial_cmd.py`:
 > bench alice.epub   # run EPUB conversion benchmark
 > imgsize alice.epub # run image size-read benchmark
 > test [filter] [--clean] [-v]  # open each book and watch for BOOK_OK/BOOK_FAIL
+> wfbench        # time every X3 waveform (LUT set), prints a summary table
 ```
+
+### Waveform benchmark (X3)
+
+`EInkDisplay::bench_waveforms()` (`platforms/esp32/epd.h`, X3-only) walks every
+`X3LutSet` and measures the **real** panel busy time for a full-screen
+white→black and black→white inversion, plus the SPI cost of one plane upload.
+Full-screen inversions are used on purpose: they exercise the WB/BW LUT entries
+(worst case, and the transition a ghost-clearing flash cycle depends on), whereas
+an unchanged-pixel refresh only hits the slow WW/BB "top-up" entries.
+
+Between measurements the panel is driven back to a settled white with the FULL
+waveform so residue from the previous set cannot skew the next one.
+
+```bash
+python tools/serial_cmd.py --port COM4 --wfbench [--capture wf.log]
+```
+
+Output: one `WFBENCH:<name>|<frames>|<w2b>|<b2w>|<avg>|<spi>|<ms_per_frame>` line
+per set, terminated by `=== WF BENCH DONE`, then a host-side summary table and an
+estimated cost for a 3-pass flash cycle (black → white → page).
+
+The bench clobbers both panel RAMs, so `main.cpp` calls
+`buf.reset_after_scratch(true)` afterwards to force a clean repaint.
+
+**Frame counts** (from the LUT TP/RP bytes — `A+B+C+D` frames per phase, `RP` =
+repeats, X3 counts `RP=1` as one pass): FAST2 7, GRAY 7, ULTRAFAST 18, FAST 18,
+TURBO 19, FULL 26, IMG 50. Note `FAST`/`FAST2`/`ULTRAFAST` are **defined but not
+wired into any call path** — they exist only as tuning material. `ULTRAFAST` is
+not actually faster than `FAST` (both 18 frames).
 
 ### Calibre Plugin (`tools/calibre-plugin/`)
 

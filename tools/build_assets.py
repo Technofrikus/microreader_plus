@@ -20,20 +20,73 @@ import os
 import struct
 import sys
 import zlib
+from typing import Optional
 
 # (manifest_name, source_path_relative_to_project_dir)
 DEFAULT_ASSETS = [
     ("bookerly.bin", "resources/fonts/bookerly.bin"),
     ("alegreya.bin", "resources/fonts/alegreya.bin"),
     ("cartisse.bin", "resources/fonts/cartisse.bin"),
-    ("sleep_0.mgr", "resources/sleep/sleep_0.mgr"),
-    ("sleep_1.mgr", "resources/sleep/sleep_1.mgr"),
-    ("sleep_2.mgr", "resources/sleep/sleep_2.mgr"),
+    ("sleep_0.x3.1b.mgr", "resources/sleep/sleep_0.mgr"),
+    ("sleep_1.x3.1b.mgr", "resources/sleep/sleep_1.mgr"),
+    ("sleep_2.x3.1b.mgr", "resources/sleep/sleep_2.mgr"),
+    ("sleep_0.x4.1b.mgr", "resources/sleep/sleep_0.mgr"),
+    ("sleep_1.x4.1b.mgr", "resources/sleep/sleep_1.mgr"),
+    ("sleep_2.x4.1b.mgr", "resources/sleep/sleep_2.mgr"),
 ]
 
 NAME_LEN = 32
 ENTRY_SIZE = NAME_LEN + 12  # name + offset + length + crc32 == 44
 HEADER_FIXED = 16  # magic + version + count + total_size
+
+
+def legacy_mgr_to_two_planes(data: bytes, out_width: Optional[int] = None,
+                             out_height: Optional[int] = None) -> bytes:
+    """Convert a legacy packed-2bpp MGR2 payload to BW/RED 1bpp planes.
+
+    Built-in sleep assets already exist as MGR2 files.  Splitting their four
+    pixel states here keeps the source assets stable while producing the same
+    4-level image in the runtime's zero-copy format.
+    """
+    if len(data) < 8 or data[:4] != b"MGR2":
+        raise ValueError("sleep asset is not an MGR2 file")
+    width, height = struct.unpack_from("<HH", data, 4)
+    packed_stride = (width + 3) // 4
+    packed_size = packed_stride * height
+    if len(data) != 8 + packed_size:
+        raise ValueError("invalid legacy MGR2 payload length")
+
+    out_width = out_width or width
+    out_height = out_height or height
+    out_stride = (out_width + 7) // 8
+
+    # COVER geometry matches the BMP converter: crop the smallest excess, then
+    # nearest-neighbour scale. X3 needs 792x528 while the historical assets are
+    # 800x480, so model-native assets are needed for the direct upload path.
+    if width * out_height >= height * out_width:
+        crop_width = height * out_width // out_height
+        crop_height = height
+    else:
+        crop_width = width
+        crop_height = width * out_height // out_width
+    crop_x = (width - crop_width) // 2
+    crop_y = (height - crop_height) // 2
+
+    bw = bytearray(out_stride * out_height)
+    red = bytearray(out_stride * out_height)
+    for y in range(out_height):
+        source_y = crop_y + y * crop_height // out_height
+        packed_row = data[8 + source_y * packed_stride : 8 + (source_y + 1) * packed_stride]
+        plane_offset = y * out_stride
+        for x in range(out_width):
+            source_x = crop_x + x * crop_width // out_width
+            state = (packed_row[source_x // 4] >> (6 - (source_x % 4) * 2)) & 0x3
+            bit = 0x80 >> (x & 7)
+            if state & 1:
+                bw[plane_offset + x // 8] |= bit
+            if state & 2:
+                red[plane_offset + x // 8] |= bit
+    return b"MGR2" + struct.pack("<HH", out_width, out_height) + bytes(bw) + bytes(red)
 
 
 def build(project_dir: str, out_path: str, assets=DEFAULT_ASSETS) -> int:
@@ -42,6 +95,9 @@ def build(project_dir: str, out_path: str, assets=DEFAULT_ASSETS) -> int:
         path = os.path.join(project_dir, rel.replace("/", os.sep))
         with open(path, "rb") as f:
             data = f.read()
+        if name.endswith(".1b.mgr"):
+            target = (792, 528) if ".x3." in name else (800, 480)
+            data = legacy_mgr_to_two_planes(data, *target)
         if len(name.encode("utf-8")) > NAME_LEN - 1:
             raise SystemExit(f"asset name too long: {name!r}")
         files.append((name, data))

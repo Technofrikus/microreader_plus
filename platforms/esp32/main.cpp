@@ -394,6 +394,15 @@ extern "C" void app_main(void) {
           app.reader()->bench_render(buf);
           break;
         }
+        case SerialCmdType::WaveformBench: {
+          // The bench overwrites both panel RAMs with fill patterns and leaves
+          // the glass white, so drop the shadow buffers and mark them invalid
+          // (same recovery the other benches use). The next screen draw then
+          // repaints from scratch instead of doing a bogus differential update.
+          epd.bench_waveforms();
+          buf.reset_after_scratch(/*white=*/true);
+          break;
+        }
         default:
           break;
       }

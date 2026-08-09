@@ -69,6 +69,16 @@ static uint32_t le32(const uint8_t* p) {
 static int32_t  le32s(const uint8_t* p) { return (int32_t)le32(p); }
 static uint16_t le16(const uint8_t* p)  { return (uint16_t)p[0] | ((uint16_t)p[1]<<8); }
 
+// Per-pixel quantize result split into the two 1-bit planes used by the panel:
+//   bw_bit  = LSB of the 2-bit state (state & 1)
+//   red_bit = MSB of the 2-bit state (state >> 1)
+// 2-bit state: 0=white, 1=light, 2=dark, 3=black.
+struct PlaneBits { uint8_t bw; uint8_t red; };
+static PlaneBits quantize_planes(uint8_t gray, int x, int y) {
+    uint8_t s = quantize(gray, x, y);  // 0..3
+    return PlaneBits{ static_cast<uint8_t>(s & 1), static_cast<uint8_t>(s >> 1) };
+}
+
 }  // namespace
 
 namespace microreader {
@@ -257,6 +267,164 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
         }
     }
 
+    std::free(row_buf);
+    std::fclose(f);
+    std::fclose(out);
+
+    if (!ok)
+        std::remove(mgr_out_path);
+
+    return ok;
+}
+
+// ── 1-bit two-plane variant ──────────────────────────────────────────────────
+// Same geometry/quantize logic as convert_bmp_to_mgr2, but instead of packing 2
+// bits per pixel it writes two separate 1-bit planes (BW then RED) so the reader
+// can upload them directly without the ~640ms runtime decode pass. Each plane is
+// a normal 1bpp row (8 pixels/byte, MSB-first). The output header carries the
+// format byte kTwo1BitPlanes so legacy 2bpp files are still distinguished.
+bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
+                              int out_w, int out_h) {
+    FILE* f = std::fopen(bmp_path, "rb");
+    if (!f) return false;
+
+    uint8_t fhdr[14];
+    if (std::fread(fhdr, 1, 14, f) != 14 || fhdr[0] != 'B' || fhdr[1] != 'M') {
+        std::fclose(f); return false;
+    }
+    const uint32_t data_offset = le32(fhdr + 10);
+
+    uint8_t dhdr[40];
+    if (std::fread(dhdr, 1, 40, f) != 40) { std::fclose(f); return false; }
+
+    const int32_t  width   = le32s(dhdr + 4);
+    int32_t        height  = le32s(dhdr + 8);
+    const uint16_t bpp     = le16(dhdr + 14);
+    const uint32_t compr   = le32(dhdr + 16);
+    const uint32_t dib_sz  = le32(dhdr);
+
+    if (width <= 0 || width > 4096 || height == 0 || height < -4096 || height > 4096) {
+        std::fclose(f); return false;
+    }
+    if ((compr != 0 && compr != 3 && compr != 6) ||
+        (bpp != 1 && bpp != 2 && bpp != 4 && bpp != 8 && bpp != 16 && bpp != 24 && bpp != 32)) {
+        std::fclose(f); return false;
+    }
+
+    const bool top_down = (height < 0);
+    if (top_down) height = -height;
+    const bool portrait = (height > width);
+
+    int final_out_w, final_out_h;
+    int crop_x = 0, crop_y = 0;
+    int crop_w = (int)width, crop_h = (int)height;
+
+    if (out_w > 0 && out_h > 0) {
+        const int eff_src_w = portrait ? (int)height : (int)width;
+        const int eff_src_h = portrait ? (int)width  : (int)height;
+        int crop_eff_w, crop_eff_h;
+        if ((int64_t)eff_src_w * out_h >= (int64_t)eff_src_h * out_w) {
+            crop_eff_w = eff_src_h * out_w / out_h;
+            crop_eff_h = eff_src_h;
+        } else {
+            crop_eff_w = eff_src_w;
+            crop_eff_h = eff_src_w * out_h / out_w;
+        }
+        const int off_eff_x = (eff_src_w - crop_eff_w) / 2;
+        const int off_eff_y = (eff_src_h - crop_eff_h) / 2;
+        if (portrait) {
+            crop_x = (int)width  - off_eff_y - crop_eff_h;
+            crop_y = off_eff_x;
+            crop_w = crop_eff_h;
+            crop_h = crop_eff_w;
+        } else {
+            crop_x = off_eff_x;
+            crop_y = off_eff_y;
+            crop_w = crop_eff_w;
+            crop_h = crop_eff_h;
+        }
+        final_out_w = out_w;
+        final_out_h = out_h;
+    } else {
+        if (portrait) { final_out_w = (int)height; final_out_h = (int)width; }
+        else          { final_out_w = (int)width;  final_out_h = (int)height; }
+    }
+    const int FINAL_STRIDE = (final_out_w + 7) / 8;
+    bool is_rgb565 = false;
+    if (bpp == 16 && (compr == 3 || compr == 6)) {
+        uint8_t masks[12] = {};
+        std::fseek(f, (long)(14 + dib_sz), SEEK_SET);
+        std::fread(masks, 1, 12, f);
+        is_rgb565 = (le32(masks) == 0xF800u);
+    }
+    uint8_t palette[256 * 4] = {};
+    if (bpp <= 8) {
+        const size_t pal_entries = (size_t)1 << bpp;
+        std::fseek(f, (long)(14 + dib_sz), SEEK_SET);
+        std::fread(palette, 1, pal_entries * 4, f);
+    }
+    const int src_stride = ((width * bpp + 31) / 32) * 4;
+    uint8_t* row_buf = (uint8_t*)std::malloc((size_t)src_stride);
+    if (!row_buf) { std::fclose(f); return false; }
+
+    FILE* out = std::fopen(mgr_out_path, "wb");
+    if (!out) { std::free(row_buf); std::fclose(f); return false; }
+
+    const uint16_t ow = (uint16_t)final_out_w, oh = (uint16_t)final_out_h;
+    std::fwrite("MGR2", 1, 4, out);
+    std::fwrite(&ow, 2, 1, out);
+    std::fwrite(&oh, 2, 1, out);
+    // NOTE: no format byte is written. The format is determined by the file
+    // NAME (.1b.mgr = 1bpp, .mgr = 2bpp) so the user can see it directly.
+
+    bool ok = true;
+    const size_t plane_bytes = (size_t)FINAL_STRIDE * final_out_h;
+    uint8_t* bw_plane  = (uint8_t*)std::malloc(plane_bytes ? plane_bytes : 1);
+    uint8_t* red_plane = (uint8_t*)std::malloc(plane_bytes ? plane_bytes : 1);
+    if (!bw_plane || !red_plane) { ok = false; }
+
+    if (ok) {
+        std::memset(bw_plane, 0, plane_bytes);
+        std::memset(red_plane, 0, plane_bytes);
+        if (!portrait) {
+            for (int out_y = 0; out_y < final_out_h && ok; ++out_y) {
+                const int src_y = crop_y + out_y * crop_h / final_out_h;
+                const int src_file_y = top_down ? src_y : ((int)height - 1 - src_y);
+                const long row_pos = (long)data_offset + (long)src_file_y * src_stride;
+                if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
+                    std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) { ok = false; break; }
+                for (int out_x = 0; out_x < final_out_w; ++out_x) {
+                    const int sx = crop_x + out_x * crop_w / final_out_w;
+                    const uint8_t g = decode_pixel(row_buf, sx, bpp, palette, is_rgb565);
+                    PlaneBits pb = quantize_planes(g, out_x, out_y);
+                    if (pb.bw)  bw_plane[out_y * FINAL_STRIDE + out_x / 8]  |= (uint8_t)(0x80 >> (out_x & 7));
+                    if (pb.red) red_plane[out_y * FINAL_STRIDE + out_x / 8] |= (uint8_t)(0x80 >> (out_x & 7));
+                }
+            }
+        } else {
+            for (int out_x = 0; out_x < final_out_w && ok; ++out_x) {
+                const int src_y = crop_y + out_x * crop_h / final_out_w;
+                const int src_file_y = top_down ? src_y : ((int)height - 1 - src_y);
+                const long row_pos = (long)data_offset + (long)src_file_y * src_stride;
+                if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
+                    std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) { ok = false; break; }
+                for (int out_y = 0; out_y < final_out_h; ++out_y) {
+                    const int sx = crop_x + (crop_w - 1 - out_y * crop_w / final_out_h);
+                    const uint8_t g = decode_pixel(row_buf, sx, bpp, palette, is_rgb565);
+                    PlaneBits pb = quantize_planes(g, out_x, out_y);
+                    if (pb.bw)  bw_plane[out_y * FINAL_STRIDE + out_x / 8]  |= (uint8_t)(0x80 >> (out_x & 7));
+                    if (pb.red) red_plane[out_y * FINAL_STRIDE + out_x / 8] |= (uint8_t)(0x80 >> (out_x & 7));
+                }
+            }
+        }
+    }
+    if (ok) {
+        if (std::fwrite(bw_plane, 1, plane_bytes, out) != plane_bytes) ok = false;
+        if (std::fwrite(red_plane, 1, plane_bytes, out) != plane_bytes) ok = false;
+    }
+
+    std::free(bw_plane);
+    std::free(red_plane);
     std::free(row_buf);
     std::fclose(f);
     std::fclose(out);

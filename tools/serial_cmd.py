@@ -33,6 +33,7 @@ Interactive commands:
     imgsize <book>    Run image format+size benchmark for a book
     imgdecode <book>  Fully decode every image in a book (streaming decoder test)
     renderbench       Benchmark render_page_ on the currently open page (20 iterations)
+    wfbench           Time every X3 waveform (LUT set); screen will flash
     help              Show this help
     quit / exit       Exit
 """
@@ -135,6 +136,84 @@ def send_renderbench(ser: serial.Serial, iterations: int = 20) -> str:
     Returns the initial OK/ERR, then streams per-iteration and summary lines."""
     ser.write(MAGIC + b"P")
     return read_response(ser, timeout=5.0)
+
+
+def send_wfbench(ser: serial.Serial) -> str:
+    """Send 'V' command to time every X3 waveform (LUT set).
+    Returns the initial OK/ERR; the measurements then stream as log lines."""
+    ser.write(MAGIC + b"V")
+    return read_response(ser, timeout=5.0)
+
+
+def run_wfbench(ser: serial.Serial, timeout: float = 180.0, capture: str = None) -> int:
+    """Run the waveform benchmark and print a summary table.
+
+    The device emits one 'WFBENCH:<name>|<frames>|<w2b>|<b2w>|<avg>|<spi>|<ms_per_frame>'
+    line per LUT set, then '=== WF BENCH DONE'. Returns a process exit code.
+    """
+    print(f"Sending waveform bench (timeout={timeout}s) ...")
+    print("NOTE: the screen will flash white/black repeatedly - this is expected.")
+    resp = send_wfbench(ser)
+    print(resp)
+    if not resp.startswith("OK") and not resp.endswith("OK"):
+        return 1
+
+    rows = []
+    out_f = open(capture, "w", encoding="utf-8") if capture else None
+    try:
+        t0 = time.time()
+        done = False
+        while time.time() - t0 < timeout:
+            line = ser.readline().decode("utf-8", errors="replace").rstrip("\r\n")
+            if not line:
+                continue
+            print(line)
+            sys.stdout.flush()
+            if out_f:
+                out_f.write(line + "\n")
+            if "WFBENCH:" in line:
+                payload = line.split("WFBENCH:", 1)[1].strip()
+                parts = payload.split("|")
+                # Skip the header line the device sends first.
+                if len(parts) == 7 and parts[0] != "header":
+                    rows.append(parts)
+            if "=== WF BENCH DONE" in line:
+                done = True
+                break
+        if not done:
+            print("--- Timeout ---")
+            return 1
+    finally:
+        if out_f:
+            out_f.close()
+
+    if not rows:
+        print("\nNo measurements captured (X4 device, or log level too low).")
+        return 1
+
+    hdr = ("waveform", "frames", "W->B ms", "B->W ms", "avg ms", "SPI ms", "ms/frame")
+    widths = [max(len(hdr[i]), max(len(r[i]) for r in rows)) for i in range(7)]
+    fmt = "  ".join("{:<" + str(widths[0]) + "}" if i == 0 else "{:>" + str(w) + "}"
+                    for i, w in enumerate(widths))
+    print("\n=== Waveform timings ===")
+    print(fmt.format(*hdr))
+    print("-" * (sum(widths) + 2 * (len(widths) - 1)))
+    for r in rows:
+        print(fmt.format(*r))
+
+    # A ghost-clearing flash cycle is black-pass + white-pass + the real page,
+    # so the interesting figure is 3x the average of a full-screen inversion.
+    print("\n=== Estimated 3-pass flash cycle (black -> white -> page) ===")
+    for r in rows:
+        try:
+            avg = float(r[4])
+            spi = float(r[5])
+        except ValueError:
+            continue
+        print(f"  {r[0]:<12} {3 * (avg + spi):7.1f} ms")
+    print("\n(SPI upload is included once per pass; the page pass also needs")
+    print(" a real render, which this figure does not cover.)")
+    return 0
 
 
 def read_response(ser: serial.Serial, timeout: float = 3.0) -> str:
@@ -735,6 +814,12 @@ def main():
         default=False,
         help="Non-interactive: benchmark render_page_ on the currently open page (20 iterations)",
     )
+    parser.add_argument(
+        "--wfbench",
+        action="store_true",
+        default=False,
+        help="Non-interactive: time every X3 waveform (LUT set) and print a summary table",
+    )
     args = parser.parse_args()
 
     try:
@@ -837,6 +922,12 @@ def main():
         print(result)
         ser.close()
         sys.exit(0 if result.startswith("FONT_INVALIDATED") else 1)
+
+    if args.wfbench:
+        # --- Waveform benchmark mode ---
+        code = run_wfbench(ser, timeout=args.timeout, capture=args.capture)
+        ser.close()
+        sys.exit(code)
 
     if args.renderbench:
         # --- Render benchmark mode ---
@@ -1273,6 +1364,8 @@ def main():
                         "Flash benchmark running — watch serial output for FLASH_BENCH lines."
                     )
                     print("Done when: '=== FLASH BENCH DONE' appears in the log.")
+            elif verb in ("wfbench", "wf"):
+                run_wfbench(ser, timeout=180.0)
             elif verb in ("renderbench", "rb"):
                 print("Sending render benchmark ...")
                 resp = send_renderbench(ser)

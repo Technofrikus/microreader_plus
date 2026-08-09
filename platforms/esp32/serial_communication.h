@@ -79,7 +79,8 @@ enum class SerialCmdType : uint8_t {
   ImgDecode,
   FlashBench,
   InvalidateFont,
-  RenderBench
+  RenderBench,
+  WaveformBench
 };
 static char g_cmd_path[256];
 static volatile SerialCmdType g_cmd_type = SerialCmdType::None;
@@ -779,6 +780,12 @@ static void handle_serial_cmd() {
     case 'P': {
       // Render benchmark on the currently open page (no path argument).
       g_cmd_type = SerialCmdType::RenderBench;
+      serial_write("OK\n");
+      break;
+    }
+    case 'V': {
+      // Waveform benchmark: times every X3 LUT set (no path argument).
+      g_cmd_type = SerialCmdType::WaveformBench;
       serial_write("OK\n");
       break;
     }
