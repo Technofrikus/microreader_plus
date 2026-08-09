@@ -1,7 +1,7 @@
 # Release — triggered by pushing a tag matching 'v*' (e.g. v2.0.42).
 #
 # Builds the ESP32 firmware binary and the Calibre plugin zip, then creates a
-# GitHub Release with those files attached. Release notes are auto-generated
+# GitHub Release with clearly named versioned files attached. Release notes are auto-generated
 # from the git log since the last tag.
 #
 # How to create a release:
@@ -53,14 +53,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - name: Build plugin zip
         run: python tools/calibre-plugin/build.py
+
+      - name: Rename plugin with version
+        run: mv tools/calibre-plugin/microreader.zip "Microreader-Calibre-Plugin-${{ steps.version.outputs.version }}.zip"
 
       - name: Upload plugin artifact
         uses: actions/upload-artifact@v4
         with:
           name: calibre-plugin
-          path: tools/calibre-plugin/microreader.zip
+          path: "Microreader-Calibre-Plugin-${{ steps.version.outputs.version }}.zip"
 
   release:
     name: Create GitHub Release
@@ -73,8 +80,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download all artifacts
+      # Download into one known directory. This avoids relying on the default
+      # artifact-name directory layout when passing files to action-gh-release.
+      - name: Download firmware artifact
         uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: release-assets
+
+      - name: Download Calibre plugin artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: calibre-plugin
+          path: release-assets
+
+      - name: Verify release assets
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          test -f "release-assets/Microreader+(TF)-${VERSION}.bin"
+          test -f "release-assets/Microreader-Calibre-Plugin-${VERSION}.zip"
+          ls -l release-assets
 
       - name: Generate release notes
         id: notes
@@ -108,11 +135,11 @@ jobs:
             - **Microreader+(TF)-${{ steps.notes.outputs.version }}.bin** — Flash this to your Xteink X4 (ESP32-C3).
               Use the Crosspoint web flasher or esptool:
               `python -m esptool --chip esp32c3 --port COM5 --baud 921600 write_flash 0x0 "Microreader+(TF)-${{ steps.notes.outputs.version }}.bin"`
-            - **microreader.zip** — Calibre plugin for sending/receiving books.
+            - **Microreader-Calibre-Plugin-${{ steps.notes.outputs.version }}.zip** — Calibre plugin for sending/receiving books.
               Install in Calibre: Preferences → Plugins → Load plugin from file.
           files: |
-            firmware/Microreader+(TF)-${{ steps.notes.outputs.version }}.bin
-            calibre-plugin/microreader.zip
+            release-assets/Microreader+(TF)-${{ steps.notes.outputs.version }}.bin
+            release-assets/Microreader-Calibre-Plugin-${{ steps.notes.outputs.version }}.zip
           draft: false
           prerelease: false
           generate_release_notes: false

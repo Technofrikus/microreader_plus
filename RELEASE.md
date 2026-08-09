@@ -47,8 +47,8 @@ Go to **Actions** tab → look for the `Release` workflow. It takes ~3–4 minut
 Go to **Releases** page (right sidebar on the repo home, or `https://github.com/yourname/microreader-plus/releases`).
 
 You'll see:
-- `firmware.bin` — flash this to your Xteink X4
-- `microreader.zip` — Calibre plugin
+- `Microreader+(TF)-2.1.0.bin` — firmware to flash to your Xteink X4 (the version is taken from the tag)
+- `Microreader-Calibre-Plugin-2.1.0.zip` — Calibre plugin (the version is taken from the tag)
 
 ## Troubleshooting
 
