@@ -24,15 +24,9 @@ from typing import Optional
 
 # (manifest_name, source_path_relative_to_project_dir)
 DEFAULT_ASSETS = [
-    ("bookerly.bin", "resources/fonts/bookerly.bin"),
-    ("alegreya.bin", "resources/fonts/alegreya.bin"),
     ("cartisse.bin", "resources/fonts/cartisse.bin"),
-    ("sleep_0.x3.1b.mgr", "resources/sleep/sleep_0.mgr"),
-    ("sleep_1.x3.1b.mgr", "resources/sleep/sleep_1.mgr"),
-    ("sleep_2.x3.1b.mgr", "resources/sleep/sleep_2.mgr"),
-    ("sleep_0.x4.1b.mgr", "resources/sleep/sleep_0.mgr"),
-    ("sleep_1.x4.1b.mgr", "resources/sleep/sleep_1.mgr"),
-    ("sleep_2.x4.1b.mgr", "resources/sleep/sleep_2.mgr"),
+    ("sleep_0.x3.1b.mgr", "resources/sleep/default_x3.bmp"),
+    ("sleep_0.x4.1b.mgr", "resources/sleep/default_x4.bmp"),
 ]
 
 NAME_LEN = 32
@@ -89,6 +83,56 @@ def legacy_mgr_to_two_planes(data: bytes, out_width: Optional[int] = None,
     return b"MGR2" + struct.pack("<HH", out_width, out_height) + bytes(bw) + bytes(red)
 
 
+def bmp_to_two_planes(data: bytes, out_width: int, out_height: int) -> bytes:
+    """Convert a 2bpp indexed BMP to the display's native, rotated two-plane MGR2.
+
+    The built-in sources are portrait BMPs prepared for their respective panel.
+    Keeping them as BMP makes the artwork editable while the firmware still gets
+    the direct-upload format it needs at runtime.
+    """
+    if len(data) < 54 or data[:2] != b"BM":
+        raise ValueError("sleep asset is not a BMP")
+    data_offset = struct.unpack_from("<I", data, 10)[0]
+    dib_size = struct.unpack_from("<I", data, 14)[0]
+    width, height = struct.unpack_from("<ii", data, 18)
+    bpp = struct.unpack_from("<H", data, 28)[0]
+    compression = struct.unpack_from("<I", data, 30)[0]
+    if dib_size < 40 or width != out_height or abs(height) != out_width or bpp != 2 or compression != 0:
+        raise ValueError(f"sleep BMP must be a native 2bpp portrait image for {out_width}x{out_height}")
+    if data_offset > len(data) or 14 + dib_size + 16 > len(data):
+        raise ValueError("sleep BMP is truncated")
+
+    top_down = height < 0
+    src_height = abs(height)
+    palette = data[14 + dib_size:14 + dib_size + 16]
+    row_stride = ((width * bpp + 31) // 32) * 4
+    if data_offset + row_stride * src_height > len(data):
+        raise ValueError("sleep BMP pixel data is truncated")
+
+    stride = (out_width + 7) // 8
+    bw = bytearray(stride * out_height)
+    red = bytearray(stride * out_height)
+    bayer = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
+    for out_x in range(out_width):
+        src_y = out_x
+        src_file_y = src_y if top_down else src_height - 1 - src_y
+        row = data[data_offset + src_file_y * row_stride:data_offset + (src_file_y + 1) * row_stride]
+        for out_y in range(out_height):
+            src_x = width - 1 - out_y  # portrait BMP → 90° CCW, matching the runtime converter
+            index = (row[src_x // 4] >> ((3 - (src_x % 4)) * 2)) & 0x03
+            b, g, r, _ = palette[index * 4:index * 4 + 4]
+            gray = (r * 77 + g * 150 + b * 29) >> 8
+            adjusted = max(0, min(255, gray + bayer[out_y & 3][out_x & 3] * 4 - 30))
+            state = 3 - min(3, adjusted >> 6)  # 0=white … 3=black
+            bit = 0x80 >> (out_x & 7)
+            offset = out_y * stride + out_x // 8
+            if state & 1:
+                bw[offset] |= bit
+            if state & 2:
+                red[offset] |= bit
+    return b"MGR2" + struct.pack("<HH", out_width, out_height) + bytes(bw) + bytes(red)
+
+
 def build(project_dir: str, out_path: str, assets=DEFAULT_ASSETS) -> int:
     files = []
     for name, rel in assets:
@@ -97,7 +141,7 @@ def build(project_dir: str, out_path: str, assets=DEFAULT_ASSETS) -> int:
             data = f.read()
         if name.endswith(".1b.mgr"):
             target = (792, 528) if ".x3." in name else (800, 480)
-            data = legacy_mgr_to_two_planes(data, *target)
+            data = bmp_to_two_planes(data, *target) if path.lower().endswith(".bmp") else legacy_mgr_to_two_planes(data, *target)
         if len(name.encode("utf-8")) > NAME_LEN - 1:
             raise SystemExit(f"asset name too long: {name!r}")
         files.append((name, data))

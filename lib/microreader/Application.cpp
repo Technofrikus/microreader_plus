@@ -15,6 +15,7 @@
 #include "esp_random.h"
 #include "esp_sleep.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #else
 #include <filesystem>
 #endif
@@ -26,6 +27,21 @@ namespace fs = std::filesystem;
 namespace microreader {
 
 void Application::start(DrawBuffer& buf, IRuntime& runtime) {
+#ifdef ESP_PLATFORM
+  // app_main emits the outer BOOT markers. These split its largest remaining
+  // section without adding filesystem writes or any display work.
+  const int64_t app_start_us = esp_timer_get_time();
+  int64_t app_last_us = app_start_us;
+  auto app_mark = [&](const char* phase) {
+    const int64_t now_us = esp_timer_get_time();
+    MR_LOGI("boot", "APP:%s total=%lldms step=%lldms", phase,
+            (long long)((now_us - app_start_us) / 1000),
+            (long long)((now_us - app_last_us) / 1000));
+    app_last_us = now_us;
+  };
+  app_mark("begin");
+#endif
+
   ticks_ = 0;
   uptime_ms_ = 0;
   buttons_ = ButtonState{};
@@ -58,6 +74,9 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   bouncing_ball_.set_app(this);
   grayscale_demo_.set_app(this);
 #endif
+#ifdef ESP_PLATFORM
+  app_mark("screens_ready");
+#endif
 
   // Set up settings file path if data_dir_ is set
   if (data_dir_)
@@ -66,8 +85,63 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   // Load settings first so initial_selection_ and reader settings are ready
   // before the menu's on_start() (directory scan + selection restore) runs.
   load_settings_();
+#ifdef ESP_PLATFORM
+  app_mark("settings_loaded");
+#endif
 
-  // Increment and persist boot_count for battery-log event pairing.
+  // Apply persisted menu font size to all list screens.
+  ListMenuScreen::set_font_size(menu_font_size_);
+
+  // Apply persisted display rotation.
+  buf.set_rotation(rotate_display_ ? Rotation::Deg0 : Rotation::Deg90);
+
+  // Apply persisted half-refresh preference.
+  buf.set_half_refresh_mode(half_refresh_mode_);
+
+  // Keep the menu below a restored reader, but do not build its directory
+  // listing until it is actually shown after the reader is closed.
+  const bool auto_open_reader = !pending_book_path_.empty() && reader_font_ && reader_font_->valid();
+  if (auto_open_reader)
+    screen_mgr_.push_deferred(&menu_);
+  else
+    screen_mgr_.push(&menu_, buf, runtime);
+#ifdef ESP_PLATFORM
+  app_mark(auto_open_reader ? "menu_deferred" : "menu_ready");
+#endif
+
+  // Auto-open last book if one was active at shutdown — but only if the font
+  // is valid. cache_only=true tells the reader not to convert if the MRB is
+  // missing; it will pop back to the book list instead of blocking the UI.
+  if (!pending_book_path_.empty()) {
+    MR_LOGI("app", "auto-open: '%s'", pending_book_path_.c_str());
+    if (auto_open_reader) {
+      reader_.set_cache_only(true);
+      auto_open_book(pending_book_path_.c_str(), buf, runtime);
+    } else {
+      MR_LOGI("app", "skipping auto-open (no valid font) — starting from book list");
+    }
+    pending_book_path_.clear();
+  }
+#ifdef ESP_PLATFORM
+  app_mark("auto_open_finished");
+#endif
+
+  // Restore settings screen if it was active
+  if (pending_screen_ == "settings") {
+    screen_mgr_.push(&settings_, buf, runtime);
+  }
+  pending_screen_.clear();
+#ifdef ESP_PLATFORM
+  app_mark("screen_restore_finished");
+#endif
+
+  buf.full_refresh();
+#ifdef ESP_PLATFORM
+  app_mark("initial_refresh_finished");
+#endif
+
+  // The first page is now visible.  These small SD/I2C bookkeeping tasks are
+  // intentionally deferred so they do not delay the perceived boot time.
   if (data_dir_) {
     std::string bc_path = std::string(data_dir_) + "/boot_count";
     FILE* bcf = std::fopen(bc_path.c_str(), "r");
@@ -84,41 +158,14 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
       std::fclose(bcf);
     }
   }
+#ifdef ESP_PLATFORM
+  app_mark("boot_count_saved");
+#endif
 
   log_battery_event_("BOOT");
-
-  // Apply persisted menu font size to all list screens.
-  ListMenuScreen::set_font_size(menu_font_size_);
-
-  // Apply persisted display rotation.
-  buf.set_rotation(rotate_display_ ? Rotation::Deg0 : Rotation::Deg90);
-
-  // Apply persisted half-refresh preference.
-  buf.set_half_refresh_mode(half_refresh_mode_);
-
-  screen_mgr_.push(&menu_, buf, runtime);
-
-  // Auto-open last book if one was active at shutdown — but only if the font
-  // is valid. cache_only=true tells the reader not to convert if the MRB is
-  // missing; it will pop back to the book list instead of blocking the UI.
-  if (!pending_book_path_.empty()) {
-    MR_LOGI("app", "auto-open: '%s'", pending_book_path_.c_str());
-    if (reader_font_ && reader_font_->valid()) {
-      reader_.set_cache_only(true);
-      auto_open_book(pending_book_path_.c_str(), buf, runtime);
-    } else {
-      MR_LOGI("app", "skipping auto-open (no valid font) — starting from book list");
-    }
-    pending_book_path_.clear();
-  }
-
-  // Restore settings screen if it was active
-  if (pending_screen_ == "settings") {
-    screen_mgr_.push(&settings_, buf, runtime);
-  }
-  pending_screen_.clear();
-
-  buf.full_refresh();
+#ifdef ESP_PLATFORM
+  app_mark("battery_logged");
+#endif
 }
 
 void Application::auto_open_book(const char* epub_path, DrawBuffer& buf, IRuntime& runtime) {
@@ -249,8 +296,6 @@ void Application::do_sleep_(DrawBuffer& buf) {
 #endif
   if (images.empty()) {
     images.push_back("embedded:0");
-    images.push_back("embedded:1");
-    images.push_back("embedded:2");
   }
 
   {
@@ -653,6 +698,8 @@ void microreader::Application::load_settings_() {
   // custom_font= line), fall back to Cartisse.  An explicit empty string still
   // means "use the firmware default" (Cartisse), so treat both the same.
   if (custom_font_path_.empty())
+    custom_font_path_ = "Cartisse";
+  else if (custom_font_path_ == "Bookerly" || custom_font_path_ == "Alegreya")
     custom_font_path_ = "Cartisse";
 
   if (has_old_keys && (!read_new_reader_ctrl || !read_new_menu_ctrl)) {

@@ -25,6 +25,16 @@ class ScreenManager {
     screen->start(buf, runtime);
   }
 
+  // Put a screen at the bottom of the stack without activating it yet.  The
+  // next screen pushed will pause it; when that child is later popped, the
+  // normal resume() path performs the deferred start.  This is useful when a
+  // restored reader is immediately placed above the main menu at boot.
+  void push_deferred(IScreen* screen) {
+    if (depth_ >= kMaxDepth)
+      return;
+    stack_[depth_++] = screen;
+  }
+
   // Pop the top screen(s). Stops all removed screens, then resumes the new top.
   void pop(int count, DrawBuffer& buf, IRuntime& runtime) {
     if (count <= 0 || depth_ == 0)

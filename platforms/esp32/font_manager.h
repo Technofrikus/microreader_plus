@@ -24,10 +24,6 @@ class FontManager : public microreader::FontManager {
   static const char* embedded_asset_for(const std::string& font_name) {
     if (font_name == "Cartisse")
       return "cartisse.bin";
-    if (font_name == "Alegreya")
-      return "alegreya.bin";
-    if (font_name == "" || font_name == "Bookerly")
-      return "bookerly.bin";
     return nullptr;
   }
 
@@ -48,12 +44,7 @@ class FontManager : public microreader::FontManager {
     if (font_part_.mmap()) {
       load_fonts_();
       if (font_set_.valid()) {
-        for (int i = 0; i < microreader::kMaxFontSizes; i++) {
-          if (prop_fonts_[i].valid()) {
-            ESP_LOGI("font", "Size %d: %u glyphs, height=%u baseline=%u", i, (unsigned)prop_fonts_[i].num_glyphs(),
-                     (unsigned)prop_fonts_[i].glyph_height(), (unsigned)prop_fonts_[i].baseline());
-          }
-        }
+        ESP_LOGI("font", "font bundle mapped");
         app_.set_reader_font(font_set());
         const char* target_asset = embedded_asset_for(app_.custom_font_path());
         if (target_asset) {

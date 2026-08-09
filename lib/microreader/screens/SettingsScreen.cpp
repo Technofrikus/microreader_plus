@@ -107,8 +107,6 @@ void SettingsScreen::on_start() {
   subtitle_ = MICROREADER_VERSION;
 
   sd_fonts_.clear();
-  sd_fonts_.push_back("Bookerly");
-  sd_fonts_.push_back("Alegreya");
   sd_fonts_.push_back("Cartisse");
   font_sel_idx_ = 0;
 #ifdef ESP_PLATFORM
@@ -185,8 +183,6 @@ void SettingsScreen::on_start() {
 #endif
   if (sd_sleep.empty()) {
     sleep_images_.push_back("embedded:0");
-    sleep_images_.push_back("embedded:1");
-    sleep_images_.push_back("embedded:2");
   } else {
     for (auto& p : sd_sleep)
       sleep_images_.push_back(std::move(p));

@@ -58,13 +58,6 @@ bool Blob::init() {
 
   ESP_LOGI(kTag, "embedded blob: %u entries, %u bytes total", static_cast<unsigned>(count_),
            static_cast<unsigned>(data_len));
-  for (uint32_t i = 0; i < count_; i++) {
-    char safe_name[33];
-    memcpy(safe_name, entries_[i].name, 32);
-    safe_name[32] = '\0';
-    ESP_LOGI(kTag, "  %-24s off=0x%06lx len=%lu crc=0x%08lx", safe_name, static_cast<unsigned long>(entries_[i].offset),
-             static_cast<unsigned long>(entries_[i].length), static_cast<unsigned long>(entries_[i].crc32));
-  }
   return true;
 }
 

@@ -439,8 +439,12 @@ class DrawBuffer {
     Mgr2Source_ src;
 
 #ifdef ESP_PLATFORM
+    // Firmware now carries one default sleep image per panel geometry.  Keep
+    // the index parameter for callers with persisted older settings; every
+    // embedded request resolves to the same safe fallback image.
+    (void)idx;
     const char* suffix = config_.model == DeviceModel::X3 ? ".x3.1b.mgr" : ".x4.1b.mgr";
-    const char* stem = (idx == 1) ? "sleep_1" : (idx == 2) ? "sleep_2" : "sleep_0";
+    const char* stem = "sleep_0";
     char name[24];
     std::snprintf(name, sizeof(name), "%s%s", stem, suffix);
     size_t size = 0;
