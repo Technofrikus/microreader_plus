@@ -307,7 +307,7 @@ static int mgr2_pixel(const Mgr2& m, int x, int y) {
     return (byte >> (6 - (x % 4) * 2)) & 0x3;
 }
 
-// Read a 1bpp MGR2 file: format byte + two 1-bit planes (BW, then RED).
+// Read a 1bpp MGR2 file: 8-byte MGR2 header + two 1-bit planes (BW, then RED).
 struct Mgr2_1b {
     bool     valid = false;
     uint16_t w = 0, h = 0;
@@ -726,7 +726,7 @@ TEST_F(BmpConverterTest, CoverFitLandscape) {
 }
 
 // ── 1bpp two-plane format tests ─────────────────────────────────────────────
-// These verify convert_bmp_to_mgr2_1bit() writes the format byte and two
+// These verify convert_bmp_to_mgr2_1bit() writes the header and two
 // separate 1-bit planes (BW then RED) that decode to the same 4-level state as
 // the legacy 2bpp path.
 
@@ -903,6 +903,35 @@ TEST_F(BmpConverterTest, ShowSleepImageTreatsLegacyMgrAs2bpp) {
     EXPECT_EQ(disp.bw_calls_, 1);
     EXPECT_EQ(disp.red_calls_, 1);
     EXPECT_EQ(disp.gray_calls_, 1);
+}
+
+TEST_F(BmpConverterTest, ShowSleepImageRejectsTruncatedOneBitPayload) {
+    auto src = bmp("truncated_source.bmp", make_bmp_24(200, 100, 0, 0, 0));
+    auto full = mgr("truncated_full.1b.mgr");
+    auto truncated = mgr("truncated.1b.mgr");
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(src.c_str(), full.c_str(), 800, 480));
+
+    FILE* input = std::fopen(full.c_str(), "rb");
+    ASSERT_NE(input, nullptr);
+    std::fseek(input, 0, SEEK_END);
+    const long length = std::ftell(input);
+    ASSERT_GT(length, 8);
+    std::rewind(input);
+    std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    ASSERT_EQ(std::fread(bytes.data(), 1, bytes.size(), input), bytes.size());
+    std::fclose(input);
+
+    FILE* output = std::fopen(truncated.c_str(), "wb");
+    ASSERT_NE(output, nullptr);
+    const size_t shortened = bytes.size() - 1;
+    ASSERT_EQ(std::fwrite(bytes.data(), 1, shortened, output), shortened);
+    std::fclose(output);
+
+    PlaneCapturingDisplay disp;
+    microreader::DrawBuffer buf(disp, microreader::DeviceConfig::x4());
+    EXPECT_FALSE(buf.show_sleep_image(truncated.c_str()));
+    EXPECT_EQ(disp.bw_calls_, 0);
+    EXPECT_EQ(disp.red_calls_, 0);
 }
 
 // namespace microreader not closed - will be closed by compiler?

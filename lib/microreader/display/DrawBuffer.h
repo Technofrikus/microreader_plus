@@ -449,19 +449,24 @@ class DrawBuffer {
     Mgr2Source_ src;
 
 #ifdef ESP_PLATFORM
-    const char* name = (idx == 1) ? "sleep_1.mgr" : (idx == 2) ? "sleep_2.mgr" : "sleep_0.mgr";
+    const char* suffix = config_.model == DeviceModel::X3 ? ".x3.1b.mgr" : ".x4.1b.mgr";
+    const char* stem = (idx == 1) ? "sleep_1" : (idx == 2) ? "sleep_2" : "sleep_0";
+    char name[24];
+    std::snprintf(name, sizeof(name), "%s%s", stem, suffix);
     size_t size = 0;
     esp_partition_mmap_handle_t mmap_h = 0;
     const uint8_t* data = static_cast<const uint8_t*>(asset_blob::g_assets.map(name, size, mmap_h));
     if (!data)
       return false;
-    src = Mgr2Source_::from_memory(data, size, /*is_1bit=*/false);
+    src = Mgr2Source_::from_memory(data, size, /*is_1bit=*/true);
 #else
     char path[64];
     snprintf(path, sizeof(path), "resources/sleep/sleep_%d.mgr", idx);
     FILE* f = std::fopen(path, "rb");
     if (!f)
       return false;
+    // Desktop resources remain legacy MGR2 files; the ESP32 assets above are
+    // generated as model-native two-plane data.
     src = Mgr2Source_::from_file(f, /*is_1bit=*/false);
 #endif
 
@@ -689,6 +694,11 @@ class DrawBuffer {
 
     bool is_1bit() const { return is_1bit_; }
 
+    size_t payload_bytes() const {
+      const size_t plane_bytes = src_stride * static_cast<size_t>(h);
+      return plane_bytes * (is_1bit_ ? 2u : 1u);
+    }
+
     bool valid() const {
       return (file_ || mem_) && w > 0 && h > 0;
     }
@@ -745,8 +755,16 @@ class DrawBuffer {
       // Stride depends only on the name-derived format, never on a header byte.
       s.src_stride = is_1bit ? (static_cast<size_t>(s.w) + 7) / 8
                              : (static_cast<size_t>(s.w) + 3) / 4;
-      s.file_ = f;
       s.file_data_start_ = std::ftell(f);
+      if (s.file_data_start_ < 0 || std::fseek(f, 0, SEEK_END) != 0)
+        return Mgr2Source_{};
+      const long file_end = std::ftell(f);
+      if (file_end < s.file_data_start_ ||
+          static_cast<size_t>(file_end - s.file_data_start_) < s.payload_bytes())
+        return Mgr2Source_{};
+      if (std::fseek(f, s.file_data_start_, SEEK_SET) != 0)
+        return Mgr2Source_{};
+      s.file_ = f;
       return s;
     }
 
@@ -760,12 +778,72 @@ class DrawBuffer {
       s.src_stride = is_1bit ? (static_cast<size_t>(s.w) + 7) / 8
                              : (static_cast<size_t>(s.w) + 3) / 4;
       const size_t data_off = 8;
-      if (size < data_off + s.src_stride * static_cast<size_t>(s.h))
+      if (size < data_off + s.payload_bytes())
         return s;
       s.mem_ = data + data_off;
       return s;
     }
   };
+
+  // Geometry and transfer choices for one pre-split 1bpp sleep-image plane.
+  // Keeping the byte-copy/pixel-copy decision in one module gives X3 and X4
+  // identical corruption handling and prevents performance fixes drifting.
+  struct OneBitUploadPlan_ {
+    bool direct = false;
+    bool bulk_load = false;
+    int src_x = 0;
+    int src_y = 0;
+    int dst_x = 0;
+    int dst_y = 0;
+    int width = 0;
+    int height = 0;
+  };
+
+  void upload_onebit_planes_(Mgr2Source_& src, const OneBitUploadPlan_& plan) {
+    const bool byte_aligned =
+        (plan.src_x % 8 == 0) && (plan.dst_x % 8 == 0) && (plan.width % 8 == 0);
+    const size_t copy_bytes = byte_aligned ? static_cast<size_t>(plan.width / 8) : 0;
+
+    auto upload_plane = [&](bool red) {
+      if (plan.direct) {
+        const uint8_t* p = src.get_plane_row(0, red);
+        if (red)
+          display_.write_ram_red(p);
+        else
+          display_.write_ram_bw(p);
+        return;
+      }
+
+      uint8_t* const dst_base = inactive_();
+      if (plan.bulk_load && src.load_plane(dst_base, red)) {
+        // The source plane already has the exact framebuffer layout.
+      } else {
+        fill(false);
+        for (int y = 0; y < plan.height; ++y) {
+          const uint8_t* src_row = src.get_plane_row(static_cast<uint16_t>(plan.src_y + y), red);
+          uint8_t* dst_row = dst_base + static_cast<size_t>(plan.dst_y + y) * config_.stride;
+          if (byte_aligned) {
+            std::memcpy(dst_row + plan.dst_x / 8, src_row + plan.src_x / 8, copy_bytes);
+          } else {
+            for (int x = 0; x < plan.width; ++x) {
+              const int src_bit = plan.src_x + x;
+              const int dst_bit = plan.dst_x + x;
+              if (src_row[src_bit / 8] & (0x80 >> (src_bit & 7)))
+                dst_row[dst_bit / 8] |= static_cast<uint8_t>(0x80 >> (dst_bit & 7));
+            }
+          }
+        }
+      }
+
+      if (red)
+        display_.write_ram_red(dst_base);
+      else
+        display_.write_ram_bw(dst_base);
+    };
+
+    MR_TIME_STEP("sleep", "upload_lsb", upload_plane(false));
+    MR_TIME_STEP("sleep", "upload_msb", upload_plane(true));
+  }
 
   void show_mgr2_sleep_(Mgr2Source_& src, bool deep_sleep_after) {
     // Clear residual ghosting from prior page refreshes before rendering the
@@ -841,59 +919,9 @@ class DrawBuffer {
             (src.mem_ != nullptr && stride_match &&
              y_offset == 0 && config_.panel_offset_x == 0 &&
              draw_h == disp_h);
-        const bool byte_aligned = (eff_x_offset % 8 == 0);
-        const int copy_bytes = byte_aligned ? (eff_draw_w / 8) : 0;
-        const int src_byte_off = byte_aligned ? (eff_x_offset / 8) : 0;
-        auto upload_plane = [&](bool red) {
-          if (native_res) {
-            // Direct: source pointer → display. No framebuffer copy.
-            const uint8_t* p = src.get_plane_row(0, red);
-            if (red)
-              display_.write_ram_red(p);
-            else
-              display_.write_ram_bw(p);
-            return;
-          }
-          // Stride-match bulk load: when src_stride == config_.stride and the
-          // image fills the panel vertically, read the entire plane in one
-          // contiguous fread directly into the framebuffer. One 52KB SD read
-          // is ~5x faster than 528 scattered 99-byte reads via get_plane_row.
-          if (stride_match && y_offset == 0 && draw_h == disp_h &&
-              static_cast<size_t>(copy_bytes) == config_.stride) {
-            uint8_t* dst = inactive_();
-            if (!src.load_plane(dst, red)) {
-              // Short read — fall back to per-row path.
-              fill(false);
-              for (int y = 0; y < draw_h; ++y) {
-                const uint8_t* src_row = src.get_plane_row(static_cast<uint16_t>(y), red);
-                std::memcpy(dst + static_cast<size_t>(y) * config_.stride, src_row,
-                            static_cast<size_t>(copy_bytes));
-              }
-            }
-          } else if (byte_aligned) {
-            fill(false);
-            for (int y = 0; y < draw_h; ++y) {
-              const uint8_t* src_row = src.get_plane_row(static_cast<uint16_t>(y), red);
-              uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride + src_byte_off;
-              std::memcpy(dst, src_row + src_byte_off, static_cast<size_t>(copy_bytes));
-            }
-          } else {
-            fill(false);
-            for (int y = 0; y < draw_h; ++y) {
-              const uint8_t* src_row = src.get_plane_row(static_cast<uint16_t>(y), red);
-              uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
-              for (int x = 0; x < draw_w; x++)
-                if (src_row[(x + x_offset) / 8] & (0x80 >> ((x + x_offset) & 7)))
-                  dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
-            }
-          }
-          if (red)
-            display_.write_ram_red(inactive_());
-          else
-            display_.write_ram_bw(inactive_());
-        };
-        MR_TIME_STEP("sleep", "upload_lsb", upload_plane(false));
-        MR_TIME_STEP("sleep", "upload_msb", upload_plane(true));
+        const bool bulk_load = stride_match && y_offset == 0 && draw_h == disp_h;
+        upload_onebit_planes_(src, {native_res, bulk_load, eff_x_offset, 0, 0, y_offset,
+                                    eff_draw_w, draw_h});
       } else {
         // Legacy 2bpp packed source: decode each plane from the 2-bit pixels.
         auto decode_plane = [&](bool msb) {
@@ -940,55 +968,9 @@ class DrawBuffer {
           (src.mem_ != nullptr && stride_match &&
            config_.panel_offset_x == 0 &&
            static_cast<int>(src.h) == config_.physical_height);
-      const bool byte_aligned = true;  // no x_offset in this branch
-      const int copy_bytes = byte_aligned ? (max_x / 8) : 0;
-      auto upload_plane = [&](bool red) {
-        if (native_res) {
-          const uint8_t* p = src.get_plane_row(0, red);
-          if (red)
-            display_.write_ram_red(p);
-          else
-            display_.write_ram_bw(p);
-          return;
-        }
-        // Stride-match bulk load: one contiguous fread of the whole plane
-        // into the framebuffer, vs 528 scattered 99-byte reads.
-        if (stride_match &&
-            static_cast<int>(src.h) == config_.physical_height &&
-            static_cast<size_t>(copy_bytes) == config_.stride) {
-          uint8_t* dst = inactive_();
-          if (!src.load_plane(dst, red)) {
-            fill(false);
-            for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
-              const uint8_t* src_row = src.get_plane_row(y, red);
-              std::memcpy(dst + static_cast<size_t>(y) * config_.stride, src_row,
-                          static_cast<size_t>(copy_bytes));
-            }
-          }
-        } else if (byte_aligned) {
-          fill(false);
-          for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
-            const uint8_t* src_row = src.get_plane_row(y, red);
-            uint8_t* dst = inactive_() + static_cast<size_t>(y) * config_.stride;
-            std::memcpy(dst, src_row, static_cast<size_t>(copy_bytes));
-          }
-        } else {
-          fill(false);
-          for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
-            const uint8_t* src_row = src.get_plane_row(y, red);
-            uint8_t* dst = inactive_() + static_cast<size_t>(y) * config_.stride;
-            for (int x = 0; x < max_x; x++)
-              if (src_row[x / 8] & (0x80 >> (x & 7)))
-                dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
-          }
-        }
-        if (red)
-          display_.write_ram_red(inactive_());
-        else
-          display_.write_ram_bw(inactive_());
-      };
-      MR_TIME_STEP("sleep", "upload_lsb", upload_plane(false));
-      MR_TIME_STEP("sleep", "upload_msb", upload_plane(true));
+      const int draw_h = std::min(static_cast<int>(src.h), config_.physical_height);
+      const bool bulk_load = stride_match && draw_h == config_.physical_height;
+      upload_onebit_planes_(src, {native_res, bulk_load, 0, 0, 0, 0, max_x, draw_h});
     } else {
       // Legacy 2bpp packed source: decode each plane from the 2-bit pixels.
       auto decode_pass = [&](bool red_bit) {
