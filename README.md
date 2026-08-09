@@ -10,10 +10,16 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 | 2 | Added 2bpp bitmap support (for the awesome images from the lector wallpaper gallery) | [7129706](https://github.com/CidVonHighwind/microreader-plus/commit/7129706) |
 | 3 | Added 'Rebuild Sleep Images' menu entry with progress bar and cancel (sleep images are converted all at once, making shutdown faster) | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
 | 4 | Added device-native resolution with cover-fit (scale + crop) for sleep BMPs | [6590639](https://github.com/CidVonHighwind/microreader-plus/commit/6590639) |
-| 5 | Added ETA estimation in the reader screen (chapter and book) | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
+| 5 | Added ETA estimation in the reader screen (chapter and book), including adaptive reading-speed estimation | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
 | 6 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
 | 7 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
 | 8 | Rotate the screen (portrait ↔ landscape) by long-pressing the Select button while reading | — |
+| 9 | Added a configurable three-slot status bar with chapter/book progress, ETA, battery, and paragraph counters | — |
+| 10 | Added configurable half-refresh behavior (`Never`, `Pages`, or `Always`) | — |
+| 11 | Added a fast native 1-bit/two-plane sleep-image path with direct and byte-aligned uploads | — |
+| 12 | Added model-native X3/X4 sleep assets and optimized X3 transfers, reducing sleep and boot overhead | — |
+| 13 | Added X3 fuel-gauge voltage logging and improved startup diagnostics | — |
+| 14 | Added versioned GitHub Releases for firmware and the Calibre plugin | — |
 
 ### Tips for merging upstream changes
 
@@ -42,13 +48,16 @@ This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/mi
 
 ### Reader Options
 - Antialiasing On/Off
+- Configurable status-bar slots for chapter/book progress, ETA, battery, and paragraph counts
+- Half-refresh mode: Never, Pages, or Always
 
 ### Support for X3
 - **Auto-detect** X3 vs X4 at boot via I2C hardware fingerprint
 - Grayscale sleep screen images
 - Fast page rendering
 - BQ27220 I2C battery gauge
-- SPI at 10 MHz (X4 runs at 20 MHz)
+- Native 1-bit/two-plane sleep-image uploads with optimized X3 transfers
+- SPI at 20 MHz on X3 and X4
 - Automatic EPD cleanup before restart to prevent controller corruption
 
 <img width="488" height="695" alt="Screenshot_2026-06-15-08-56-09-48_99c04817c0de5652397fc8b56c3b3817" src="https://github.com/user-attachments/assets/3b57a53e-4c3d-48b5-b600-4c290dddcf38" />
