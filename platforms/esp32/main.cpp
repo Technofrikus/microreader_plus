@@ -127,23 +127,8 @@ static void verify_wakeup_press() {
 }
 
 extern "C" void app_main(void) {
-  // The ESP-IDF USB Serial/JTAG console is available before serial_start().
-  // Keep these markers compact and machine-searchable so a host terminal that
-  // is already attached can capture the complete application startup path.
-  const int64_t boot_started_us = esp_timer_get_time();
-  int64_t boot_last_us = boot_started_us;
-  auto boot_mark = [&](const char* phase) {
-    const int64_t now_us = esp_timer_get_time();
-    ESP_LOGI("boot", "BOOT:%s total=%lldms step=%lldms", phase,
-             (long long)((now_us - boot_started_us) / 1000),
-             (long long)((now_us - boot_last_us) / 1000));
-    boot_last_us = now_us;
-  };
-
-  boot_mark("app_main");
   verify_ota();
   verify_wakeup_press();
-  boot_mark("wakeup_verified");
 
   // Initialise NVS.  Try erase+re-init once on failure (fresh flash / corruption).
   {
@@ -157,11 +142,8 @@ extern "C" void app_main(void) {
       ESP_LOGE("nvs", "NVS init failed (%s), continuing", esp_err_to_name(err));
     }
   }
-  boot_mark("nvs_ready");
-
   // Load device config from NVS (defaults to X4).
   static const microreader::DeviceConfig device_config = load_device_config();
-  boot_mark("device_config_ready");
 
   // Log the firmware's declared device-model support.  Also serves to retain
   // g_firmware_meta in the binary against --gc-sections so SD-flash validation
@@ -172,13 +154,11 @@ extern "C" void app_main(void) {
   // Initialise the appended asset blob (fonts, sleep images, ...).
   // Must happen before FontManager::init() and any sleep-image rendering.
   asset_blob::g_assets.init();
-  boot_mark("assets_ready");
   static Esp32InputSource input;
   static EInkDisplay epd(device_config);
   static Esp32Runtime runtime(50, input.get_adc_handle(), device_config.model);
   static microreader::Application app;
   static microreader::DrawBuffer buf(epd, device_config);
-  boot_mark("statics_ready");
 
 #ifndef QEMU_BUILD
   // After a software reset give the serial monitor a brief moment to reattach.
@@ -195,7 +175,6 @@ extern "C" void app_main(void) {
 
 #ifndef QEMU_BUILD
   epd.begin();
-  boot_mark("epd_ready");
 
   ESP_LOGI("mem", "after epd.begin: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -229,10 +208,7 @@ extern "C" void app_main(void) {
   } else {
     MR_LOGI("app", "SD card not available");
   }
-  boot_mark("sd_ready");
-
   serial_start();
-  boot_mark("serial_ready");
 
   ESP_LOGI("mem", "after serial_start: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -240,7 +216,6 @@ extern "C" void app_main(void) {
   static FontManager font_mgr(app);
   font_mgr.init();
   app.set_font_manager(&font_mgr);
-  boot_mark("fonts_mapped");
 
   ESP_LOGI("mem", "after font init: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -248,7 +223,6 @@ extern "C" void app_main(void) {
   app.set_invalidate_font_fn([]() { FontPartition::invalidate(); });
 
   app.start(buf, runtime);
-  boot_mark("application_ready");
 
   ESP_LOGI("mem", "after app.start: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));

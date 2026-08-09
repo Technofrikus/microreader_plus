@@ -512,7 +512,11 @@ class EInkDisplay : public microreader::IDisplay {
     if (config_.model == microreader::DeviceModel::X3) {
       x3Init_();
     } else {
-      initDisplayController(true);
+      // The application always follows begin() with a full-frame refresh that
+      // writes both controller RAM planes before activating the panel.  Clearing
+      // them here is therefore redundant on the boot path and adds two X4
+      // auto-write/busy cycles before the first visible frame.
+      initDisplayController(false);
     }
   }
 

@@ -27,21 +27,6 @@ namespace fs = std::filesystem;
 namespace microreader {
 
 void Application::start(DrawBuffer& buf, IRuntime& runtime) {
-#ifdef ESP_PLATFORM
-  // app_main emits the outer BOOT markers. These split its largest remaining
-  // section without adding filesystem writes or any display work.
-  const int64_t app_start_us = esp_timer_get_time();
-  int64_t app_last_us = app_start_us;
-  auto app_mark = [&](const char* phase) {
-    const int64_t now_us = esp_timer_get_time();
-    MR_LOGI("boot", "APP:%s total=%lldms step=%lldms", phase,
-            (long long)((now_us - app_start_us) / 1000),
-            (long long)((now_us - app_last_us) / 1000));
-    app_last_us = now_us;
-  };
-  app_mark("begin");
-#endif
-
   ticks_ = 0;
   uptime_ms_ = 0;
   buttons_ = ButtonState{};
@@ -74,10 +59,6 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   bouncing_ball_.set_app(this);
   grayscale_demo_.set_app(this);
 #endif
-#ifdef ESP_PLATFORM
-  app_mark("screens_ready");
-#endif
-
   // Set up settings file path if data_dir_ is set
   if (data_dir_)
     settings_path_ = std::string(data_dir_) + "/settings";
@@ -85,10 +66,6 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   // Load settings first so initial_selection_ and reader settings are ready
   // before the menu's on_start() (directory scan + selection restore) runs.
   load_settings_();
-#ifdef ESP_PLATFORM
-  app_mark("settings_loaded");
-#endif
-
   // Apply persisted menu font size to all list screens.
   ListMenuScreen::set_font_size(menu_font_size_);
 
@@ -105,10 +82,6 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
     screen_mgr_.push_deferred(&menu_);
   else
     screen_mgr_.push(&menu_, buf, runtime);
-#ifdef ESP_PLATFORM
-  app_mark(auto_open_reader ? "menu_deferred" : "menu_ready");
-#endif
-
   // Auto-open last book if one was active at shutdown — but only if the font
   // is valid. cache_only=true tells the reader not to convert if the MRB is
   // missing; it will pop back to the book list instead of blocking the UI.
@@ -122,23 +95,12 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
     }
     pending_book_path_.clear();
   }
-#ifdef ESP_PLATFORM
-  app_mark("auto_open_finished");
-#endif
-
   // Restore settings screen if it was active
   if (pending_screen_ == "settings") {
     screen_mgr_.push(&settings_, buf, runtime);
   }
   pending_screen_.clear();
-#ifdef ESP_PLATFORM
-  app_mark("screen_restore_finished");
-#endif
-
   buf.full_refresh();
-#ifdef ESP_PLATFORM
-  app_mark("initial_refresh_finished");
-#endif
 
   // The first page is now visible.  These small SD/I2C bookkeeping tasks are
   // intentionally deferred so they do not delay the perceived boot time.
@@ -158,14 +120,7 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
       std::fclose(bcf);
     }
   }
-#ifdef ESP_PLATFORM
-  app_mark("boot_count_saved");
-#endif
-
   log_battery_event_("BOOT");
-#ifdef ESP_PLATFORM
-  app_mark("battery_logged");
-#endif
 }
 
 void Application::auto_open_book(const char* epub_path, DrawBuffer& buf, IRuntime& runtime) {
