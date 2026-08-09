@@ -6,6 +6,7 @@
 #include <cstring>
 #include <utility>
 
+#include "../HeapLog.h"
 #include "../content/BitmapFont.h"
 #include "../content/TextLayout.h"
 #include "DeviceConfig.h"
@@ -42,6 +43,16 @@ class IDisplay {
   virtual void grayscale_refresh(bool turnOffScreen = false) {}
 
   virtual void grayscale_refresh_1pass(bool turnOffScreen = false) {}
+
+  // Drive the panel to a clean BLACK baseline using the fastest ghost-clearing
+  // waveform available. On X3 this is the FAST2 LUT (7 frames, ~228ms) instead
+  // of the FULL LUT (26 frames, ~473ms); on X4 it falls back to a full white
+  // refresh. A black drive (rather than white) gives a stronger ghost-clear
+  // because it pulls residual mid-state particles in the opposite direction
+  // before the grayscale sleep image is drawn. `white_pixels` is the framebuffer
+  // (unused on X3, which generates its own fill); X4 uses it for a white clear.
+  // Does NOT power the panel off — the caller shows the sleep image afterwards.
+  virtual void sleep_clear_fast2(const uint8_t* white_pixels, bool turnOffScreen = false) = 0;
 
   virtual void set_grayscale_1p(bool /*v*/) {}
 
@@ -420,7 +431,14 @@ class DrawBuffer {
     FILE* f = std::fopen(path, "rb");
     if (!f)
       return false;
-    Mgr2Source_ src = Mgr2Source_::from_file(f);
+    // Format is decided by the file NAME: *.1b.mgr = 1bpp, *.mgr = 2bpp.
+    // ".1b.mgr" is 7 chars, so the suffix check must start at plen-7 (not plen-6,
+    // which would compare "1b.mgr\0" against ".1b.mgr" and always fail — silently
+    // falling back to the 2bpp path and rendering the two 1-bit planes as a
+    // 2×2 grid of gray levels instead of one coherent image).
+    const size_t plen = std::strlen(path);
+    const bool onebit = plen >= 7 && std::memcmp(path + plen - 7, ".1b.mgr", 7) == 0;
+    Mgr2Source_ src = Mgr2Source_::from_file(f, onebit);
     if (src.valid())
       show_mgr2_sleep_(src, false);
     std::fclose(f);
@@ -437,14 +455,14 @@ class DrawBuffer {
     const uint8_t* data = static_cast<const uint8_t*>(asset_blob::g_assets.map(name, size, mmap_h));
     if (!data)
       return false;
-    src = Mgr2Source_::from_memory(data, size);
+    src = Mgr2Source_::from_memory(data, size, /*is_1bit=*/false);
 #else
     char path[64];
     snprintf(path, sizeof(path), "resources/sleep/sleep_%d.mgr", idx);
     FILE* f = std::fopen(path, "rb");
     if (!f)
       return false;
-    src = Mgr2Source_::from_file(f);
+    src = Mgr2Source_::from_file(f, /*is_1bit=*/false);
 #endif
 
     if (src.valid())
@@ -652,6 +670,9 @@ class DrawBuffer {
     return font;
   }
 
+  // Public so tests can exercise the real reader code path (from_file /
+  // get_plane_row) used by the sleep image display.
+ public:
   struct Mgr2Source_ {
     uint16_t w = 0, h = 0;
     size_t src_stride = 0;
@@ -659,6 +680,14 @@ class DrawBuffer {
     long file_data_start_ = 0;
     uint8_t row_buf_[256]{};
     const uint8_t* mem_ = nullptr;
+    // Format decided by the caller from the file NAME, not the header:
+    //   .mgr    -> legacy 2bpp packed (needs runtime decode)
+    //   .1b.mgr -> two 1-bit planes (BW then RED), no decode needed
+    // The header carries no format byte; the name is the single source of truth
+    // so the user can see at a glance which format a cache file is.
+    bool is_1bit_ = false;
+
+    bool is_1bit() const { return is_1bit_; }
 
     bool valid() const {
       return (file_ || mem_) && w > 0 && h > 0;
@@ -674,29 +703,66 @@ class DrawBuffer {
       return row_buf_;
     }
 
-    static Mgr2Source_ from_file(FILE* f) {
+    // For 1bpp sources: return the BW plane (first half) or RED plane (second
+    // half) row directly, no decode needed.
+    const uint8_t* get_plane_row(uint16_t y, bool red) {
+      const size_t plane_bytes = src_stride * static_cast<size_t>(h);
+      const size_t base = (red ? plane_bytes : 0) + static_cast<size_t>(y) * src_stride;
+      if (mem_)
+        return mem_ + base;
+      std::fseek(file_, file_data_start_ + static_cast<long>(base), SEEK_SET);
+      std::fread(row_buf_, 1, std::min(src_stride, static_cast<size_t>(sizeof(row_buf_))), file_);
+      return row_buf_;
+    }
+
+    // Load an entire 1bpp plane (BW or RED) into a caller-provided buffer in one
+    // contiguous fread. For file-backed sources this is ~5x faster than calling
+    // get_plane_row per row (one SD seek+read of 52KB vs 528 scattered 99-byte
+    // reads, each with its own SD command overhead). For memory-backed sources
+    // it's a single memcpy. `dst` must hold at least src_stride * h bytes.
+    // Returns false if the read was short (corrupt file / EOF).
+    bool load_plane(uint8_t* dst, bool red) const {
+      const size_t plane_bytes = src_stride * static_cast<size_t>(h);
+      if (mem_) {
+        const uint8_t* src = red ? mem_ + plane_bytes : mem_;
+        std::memcpy(dst, src, plane_bytes);
+        return true;
+      }
+      const long base = file_data_start_ + static_cast<long>(red ? plane_bytes : 0);
+      if (std::fseek(file_, base, SEEK_SET) != 0)
+        return false;
+      return std::fread(dst, 1, plane_bytes, file_) == plane_bytes;
+    }
+
+    static Mgr2Source_ from_file(FILE* f, bool is_1bit) {
       Mgr2Source_ s;
+      s.is_1bit_ = is_1bit;
       char magic[4];
       if (std::fread(magic, 1, 4, f) != 4 || std::memcmp(magic, "MGR2", 4) != 0)
         return s;
       if (std::fread(&s.w, 2, 1, f) != 1 || std::fread(&s.h, 2, 1, f) != 1)
         return s;
-      s.src_stride = (static_cast<size_t>(s.w) + 3) / 4;
+      // Stride depends only on the name-derived format, never on a header byte.
+      s.src_stride = is_1bit ? (static_cast<size_t>(s.w) + 7) / 8
+                             : (static_cast<size_t>(s.w) + 3) / 4;
       s.file_ = f;
       s.file_data_start_ = std::ftell(f);
       return s;
     }
 
-    static Mgr2Source_ from_memory(const uint8_t* data, size_t size) {
+    static Mgr2Source_ from_memory(const uint8_t* data, size_t size, bool is_1bit) {
       Mgr2Source_ s;
+      s.is_1bit_ = is_1bit;
       if (size < 8 || std::memcmp(data, "MGR2", 4) != 0)
         return s;
       s.w = data[4] | (data[5] << 8);
       s.h = data[6] | (data[7] << 8);
-      s.src_stride = (static_cast<size_t>(s.w) + 3) / 4;
-      if (size < 8 + s.src_stride * static_cast<size_t>(s.h))
+      s.src_stride = is_1bit ? (static_cast<size_t>(s.w) + 7) / 8
+                             : (static_cast<size_t>(s.w) + 3) / 4;
+      const size_t data_off = 8;
+      if (size < data_off + s.src_stride * static_cast<size_t>(s.h))
         return s;
-      s.mem_ = data + 8;
+      s.mem_ = data + data_off;
       return s;
     }
   };
@@ -712,68 +778,237 @@ class DrawBuffer {
     // Only needed when half-refresh is enabled: fast/partial refreshes leave
     // the panel clean enough (main's behavior had no ghosting), while half
     // refreshes leave residue the grayscale pass can't fully clear. Gating
-    // avoids the ~2s full-refresh delay on the SSD1677 when it isn't needed.
+    // avoids the clear delay on the SSD1677 when it isn't needed.
+    //
+    // We use white_clear_fast2() (X3: FAST2 LUT, ~228ms) instead of a FULL
+    // refresh (~473ms) — it drives a real white inversion that removes the
+    // ghosting residue at less than half the cost.
     if (half_refresh_mode_ != HalfRefreshMode::Never) {
-      fill(true);
-      full_refresh(RefreshMode::Full);
+      MR_TIME_STEP("sleep", "clear_white", {
+        fill(false);  // drive to BLACK (not white) for stronger ghost clearing
+        display_.sleep_clear_fast2(active_());
+      });
+    } else {
+      MR_LOGI("sleep", "STEP:clear_white=skipped");
     }
 
     if (config_.model == DeviceModel::X3) {
       // X3: render MGR2 as 4-level grayscale via dual-plane (NEW=LSB, OLD=MSB).
       // IMG LUTs drive all 4 transitions to distinct gray levels (~908ms).
+      //
+      // Geometry note: the framebuffer and SPI plane are panel_width ×
+      // physical_height (792×528 on X3), NOT physical_width × physical_height
+      // (790×528). The 2px difference is the panel border; stride (99) is
+      // derived from panel_width. A correctly-converted X3 sleep image is
+      // 792×528, so we compare against panel_width here — using physical_width
+      // would make x_offset = (792-790)/2 = 1 and break the native-res fast path.
       const int src_w = static_cast<int>(src.w);
       const int src_h = static_cast<int>(src.h);
-      const int disp_w = config_.physical_width;
+      const int disp_w = config_.panel_width;
       const int disp_h = config_.physical_height;
       const int x_offset = (src_w - disp_w) / 2;
-      const int y_offset = (disp_h - src_h) / 2;
+      const int y_offset = (src_h - disp_h) / 2;
       const int draw_w = std::min(src_w, disp_w);
       const int draw_h = std::min(src_h, disp_h);
 
-      auto decode_plane = [&](bool msb) {
-        fill(false);
-        for (int y = 0; y < draw_h; ++y) {
-          const uint8_t* src_row = src.get_row(static_cast<uint16_t>(y));
-          uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
-          for (int x = 0; x < draw_w; x++) {
-            const int src_x = x + x_offset;
-            int state = (src_row[src_x / 4] >> (6 - (src_x % 4) * 2)) & 0x3;
-            if (msb ? (state >> 1) : (state & 1))
-              dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+      if (src.is_1bit()) {
+        // 1bpp two-plane source: BW plane and RED plane are already split, so
+        // upload them directly — no per-pixel decode pass (~640ms saved).
+        //
+        // Fast path: when the source is memory-backed AND has native device
+        // resolution (src_stride == config_.stride, no x/y offset, no
+        // panel_offset_x), the source buffer IS the framebuffer — skip the
+        // per-pixel copy and hand the display the source pointer directly.
+        // x3SendMirroredPlane_ does Y-mirroring itself. This drops
+        // upload_lsb/upload_msb from ~241ms to ~50ms each (pure SPI cost).
+        //
+        // Byte-aligned fallback: when x_offset is a multiple of 8 (so source and
+        // destination bits line up), use per-row memcpy instead of the per-pixel
+        // bit-extract loop. memcpy uses word-stride stores and is ~50x faster
+        // than the bit-wise OR loop on the ESP32-C3.
+        //
+        // Stride-match shortcut: the BMP converter outputs physical_width (790)
+        // pixels, but the panel uses panel_width (792). Both round to the same
+        // stride (99 bytes), so the byte layout is identical — the extra 2
+        // pixels are padding bits in the last byte, invisible in the panel
+        // border. When src_stride == config_.stride, treat it as native
+        // resolution with x_offset=0 and copy the full stride.
+        const bool stride_match =
+            static_cast<int>(src.src_stride) == config_.stride;
+        const int eff_x_offset = stride_match ? 0 : x_offset;
+        const int eff_draw_w = stride_match ? disp_w : draw_w;
+        const bool native_res =
+            (src.mem_ != nullptr && stride_match &&
+             y_offset == 0 && config_.panel_offset_x == 0 &&
+             draw_h == disp_h);
+        const bool byte_aligned = (eff_x_offset % 8 == 0);
+        const int copy_bytes = byte_aligned ? (eff_draw_w / 8) : 0;
+        const int src_byte_off = byte_aligned ? (eff_x_offset / 8) : 0;
+        auto upload_plane = [&](bool red) {
+          if (native_res) {
+            // Direct: source pointer → display. No framebuffer copy.
+            const uint8_t* p = src.get_plane_row(0, red);
+            if (red)
+              display_.write_ram_red(p);
+            else
+              display_.write_ram_bw(p);
+            return;
           }
-        }
-      };
+          // Stride-match bulk load: when src_stride == config_.stride and the
+          // image fills the panel vertically, read the entire plane in one
+          // contiguous fread directly into the framebuffer. One 52KB SD read
+          // is ~5x faster than 528 scattered 99-byte reads via get_plane_row.
+          if (stride_match && y_offset == 0 && draw_h == disp_h &&
+              static_cast<size_t>(copy_bytes) == config_.stride) {
+            uint8_t* dst = inactive_();
+            if (!src.load_plane(dst, red)) {
+              // Short read — fall back to per-row path.
+              fill(false);
+              for (int y = 0; y < draw_h; ++y) {
+                const uint8_t* src_row = src.get_plane_row(static_cast<uint16_t>(y), red);
+                std::memcpy(dst + static_cast<size_t>(y) * config_.stride, src_row,
+                            static_cast<size_t>(copy_bytes));
+              }
+            }
+          } else if (byte_aligned) {
+            fill(false);
+            for (int y = 0; y < draw_h; ++y) {
+              const uint8_t* src_row = src.get_plane_row(static_cast<uint16_t>(y), red);
+              uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride + src_byte_off;
+              std::memcpy(dst, src_row + src_byte_off, static_cast<size_t>(copy_bytes));
+            }
+          } else {
+            fill(false);
+            for (int y = 0; y < draw_h; ++y) {
+              const uint8_t* src_row = src.get_plane_row(static_cast<uint16_t>(y), red);
+              uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
+              for (int x = 0; x < draw_w; x++)
+                if (src_row[(x + x_offset) / 8] & (0x80 >> ((x + x_offset) & 7)))
+                  dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+            }
+          }
+          if (red)
+            display_.write_ram_red(inactive_());
+          else
+            display_.write_ram_bw(inactive_());
+        };
+        MR_TIME_STEP("sleep", "upload_lsb", upload_plane(false));
+        MR_TIME_STEP("sleep", "upload_msb", upload_plane(true));
+      } else {
+        // Legacy 2bpp packed source: decode each plane from the 2-bit pixels.
+        auto decode_plane = [&](bool msb) {
+          fill(false);
+          for (int y = 0; y < draw_h; ++y) {
+            const uint8_t* src_row = src.get_row(static_cast<uint16_t>(y));
+            uint8_t* dst = inactive_() + static_cast<size_t>(y + y_offset) * config_.stride;
+            for (int x = 0; x < draw_w; x++) {
+              const int src_x = x + x_offset;
+              int state = (src_row[src_x / 4] >> (6 - (src_x % 4) * 2)) & 0x3;
+              if (msb ? (state >> 1) : (state & 1))
+                dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+            }
+          }
+        };
+        MR_TIME_STEP("sleep", "decode_lsb", decode_plane(false));
+        MR_TIME_STEP("sleep", "upload_lsb", display_.write_ram_bw(inactive_()));
+        MR_TIME_STEP("sleep", "decode_msb", decode_plane(true));
+        MR_TIME_STEP("sleep", "upload_msb", display_.write_ram_red(inactive_()));
+      }
 
-      decode_plane(false);
-      display_.write_ram_bw(inactive_());
-
-      decode_plane(true);
-      display_.write_ram_red(inactive_());
-
-      display_.grayscale_refresh(/*turnOffScreen=*/true);
+      MR_TIME_STEP("sleep", "gray_refresh", display_.grayscale_refresh(/*turnOffScreen=*/true));
       if (deep_sleep_after)
-        display_.deep_sleep();
+        MR_TIME_STEP("sleep", "epd_deep_sleep", display_.deep_sleep());
       return;
     }
 
     // Non-X3 grayscale path: dual-plane MGR2 → write LSB/MSB to separate RAMs.
-    auto decode_pass = [&](bool red_bit) {
-      fill(false);
-      const int max_x = std::min(static_cast<int>(src.w), config_.physical_width);
-      for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
-        const uint8_t* src_row = src.get_row(y);
-        uint8_t* dst = inactive_() + static_cast<size_t>(y) * config_.stride;
-        for (int x = 0; x < max_x; x++) {
-          int state = (src_row[x / 4] >> (6 - (x % 4) * 2)) & 0x3;
-          if (red_bit ? (state >> 1) : (state & 1))
-            dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+    if (src.is_1bit()) {
+      // 1bpp two-plane source: BW plane and RED plane are already split, so
+      // upload them directly — no per-pixel decode pass (mirrors the X3 path).
+      // Fast path: native resolution → hand source pointer straight to display.
+      // Byte-aligned fallback: per-row memcpy instead of per-pixel bit loop.
+      // Use panel_width (framebuffer width) not physical_width for the native
+      // check — a correctly converted sleep image matches the panel, not the
+      // visible area (which may be narrower on X3/X4). When src_stride matches
+      // config_.stride, the byte layout is identical even if the stored pixel
+      // width differs by a few pixels (padding bits in the last byte).
+      const bool stride_match =
+          static_cast<int>(src.src_stride) == config_.stride;
+      const int max_x = stride_match ? config_.panel_width
+                                     : std::min(static_cast<int>(src.w), config_.panel_width);
+      const bool native_res =
+          (src.mem_ != nullptr && stride_match &&
+           config_.panel_offset_x == 0 &&
+           static_cast<int>(src.h) == config_.physical_height);
+      const bool byte_aligned = true;  // no x_offset in this branch
+      const int copy_bytes = byte_aligned ? (max_x / 8) : 0;
+      auto upload_plane = [&](bool red) {
+        if (native_res) {
+          const uint8_t* p = src.get_plane_row(0, red);
+          if (red)
+            display_.write_ram_red(p);
+          else
+            display_.write_ram_bw(p);
+          return;
         }
-      }
-    };
-    decode_pass(false);
-    display_.write_ram_bw(inactive_());
-    decode_pass(true);
-    display_.write_ram_red(inactive_());
+        // Stride-match bulk load: one contiguous fread of the whole plane
+        // into the framebuffer, vs 528 scattered 99-byte reads.
+        if (stride_match &&
+            static_cast<int>(src.h) == config_.physical_height &&
+            static_cast<size_t>(copy_bytes) == config_.stride) {
+          uint8_t* dst = inactive_();
+          if (!src.load_plane(dst, red)) {
+            fill(false);
+            for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
+              const uint8_t* src_row = src.get_plane_row(y, red);
+              std::memcpy(dst + static_cast<size_t>(y) * config_.stride, src_row,
+                          static_cast<size_t>(copy_bytes));
+            }
+          }
+        } else if (byte_aligned) {
+          fill(false);
+          for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
+            const uint8_t* src_row = src.get_plane_row(y, red);
+            uint8_t* dst = inactive_() + static_cast<size_t>(y) * config_.stride;
+            std::memcpy(dst, src_row, static_cast<size_t>(copy_bytes));
+          }
+        } else {
+          fill(false);
+          for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
+            const uint8_t* src_row = src.get_plane_row(y, red);
+            uint8_t* dst = inactive_() + static_cast<size_t>(y) * config_.stride;
+            for (int x = 0; x < max_x; x++)
+              if (src_row[x / 8] & (0x80 >> (x & 7)))
+                dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+          }
+        }
+        if (red)
+          display_.write_ram_red(inactive_());
+        else
+          display_.write_ram_bw(inactive_());
+      };
+      MR_TIME_STEP("sleep", "upload_lsb", upload_plane(false));
+      MR_TIME_STEP("sleep", "upload_msb", upload_plane(true));
+    } else {
+      // Legacy 2bpp packed source: decode each plane from the 2-bit pixels.
+      auto decode_pass = [&](bool red_bit) {
+        fill(false);
+        const int max_x = std::min(static_cast<int>(src.w), config_.physical_width);
+        for (uint16_t y = 0; y < src.h && y < config_.physical_height; ++y) {
+          const uint8_t* src_row = src.get_row(y);
+          uint8_t* dst = inactive_() + static_cast<size_t>(y) * config_.stride;
+          for (int x = 0; x < max_x; x++) {
+            int state = (src_row[x / 4] >> (6 - (x % 4) * 2)) & 0x3;
+            if (red_bit ? (state >> 1) : (state & 1))
+              dst[x / 8] |= static_cast<uint8_t>(0x80 >> (x % 8));
+          }
+        }
+      };
+      decode_pass(false);
+      display_.write_ram_bw(inactive_());
+      decode_pass(true);
+      display_.write_ram_red(inactive_());
+    }
     display_.grayscale_refresh_1pass(/*turnOffScreen=*/true);
     if (deep_sleep_after)
       display_.deep_sleep();

@@ -141,7 +141,9 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
   char cache_dir[256];
   std::snprintf(cache_dir, sizeof(cache_dir), "%s/cache/sleep", data_dir);
   char cache_path[384];
-  std::snprintf(cache_path, sizeof(cache_path), "%s/%.*s.mgr", cache_dir, nlen, bname);
+  // 1bpp cache (no runtime decode). Kept alongside any legacy 2bpp .mgr so old
+  // files from other firmware still work if the 1bpp convert ever fails.
+  std::snprintf(cache_path, sizeof(cache_path), "%s/%.*s.1b.mgr", cache_dir, nlen, bname);
   bool cached = false;
   { std::FILE* cf = std::fopen(cache_path, "rb"); if (cf) { std::fclose(cf); cached = true; } }
   if (!cached) {
@@ -153,49 +155,69 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
 #else
     try { fs::create_directories(cache_dir); } catch (...) {}
 #endif
-    MR_LOGI("sleep", "converting BMP: %s", bmp_path);
+    MR_LOGI("sleep", "converting BMP (1bit): %s", bmp_path);
     // Convert to the device's native physical resolution using COVER mode
     // (scale to fill, then crop excess) so there are no white borders on
-    // either X3 (792x528) or X4 (800x480).
-    cached = convert_bmp_to_mgr2(bmp_path, cache_path,
+    // either X3 (792x528) or X4 (800x480). Two 1-bit planes, no decode at show.
+    cached = convert_bmp_to_mgr2_1bit(bmp_path, cache_path,
                                  buf.config().physical_width,
                                  buf.config().physical_height);
-    MR_LOGI("sleep", "BMP convert result: %d cache=%s", (int)cached, cache_path);
+    MR_LOGI("sleep", "BMP 1bit convert result: %d cache=%s", (int)cached, cache_path);
   }
   return cached && buf.show_sleep_image(cache_path);
 }
 
 void Application::do_sleep_(DrawBuffer& buf) {
+  // Step-by-step timing of the whole shutdown sequence. The perceived delay
+  // (button press -> sleep image appears) spans everything below, and it is
+  // NOT all display time: screen->stop() and the two log/settings writes each
+  // hit the SD card over SPI. Emitted as "STEP:<name>=<ms>" lines plus a
+  // "SLEEPTIME:total=<ms>" summary so a serial capture can be parsed.
+  const long long t_sleep_begin = mr_now_us();
+
   // Stop the active screen so it can save state (e.g. reading position).
-  if (IScreen* top = screen_mgr_.top())
-    top->stop();
+  MR_TIME_STEP("sleep", "screen_stop", {
+    if (IScreen* top = screen_mgr_.top())
+      top->stop();
+  });
 
   // Capture battery state before the sleep-image render draws current.
-  log_battery_event_("SLEEP");
+  // NOTE: battery_log is deferred until after the sleep image is shown (see
+  // below) so the panel appears to turn off instantly while SD writes finish
+  // in the background before deep sleep.
 
   // If a specific image is pinned, always show it. Otherwise auto-cycle.
   MR_LOGI("sleep", "do_sleep_: pinned='%s' idx=%d", sleep_image_path_.c_str(), sleep_image_idx_);
   if (!sleep_image_path_.empty()) {
-    save_settings_();
     buf.set_rotation(Rotation::Deg90);
     bool shown = false;
-    if (sleep_image_path_.rfind("embedded:", 0) == 0) {
-      shown = buf.show_sleep_image_embedded(std::atoi(sleep_image_path_.c_str() + 9));
-    } else if (sleep_image_path_.rfind("bmp:", 0) == 0) {
-      shown = show_bmp_sleep(sleep_image_path_.c_str() + 4, data_dir_, buf);
-    } else {
-      shown = buf.show_sleep_image(sleep_image_path_.c_str());
-    }
+    MR_TIME_STEP("sleep", "show_image", {
+      if (sleep_image_path_.rfind("embedded:", 0) == 0) {
+        shown = buf.show_sleep_image_embedded(std::atoi(sleep_image_path_.c_str() + 9));
+      } else if (sleep_image_path_.rfind("bmp:", 0) == 0) {
+        shown = show_bmp_sleep(sleep_image_path_.c_str() + 4, data_dir_, buf);
+      } else {
+        shown = buf.show_sleep_image(sleep_image_path_.c_str());
+      }
+    });
     MR_LOGI("sleep", "show result: %d", (int)shown);
     if (!shown && !buf.show_sleep_image_embedded(0)) {
       // Both show attempts failed — display will just deep_sleep without image.
     }
-    buf.deep_sleep();
+    // Now that the image is on the glass, persist state. These SD writes run
+    // before deep_sleep, so data safety is unchanged; the user just sees the
+    // sleep image ~110ms earlier.
+    MR_TIME_STEP("sleep", "save_settings", save_settings_());
+    MR_TIME_STEP("sleep", "battery_log", log_battery_event_("SLEEP"));
+    MR_TIME_STEP("sleep", "deep_sleep", buf.deep_sleep());
+    const long long total = mr_now_us() - t_sleep_begin;
+    MR_LOGI("sleep", "SLEEPTIME:total=%lld.%02lld", total / 1000, (total % 1000) / 10);
     running_ = false;
     return;
   }
 
   // Auto-cycle: build list. Custom SD images take priority over embedded ones.
+  const long long t_scan = mr_now_us();
   std::vector<std::string> images;
 #ifdef ESP_PLATFORM
   DIR* d = opendir("/sdcard/.sleep");
@@ -231,33 +253,47 @@ void Application::do_sleep_(DrawBuffer& buf) {
     images.push_back("embedded:2");
   }
 
+  {
+    const long long dt = mr_now_us() - t_scan;
+    MR_LOGI("sleep", "STEP:scan_images=%lld.%02lld", dt / 1000, (dt % 1000) / 10);
+  }
+
   // Pick current image, then advance index for next sleep.
   int idx = sleep_image_idx_ % static_cast<int>(images.size());
   sleep_image_idx_ = (idx + 1) % static_cast<int>(images.size());
 
   MR_LOGI("sleep", "auto-cycle: %d images, showing idx=%d path='%s'", (int)images.size(), idx, images[idx].c_str());
 
-  // Save state (includes updated sleep_image_idx_).
-  save_settings_();
-
-  // Reset rotation before drawing the sleeping screen.
+  // Reset rotation before drawing the sleeping screen (sleep images are
+  // always portrait, regardless of the user's current orientation).
   buf.set_rotation(Rotation::Deg90);
 
   const std::string& path = images[idx];
   bool sleep_shown = false;
-  if (path.rfind("embedded:", 0) == 0) {
-    sleep_shown = buf.show_sleep_image_embedded(std::atoi(path.c_str() + 9));
-  } else if (path.rfind("bmp:", 0) == 0) {
-    sleep_shown = show_bmp_sleep(path.c_str() + 4, data_dir_, buf);
-  } else {
-    sleep_shown = buf.show_sleep_image(path.c_str());
-  }
+  MR_TIME_STEP("sleep", "show_image", {
+    if (path.rfind("embedded:", 0) == 0) {
+      sleep_shown = buf.show_sleep_image_embedded(std::atoi(path.c_str() + 9));
+    } else if (path.rfind("bmp:", 0) == 0) {
+      sleep_shown = show_bmp_sleep(path.c_str() + 4, data_dir_, buf);
+    } else {
+      sleep_shown = buf.show_sleep_image(path.c_str());
+    }
+  });
 
   MR_LOGI("sleep", "show result: %d", (int)sleep_shown);
   if (!sleep_shown && !buf.show_sleep_image_embedded(0)) {
     // Both show attempts failed — display will just deep_sleep without image.
   }
-  buf.deep_sleep();
+
+  // Image is on the glass. Now persist state (includes updated sleep_image_idx_)
+  // and the battery log. These SD writes finish before deep_sleep, so data
+  // safety is unchanged; the user just perceives an instant power-off.
+  MR_TIME_STEP("sleep", "save_settings", save_settings_());
+  MR_TIME_STEP("sleep", "battery_log", log_battery_event_("SLEEP"));
+  MR_TIME_STEP("sleep", "deep_sleep", buf.deep_sleep());
+
+  const long long total = mr_now_us() - t_sleep_begin;
+  MR_LOGI("sleep", "SLEEPTIME:total=%lld.%02lld", total / 1000, (total % 1000) / 10);
 
   running_ = false;
 }
@@ -268,13 +304,15 @@ void Application::log_battery_event_(const char* event) {
 
   std::string path = std::string(data_dir_) + "/battery_log.csv";
 
-  // Detect first creation to emit a CSV header row.
-  bool is_new = (std::fopen(path.c_str(), "r") == nullptr);
-
+  // Open for append. We detect a brand-new file by checking whether it is
+  // empty *after* opening (ftell == 0) rather than probing with a separate
+  // read-open first. This avoids a redundant fopen and is just as safe: we
+  // still append, never overwrite.
   FILE* f = std::fopen(path.c_str(), "a");
   if (!f)
     return;
 
+  const bool is_new = (std::ftell(f) == 0);
   if (is_new)
     std::fprintf(f, "boot,event,pct,voltage_mv,uptime_ms,wake_cause,reset_reason\n");
 

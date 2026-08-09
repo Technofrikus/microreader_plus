@@ -7,6 +7,7 @@
 
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -488,6 +489,9 @@ class EInkDisplay : public microreader::IDisplay {
   bool x3_region_needs_sync_ = false;
   static constexpr int kX3RegionSyncBufMax = 1024;
   uint8_t x3_region_sync_buf_[kX3RegionSyncBufMax];
+  // Lazily-allocated Y-mirror buffer for chunked plane uploads (~52KB on X3).
+  // Allocated once on first use, reused for every subsequent upload.
+  uint8_t* x3_mirror_buf_ = nullptr;
   int x3_region_sync_x_ = 0;
   int x3_region_sync_y_ = 0;
   int x3_region_sync_w_ = 0;
@@ -648,8 +652,10 @@ class EInkDisplay : public microreader::IDisplay {
     wakeIfNeeded();
     waitWhileBusy();
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 requires Y-mirrored rows, like papyrix grayscale pipeline.
-      x3SendMirroredPlane_(CMD_X3_WRITE_NEW, data, false);
+      // X3 requires Y-mirrored rows. Use the chunked uploader: it pre-mirrors
+      // into a contiguous buffer and sends in few large SPI transactions,
+      // cutting per-row transaction overhead (~5-10ms over 528 rows).
+      x3SendMirroredPlaneChunked_(CMD_X3_WRITE_NEW, data);
     } else {
       setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
       writeRamBuffer(CMD_WRITE_RAM_BW, data, BUFFER_SIZE);
@@ -660,8 +666,8 @@ class EInkDisplay : public microreader::IDisplay {
     wakeIfNeeded();
     waitWhileBusy();
     if (config_.model == microreader::DeviceModel::X3) {
-      // X3 requires Y-mirrored rows, like papyrix grayscale pipeline.
-      x3SendMirroredPlane_(CMD_X3_WRITE_OLD, data, false);
+      // X3 requires Y-mirrored rows. Use the chunked uploader (see write_ram_bw).
+      x3SendMirroredPlaneChunked_(CMD_X3_WRITE_OLD, data);
     } else {
       setRamArea(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT);
       writeRamBuffer(CMD_WRITE_RAM_RED, data, BUFFER_SIZE);
@@ -705,6 +711,39 @@ class EInkDisplay : public microreader::IDisplay {
     setCustomLUT_(nullptr);  // clear flag; OTP LUT restored on next normal refresh
   }
 
+  void sleep_clear_fast2(const uint8_t* white_pixels, bool turnOffScreen = false) override {
+    in_grayscale_mode_ = false;
+    wakeIfNeeded();
+    waitWhileBusy();
+
+    if (config_.model == microreader::DeviceModel::X3) {
+      // FAST2 LUT (7 frames, ~228ms) instead of FULL (26 frames, ~473ms).
+      // Drive a real BLACK inversion (NEW=black, OLD=white) so the BW entry
+      // pulls any mid-state particles toward black, clearing ghosting left by
+      // prior partial refreshes more strongly than a white drive. The sleep
+      // image overwrites both RAMs afterwards, so we skip the redundant OLD
+      // re-sync. The user briefly sees a black screen before the sleep image.
+      if (x3_partial_mode_active_) {
+        sendCommand(CMD_X3_PARTIAL_OUT);
+        x3_partial_mode_active_ = false;
+      }
+      x3LoadLuts_(X3LutSet::FAST2);
+      sendCommand(CMD_X3_VCOM_DI);
+      sendData(0x29);
+      sendData(0x07);
+      x3SendFillPlane_(CMD_X3_WRITE_NEW, kBenchBlack);
+      x3SendFillPlane_(CMD_X3_WRITE_OLD, kBenchWhite);
+      x3Refresh_(turnOffScreen, true, "FAST2-CLEAR");
+      x3_loaded_luts_ = X3LutSet::NONE;
+      x3_red_ram_synced_ = false;
+      x3_first_refresh_ = false;
+      return;
+    }
+
+    // X4: no FAST2 LUT available — fall back to a full white refresh.
+    full_refresh(white_pixels, microreader::RefreshMode::Full, turnOffScreen);
+  }
+
   void grayscale_refresh_1pass(bool turnOffScreen = false) override {
     if (config_.model == microreader::DeviceModel::X3) {
       grayscale_refresh(turnOffScreen);
@@ -713,6 +752,86 @@ class EInkDisplay : public microreader::IDisplay {
     setCustomLUT_(kLutFactoryQuality);
     refreshDisplay(EPD_FAST_REFRESH, turnOffScreen);
     setCustomLUT_(nullptr);
+  }
+
+  // ---- Waveform benchmark (X3 only) ----
+  // Walks every X3 LUT set and measures the *real* panel refresh duration for a
+  // full-screen white->black and black->white transition, plus the SPI cost of
+  // uploading one plane. Results are logged as "WFBENCH:" lines so
+  // tools/serial_cmd.py --wfbench can capture them.
+  //
+  // Full-screen inversions are used deliberately: they exercise the WB/BW
+  // entries of each LUT, which is the worst case and the transition a
+  // ghost-clearing flash cycle would rely on. Refreshes that leave pixels
+  // unchanged only hit the WW/BB entries and are not comparable.
+  void bench_waveforms() {
+    if (config_.model != microreader::DeviceModel::X3) {
+      ESP_LOGW("wfbench", "waveform bench is X3-only; this device is X4 - ignoring");
+      ESP_LOGI("wfbench", "=== WF BENCH DONE");
+      return;
+    }
+
+    struct Entry {
+      X3LutSet set;
+      const char* name;
+      uint8_t vcom_di;
+      int frames;  // documented frame count, for comparison against measurement
+    };
+    // vcom_di: 0xA9 is what full_refresh()/grayscale_refresh() use (border held
+    // during the pass), 0x29 is the differential value used by
+    // partial_refresh(). Each set is benched with the value its real call path
+    // uses, so the numbers reflect production behaviour.
+    static const Entry kEntries[] = {
+        {X3LutSet::FAST2, "FAST2", 0x29, 7},
+        {X3LutSet::GRAY, "GRAY", 0xA9, 7},
+        {X3LutSet::ULTRAFAST, "ULTRAFAST", 0x29, 18},
+        {X3LutSet::FAST, "FAST", 0x29, 18},
+        {X3LutSet::TURBO, "TURBO", 0x29, 19},
+        {X3LutSet::FULL, "FULL", 0xA9, 26},
+        {X3LutSet::IMG, "IMG", 0xA9, 50},
+    };
+
+    ESP_LOGI("wfbench", "=== WF BENCH START (X3, %ux%u, %u bytes/plane)", (unsigned)DISPLAY_WIDTH,
+             (unsigned)DISPLAY_HEIGHT, (unsigned)BUFFER_SIZE);
+    ESP_LOGI("wfbench", "WFBENCH:header|name|frames|w2b_ms|b2w_ms|avg_ms|spi_ms|ms_per_frame");
+
+    in_grayscale_mode_ = false;
+    wakeIfNeeded();
+    waitWhileBusy();
+    if (x3_partial_mode_active_) {
+      sendCommand(CMD_X3_PARTIAL_OUT);
+      x3_partial_mode_active_ = false;
+    }
+    x3_region_needs_sync_ = false;
+
+    for (const Entry& e : kEntries) {
+      // Bring the panel to a known, fully-settled white using the FULL
+      // waveform. Without this the previous set's residue would leak into the
+      // next measurement.
+      x3BenchSettleWhite_();
+
+      uint32_t spi_us = 0;
+      const uint32_t w2b_us = x3BenchPass_(e.set, e.vcom_di, /*to_black=*/true, &spi_us);
+      const uint32_t b2w_us = x3BenchPass_(e.set, e.vcom_di, /*to_black=*/false, nullptr);
+
+      const uint32_t avg_us = (w2b_us + b2w_us) / 2;
+      // ms per frame, x100 to keep two decimals without floating point.
+      const uint32_t mspf_x100 = e.frames > 0 ? (avg_us / 10u) / (uint32_t)e.frames : 0;
+
+      ESP_LOGI("wfbench", "WFBENCH:%s|%d|%lu.%02lu|%lu.%02lu|%lu.%02lu|%lu.%02lu|%lu.%02lu", e.name, e.frames,
+               (unsigned long)(w2b_us / 1000), (unsigned long)((w2b_us % 1000) / 10),
+               (unsigned long)(b2w_us / 1000), (unsigned long)((b2w_us % 1000) / 10),
+               (unsigned long)(avg_us / 1000), (unsigned long)((avg_us % 1000) / 10),
+               (unsigned long)(spi_us / 1000), (unsigned long)((spi_us % 1000) / 10),
+               (unsigned long)(mspf_x100 / 100), (unsigned long)(mspf_x100 % 100));
+    }
+
+    // Leave the panel white and force the app to re-sync both RAMs on its next
+    // draw (the bench has overwritten them with fill patterns).
+    x3BenchSettleWhite_();
+    x3_loaded_luts_ = X3LutSet::NONE;
+    x3_red_ram_synced_ = false;
+    ESP_LOGI("wfbench", "=== WF BENCH DONE");
   }
 
   void revert_grayscale(const uint8_t* prev_pixels) override {
@@ -1228,6 +1347,52 @@ class EInkDisplay : public microreader::IDisplay {
     return total;
   }
 
+  // Chunked variant: pre-mirror the plane into a contiguous buffer, then send
+  // it in a few large SPI transactions instead of one per row. Cuts per-row
+  // transaction setup overhead (~5-10ms over 528 rows) and lets the SPI DMA
+  // engine run flat-out. The mirror buffer is allocated once and reused.
+  // `data` must point to a full-size plane (DISPLAY_HEIGHT * DISPLAY_WIDTH_BYTES).
+  void x3SendMirroredPlaneChunked_(uint8_t cmd, const uint8_t* data) {
+    static constexpr uint32_t kChunkMax = 4092;
+    const uint32_t total = static_cast<uint32_t>(DISPLAY_HEIGHT) * DISPLAY_WIDTH_BYTES;
+    if (!x3_mirror_buf_) {
+      x3_mirror_buf_ = static_cast<uint8_t*>(heap_caps_malloc(total, MALLOC_CAP_8BIT));
+      if (!x3_mirror_buf_) {
+        // Out of memory for the mirror buffer — fall back to per-row sends.
+        ESP_LOGW("epd", "x3_mirror_buf alloc failed (%uB), free=%u largest=%u",
+                 (unsigned)total, (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        x3SendMirroredPlane_(cmd, data, false);
+        return;
+      };
+    }
+    // Pre-mirror rows: row 0 of the mirror = last row of the source, etc.
+    for (uint16_t y = 0; y < DISPLAY_HEIGHT; y++) {
+      const uint16_t srcY = static_cast<uint16_t>(DISPLAY_HEIGHT - 1 - y);
+      const uint8_t* src = data + static_cast<uint32_t>(srcY) * DISPLAY_WIDTH_BYTES;
+      std::memcpy(x3_mirror_buf_ + static_cast<uint32_t>(y) * DISPLAY_WIDTH_BYTES, src,
+                  DISPLAY_WIDTH_BYTES);
+    }
+    sendCommand(cmd);
+    gpio_set_level(EPD_DC, 1);
+    // CS must stay LOW for the entire plane write: the X3 controller's RAM
+    // address auto-increment does not persist across CS toggles (unlike the
+    // SSD1677 non-X3 path). Toggling CS per chunk makes every chunk overwrite
+    // address 0, producing gibberish. Hold CS low once, send all chunks, then
+    // raise it — same CS behaviour as x3SendMirroredPlane_.
+    gpio_set_level(EPD_CS, 0);
+    uint32_t offset = 0;
+    while (offset < total) {
+      const uint32_t chunk = (total - offset < kChunkMax) ? (total - offset) : kChunkMax;
+      spi_transaction_t t{};
+      t.length = static_cast<size_t>(chunk) * 8;
+      t.tx_buffer = x3_mirror_buf_ + offset;
+      spi_device_polling_transmit(spi_, &t);
+      offset += chunk;
+    }
+    gpio_set_level(EPD_CS, 1);
+  }
+
   void x3SendMirroredRegion_(uint8_t cmd, const uint8_t* buf, int stride, int h) {
     sendCommand(cmd);
     gpio_set_level(EPD_DC, 1);
@@ -1285,6 +1450,56 @@ class EInkDisplay : public microreader::IDisplay {
     x3_red_ram_synced_ = true;
 
     ESP_LOGI("X3", "conditioning pass done");
+  }
+
+  // ---- Waveform bench helpers (X3) ----
+  // 0x00 bits = black, 0xFF = white (same convention as DrawBuffer::fill).
+  static constexpr uint8_t kBenchWhite = 0xFF;
+  static constexpr uint8_t kBenchBlack = 0x00;
+
+  // Drive the panel to a fully-settled white with the FULL waveform and leave
+  // both RAMs holding white, so the next measured pass starts from a known
+  // state. Not timed - this is setup, not measurement.
+  void x3BenchSettleWhite_() {
+    x3LoadLuts_(X3LutSet::FULL);
+    sendCommand(CMD_X3_VCOM_DI);
+    sendData(0xA9);
+    sendData(0x07);
+    x3SendFillPlane_(CMD_X3_WRITE_NEW, kBenchWhite);
+    x3SendFillPlane_(CMD_X3_WRITE_OLD, kBenchBlack);  // pretend prev=black to force a real drive
+    x3PowerOn_();
+    sendCommand(CMD_X3_REFRESH);
+    x3WaitBusy_(" bench-settle");
+    x3SendFillPlane_(CMD_X3_WRITE_OLD, kBenchWhite);  // OLD now matches what is on glass
+  }
+
+  // One measured pass. Uploads the target fill into the NEW plane, fires the
+  // refresh, and returns the busy-wait duration in microseconds - i.e. the
+  // time the panel itself spent running the waveform, excluding SPI upload.
+  // If spi_us_out is non-null, the plane upload is timed separately into it.
+  uint32_t x3BenchPass_(X3LutSet set, uint8_t vcom_di, bool to_black, uint32_t* spi_us_out) {
+    const uint8_t target = to_black ? kBenchBlack : kBenchWhite;
+
+    x3LoadLuts_(set);
+    sendCommand(CMD_X3_VCOM_DI);
+    sendData(vcom_di);
+    sendData(0x07);
+
+    const int64_t spi_t0 = esp_timer_get_time();
+    x3SendFillPlane_(CMD_X3_WRITE_NEW, target);
+    const int64_t spi_t1 = esp_timer_get_time();
+    if (spi_us_out)
+      *spi_us_out = (uint32_t)(spi_t1 - spi_t0);
+
+    x3PowerOn_();
+    const int64_t t0 = esp_timer_get_time();
+    sendCommand(CMD_X3_REFRESH);
+    x3WaitBusy_(" bench");
+    const uint32_t dt_us = (uint32_t)(esp_timer_get_time() - t0);
+
+    // Sync OLD so the following pass sees the correct "previous" state.
+    x3SendFillPlane_(CMD_X3_WRITE_OLD, target);
+    return dt_us;
   }
 
   void x3Load1PhaseImgLuts_() {
