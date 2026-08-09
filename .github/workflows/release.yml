@@ -39,13 +39,13 @@ jobs:
         run: pio run
 
       - name: Rename firmware with version
-        run: mv firmware.bin "Microreader+(TF)-${{ steps.version.outputs.version }}.bin"
+        run: mv firmware.bin "Microreader-TF-${{ steps.version.outputs.version }}.bin"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: "Microreader+(TF)-${{ steps.version.outputs.version }}.bin"
+          path: "Microreader-TF-${{ steps.version.outputs.version }}.bin"
 
   calibre-plugin:
     name: Build Calibre plugin
@@ -99,7 +99,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           VERSION="${VERSION#v}"
-          test -f "release-assets/Microreader+(TF)-${VERSION}.bin"
+          test -f "release-assets/Microreader-TF-${VERSION}.bin"
           test -f "release-assets/Microreader-Calibre-Plugin-${VERSION}.zip"
           ls -l release-assets
 
@@ -132,13 +132,13 @@ jobs:
             ${{ steps.notes.outputs.changelog }}
 
             ### Downloads
-            - **Microreader+(TF)-${{ steps.notes.outputs.version }}.bin** — Flash this to your Xteink X4 (ESP32-C3).
+            - **Microreader-TF-${{ steps.notes.outputs.version }}.bin** — Flash this to your Xteink X4 (ESP32-C3).
               Use the Crosspoint web flasher or esptool:
-              `python -m esptool --chip esp32c3 --port COM5 --baud 921600 write_flash 0x0 "Microreader+(TF)-${{ steps.notes.outputs.version }}.bin"`
+              `python -m esptool --chip esp32c3 --port COM5 --baud 921600 write_flash 0x0 "Microreader-TF-${{ steps.notes.outputs.version }}.bin"`
             - **Microreader-Calibre-Plugin-${{ steps.notes.outputs.version }}.zip** — Calibre plugin for sending/receiving books.
               Install in Calibre: Preferences → Plugins → Load plugin from file.
           files: |
-            release-assets/Microreader+(TF)-${{ steps.notes.outputs.version }}.bin
+            release-assets/Microreader-TF-${{ steps.notes.outputs.version }}.bin
             release-assets/Microreader-Calibre-Plugin-${{ steps.notes.outputs.version }}.zip
           draft: false
           prerelease: false
