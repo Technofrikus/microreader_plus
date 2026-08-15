@@ -1,8 +1,10 @@
 #include "ReaderScreen.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../Application.h"
@@ -310,6 +312,7 @@ uint32_t ReaderScreen::count_page_chars_() const {
 }
 
 void ReaderScreen::track_page_time_() {
+  last_valid_reading_ms_ = 0;
   if (page_display_start_ms_ == 0)
     return;
 
@@ -322,7 +325,7 @@ void ReaderScreen::track_page_time_() {
   // always visible).
   last_page_elapsed_ms_ = elapsed_ms;
 
-  // Apply safeguards: only count if within valid range
+  // Apply safeguards: only count if within valid range.
   if (elapsed_ms >= kMinPageTimeMs && elapsed_ms <= kMaxPageTimeMs) {
     // Convert page time to ms-per-char (Q16 fixed-point) using the character
     // count of the page that was just displayed. Pages with no text (e.g. image-
@@ -336,24 +339,126 @@ void ReaderScreen::track_page_time_() {
         ms_per_char_q16 = kMinMsPerCharQ16;
       else if (ms_per_char_q16 > kMaxMsPerCharQ16)
         ms_per_char_q16 = kMaxMsPerCharQ16;
-      const uint32_t sample_q16 = static_cast<uint32_t>(ms_per_char_q16);
+      uint32_t sample_q16 = static_cast<uint32_t>(ms_per_char_q16);
 
-      // Exponential moving average: avg = avg + alpha * (sample - avg).
-      // Recent pages dominate, so the ETA adapts to the current pace quickly.
       if (!has_valid_eta_) {
-        avg_ms_per_char_ = sample_q16;
-        has_valid_eta_ = true;
+        // With no global/book seed, wait for three pages and use their median.
+        // This avoids adopting a single distracted first page as the speed.
+        eta_initial_samples_[eta_initial_sample_count_++] = sample_q16;
+        if (eta_initial_sample_count_ == eta_initial_samples_.size()) {
+          auto samples = eta_initial_samples_;
+          if (samples[0] > samples[1]) std::swap(samples[0], samples[1]);
+          if (samples[1] > samples[2]) std::swap(samples[1], samples[2]);
+          if (samples[0] > samples[1]) std::swap(samples[0], samples[1]);
+          avg_ms_per_char_ = samples[1];
+          book_avg_ms_per_char_ = samples[1];
+          has_valid_eta_ = true;
+          book_eta_sample_count_ = 3;
+          book_long_eta_sample_count_ = 3;
+        }
       } else {
+        // Classify a page against its expected reading time before it reaches
+        // either average. Long pages are only pauses when they are both at
+        // least two minutes and three times slower than expected; a fast page
+        // is symmetric at less than one third of expected. A real pace change
+        // has to persist for five consecutive pages before it is trusted.
+        const uint64_t expected_ms =
+            (static_cast<uint64_t>(page_chars) * avg_ms_per_char_) >> kMsPerCharShift;
+        int8_t outlier_direction = 0;
+        if (elapsed_ms > std::max<uint64_t>(kPauseMinTimeMs, expected_ms * 3u))
+          outlier_direction = 1;
+        else if (static_cast<uint64_t>(elapsed_ms) * 3u < expected_ms)
+          outlier_direction = -1;
+
+        if (outlier_direction == 0) {
+          eta_outlier_direction_ = 0;
+          eta_outlier_streak_ = 0;
+        } else {
+          if (eta_outlier_direction_ == outlier_direction) {
+            if (eta_outlier_streak_ < UINT8_MAX)
+              ++eta_outlier_streak_;
+          } else {
+            eta_outlier_direction_ = outlier_direction;
+            eta_outlier_streak_ = 1;
+          }
+          if (eta_outlier_streak_ < kEtaOutlierConfirmSamples) {
+            page_display_start_ms_ = 0;
+            return;
+          }
+          // Once confirmed, let the responsive estimate catch up over a few
+          // accepted pages. The book average remains deliberately slow.
+          if (eta_outlier_streak_ == kEtaOutlierConfirmSamples)
+            eta_transition_samples_ = kEtaWarmupSamples;
+        }
+
+        const bool warming_up = book_eta_sample_count_ < kEtaWarmupSamples;
+        // Symmetric winsorizing relative to the current pace. A single slow
+        // distracted page and a single unusually fast page get identical
+        // protection; sustained changes still move the EMA over several pages.
+        const bool transitioning = eta_transition_samples_ > 0;
+        const uint32_t low_pct = transitioning ? 50u : (warming_up ? 55u : 70u);
+        const uint32_t high_pct = transitioning ? 200u : (warming_up ? 145u : 130u);
+        const uint32_t low = static_cast<uint32_t>((static_cast<uint64_t>(avg_ms_per_char_) * low_pct) / 100u);
+        const uint32_t high = static_cast<uint32_t>((static_cast<uint64_t>(avg_ms_per_char_) * high_pct) / 100u);
+        if (sample_q16 < low)
+          sample_q16 = low;
+        else if (sample_q16 > high)
+          sample_q16 = high;
+
+        const uint32_t alpha = transitioning ? kEtaWarmupAlphaQ16
+                                              : (warming_up ? kEtaWarmupAlphaQ16 : kEtaAlphaQ16);
         const uint32_t delta = sample_q16 > avg_ms_per_char_ ? sample_q16 - avg_ms_per_char_
                                                              : avg_ms_per_char_ - sample_q16;
-        const uint32_t correction = static_cast<uint32_t>((static_cast<uint64_t>(delta) * kEtaAlphaQ16) >> kMsPerCharShift);
+        const uint32_t correction = static_cast<uint32_t>((static_cast<uint64_t>(delta) * alpha) >> kMsPerCharShift);
         avg_ms_per_char_ = sample_q16 > avg_ms_per_char_ ? avg_ms_per_char_ + correction
                                                          : avg_ms_per_char_ - correction;
+        if (book_eta_sample_count_ < kEtaWarmupSamples)
+          ++book_eta_sample_count_;
+        if (eta_transition_samples_ > 0)
+          --eta_transition_samples_;
+
+        // The book ETA has its own long-running speed. Give a short book a
+        // useful personal calibration, then settle to a stable ~60-page EMA.
+        if (book_avg_ms_per_char_ == 0) {
+          book_avg_ms_per_char_ = avg_ms_per_char_;
+        } else {
+          const uint32_t book_alpha = book_long_eta_sample_count_ < kBookEtaEarlySamples
+                                          ? kBookEtaEarlyAlphaQ16
+                                      : book_long_eta_sample_count_ < kBookEtaMiddleSamples
+                                          ? kBookEtaMiddleAlphaQ16
+                                          : kBookEtaAlphaQ16;
+          const uint32_t book_delta = sample_q16 > book_avg_ms_per_char_
+                                          ? sample_q16 - book_avg_ms_per_char_
+                                          : book_avg_ms_per_char_ - sample_q16;
+          const uint32_t book_correction = static_cast<uint32_t>(
+              (static_cast<uint64_t>(book_delta) * book_alpha) >> kMsPerCharShift);
+          book_avg_ms_per_char_ = sample_q16 > book_avg_ms_per_char_
+                                      ? book_avg_ms_per_char_ + book_correction
+                                      : book_avg_ms_per_char_ - book_correction;
+        }
+        if (book_long_eta_sample_count_ < UINT8_MAX)
+          ++book_long_eta_sample_count_;
       }
-      // Persist the running average so the ETA is usable immediately on the
-      // next book open.
-      reader_settings_.avg_ms_per_char = avg_ms_per_char_;
+
+      if (has_valid_eta_) {
+        last_valid_reading_ms_ = elapsed_ms;
+        // Keep a slow-moving global fallback for books that have no local
+        // calibration yet. It never drives an already-open book's ETA.
+        uint32_t& global = reader_settings_.avg_ms_per_char;
+        if (global == 0) {
+          global = avg_ms_per_char_;
+        } else {
+          const uint32_t delta = avg_ms_per_char_ > global ? avg_ms_per_char_ - global : global - avg_ms_per_char_;
+          const uint32_t correction = static_cast<uint32_t>((static_cast<uint64_t>(delta) * kGlobalEtaAlphaQ16) >> kMsPerCharShift);
+          global = avg_ms_per_char_ > global ? global + correction : global - correction;
+        }
+      }
     }
+  } else {
+    // An invalidly short flip or a very long dwell is not evidence for a
+    // consecutive pace change.
+    eta_outlier_direction_ = 0;
+    eta_outlier_streak_ = 0;
   }
   // Reset start timestamp for next page (will be re-stamped on render)
   page_display_start_ms_ = 0;
@@ -362,12 +467,103 @@ void ReaderScreen::track_page_time_() {
 void ReaderScreen::reset_eta_() {
   has_valid_eta_ = false;
   avg_ms_per_char_ = 0;
+  book_avg_ms_per_char_ = 0;
   page_display_start_ms_ = 0;
-  // Load persisted average if available — seeds the EMA so the ETA is usable
-  // immediately on book open, before new measurements arrive.
-  if (reader_settings_.avg_ms_per_char > 0) {
-    avg_ms_per_char_ = reader_settings_.avg_ms_per_char;
+  last_valid_reading_ms_ = 0;
+  displayed_book_eta_ms_ = UINT64_MAX;
+  eta_initial_sample_count_ = 0;
+  eta_outlier_direction_ = 0;
+  eta_outlier_streak_ = 0;
+  eta_transition_samples_ = 0;
+
+  // A book-local calibration wins over the global fallback. The latter makes
+  // the ETA useful immediately for a book that has never been read before.
+  if (loaded_book_avg_ms_per_char_ > 0) {
+    avg_ms_per_char_ = loaded_book_avg_ms_per_char_;
+    book_eta_sample_count_ = loaded_book_eta_sample_count_;
+    book_avg_ms_per_char_ = loaded_book_long_avg_ms_per_char_ > 0 ? loaded_book_long_avg_ms_per_char_
+                                                                   : loaded_book_avg_ms_per_char_;
+    book_long_eta_sample_count_ = loaded_book_long_avg_ms_per_char_ > 0
+                                      ? loaded_book_long_eta_sample_count_
+                                      : loaded_book_eta_sample_count_;
     has_valid_eta_ = true;
+  } else if (reader_settings_.avg_ms_per_char > 0) {
+    avg_ms_per_char_ = reader_settings_.avg_ms_per_char;
+    book_avg_ms_per_char_ = avg_ms_per_char_;
+    book_eta_sample_count_ = 0;
+    book_long_eta_sample_count_ = 0;
+    has_valid_eta_ = true;
+  } else {
+    book_eta_sample_count_ = 0;
+    book_long_eta_sample_count_ = 0;
+  }
+  loaded_book_avg_ms_per_char_ = 0;
+  loaded_book_eta_sample_count_ = 0;
+  loaded_book_long_avg_ms_per_char_ = 0;
+  loaded_book_long_eta_sample_count_ = 0;
+}
+
+uint64_t ReaderScreen::book_eta_ms_(uint64_t remaining_chars) const {
+  if (!has_valid_eta_ || book_avg_ms_per_char_ == 0)
+    return UINT64_MAX;
+  if (remaining_chars == 0)
+    return 0;
+  if (remaining_chars > UINT64_MAX / book_avg_ms_per_char_)
+    return UINT64_MAX;
+  const uint64_t long_eta = (remaining_chars * book_avg_ms_per_char_) >> kMsPerCharShift;
+  const uint64_t current_eta = eta_ms_(remaining_chars);
+  if (current_eta == UINT64_MAX || long_eta >= kBookEtaBlendWindowMs)
+    return long_eta;
+  // Within the final hour, linearly blend in current pace. This deliberately
+  // makes the last pages accurate without making a long book jumpy.
+  const uint64_t current_weight = kBookEtaBlendWindowMs - long_eta;
+  if (current_eta >= long_eta)
+    return long_eta + ((current_eta - long_eta) * current_weight) / kBookEtaBlendWindowMs;
+  return long_eta - ((long_eta - current_eta) * current_weight) / kBookEtaBlendWindowMs;
+}
+
+int ReaderScreen::round_book_eta_minutes_(uint64_t eta_ms) const {
+  const uint64_t minutes = (eta_ms + 59999u) / 60000u;
+  if (minutes == 0)
+    return 0;
+  const uint64_t step = minutes < 60 ? 1u : minutes <= 180 ? 5u : 10u;
+  const uint64_t rounded = ((minutes + step / 2u) / step) * step;
+  return rounded > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(rounded);
+}
+
+void ReaderScreen::update_displayed_book_eta_() {
+  if (!has_valid_eta_)
+    return;
+  const uint64_t total_chars = mrb_.total_char_count();
+  if (total_chars == 0)
+    return;
+  uint64_t chars_before = 0;
+  for (size_t i = 0; i < chapter_idx_; ++i)
+    chars_before += mrb_.chapter_char_count(static_cast<uint16_t>(i));
+  const uint64_t cur = chars_before +
+                       (chapter_src_ ? chapter_src_->char_before_para(page_pos_.paragraph) : 0) + page_pos_.text_offset;
+  const uint64_t raw = book_eta_ms_(cur >= total_chars ? 0 : total_chars - cur);
+  if (raw == UINT64_MAX)
+    return;
+  if (displayed_book_eta_ms_ == UINT64_MAX) {
+    displayed_book_eta_ms_ = raw;
+    return;
+  }
+
+  // First account for actual reading time, then allow the model's correction
+  // to move by 2% (at least 2 min, at most 10 min) per page turn.
+  uint64_t expected = displayed_book_eta_ms_;
+  if (last_valid_reading_ms_ > 0)
+    expected = expected > last_valid_reading_ms_ ? expected - last_valid_reading_ms_ : 0;
+  uint64_t limit = expected / 50u;
+  if (limit < 120000u)
+    limit = 120000u;
+  if (limit > 600000u)
+    limit = 600000u;
+  if (raw > expected) {
+    displayed_book_eta_ms_ = raw - expected > limit ? expected + limit : raw;
+  } else {
+    displayed_book_eta_ms_ = expected - raw > limit ? (expected > limit ? expected - limit : 0) : raw;
   }
 }
 
@@ -478,6 +674,8 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   image_size_fn_ = make_image_size_query(mrb_, path_, static_cast<uint16_t>(buf.width()));
   saved_chapter_idx_ = 0;
   saved_page_pos_ = PagePosition{0, 0};
+  loaded_book_avg_ms_per_char_ = 0;
+  loaded_book_eta_sample_count_ = 0;
   load_position_();
   load_chapter_(saved_chapter_idx_);
   if (!chapter_src_) {
@@ -761,6 +959,7 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
     // Stamp the start of this page's display for ETA measurement.
     page_display_start_ms_ = now_ms_();
     buf.refresh_page();
+    update_displayed_book_eta_();
     save_position_();
   }
 
@@ -1573,8 +1772,11 @@ void ReaderScreen::save_position_() {
   FILE* f = std::fopen(path.c_str(), "w");
   if (!f)
     return;
-  std::fprintf(f, "%u %u %u %u\n", static_cast<unsigned>(chapter_idx_), static_cast<unsigned>(page_pos_.paragraph),
-               static_cast<unsigned>(page_pos_.offset), static_cast<unsigned>(page_pos_.text_offset));
+  std::fprintf(f, "%u %u %u %u %lu %u %lu %u\n", static_cast<unsigned>(chapter_idx_),
+               static_cast<unsigned>(page_pos_.paragraph), static_cast<unsigned>(page_pos_.offset),
+               static_cast<unsigned>(page_pos_.text_offset), static_cast<unsigned long>(avg_ms_per_char_),
+               static_cast<unsigned>(book_eta_sample_count_), static_cast<unsigned long>(book_avg_ms_per_char_),
+               static_cast<unsigned>(book_long_eta_sample_count_));
   std::fclose(f);
 }
 
@@ -1606,18 +1808,31 @@ void ReaderScreen::load_position_() {
 
   if (!f)
     return;
-  unsigned ch = 0, para = 0, line = 0, to = 0;
-  int scanned = std::fscanf(f, "%u %u %u %u", &ch, &para, &line, &to);
+  unsigned ch = 0, para = 0, line = 0, to = 0, book_avg = 0, book_samples = 0, book_long_avg = 0,
+           book_long_samples = 0;
+  int scanned = std::fscanf(f, "%u %u %u %u %u %u %u %u", &ch, &para, &line, &to, &book_avg, &book_samples,
+                            &book_long_avg, &book_long_samples);
   std::fclose(f);
   if (scanned >= 3) {
     saved_chapter_idx_ = ch;
     saved_page_pos_ = PagePosition{static_cast<uint16_t>(para), static_cast<uint16_t>(line), static_cast<uint32_t>(to)};
+    if (scanned >= 6 && book_samples > 0 && book_avg >= kMinMsPerCharQ16 && book_avg <= kMaxMsPerCharQ16) {
+      loaded_book_avg_ms_per_char_ = book_avg;
+      loaded_book_eta_sample_count_ =
+          static_cast<uint8_t>(book_samples > kEtaWarmupSamples ? kEtaWarmupSamples : book_samples);
+    }
+    if (scanned >= 8 && book_long_samples > 0 && book_long_avg >= kMinMsPerCharQ16 &&
+        book_long_avg <= kMaxMsPerCharQ16) {
+      loaded_book_long_avg_ms_per_char_ = book_long_avg;
+      loaded_book_long_eta_sample_count_ = static_cast<uint8_t>(book_long_samples);
+    }
     MR_LOGI("reader", "Loaded pos ch=%u para=%u line=%u to=%u (scanned=%d)", ch, para, line, to, scanned);
     // Write to the new path only when migrating from the legacy key.
     if (migrating) {
       FILE* fw = std::fopen(pos_path_.c_str(), "w");
       if (fw) {
-        std::fprintf(fw, "%u %u %u %u\n", ch, para, line, to);
+        std::fprintf(fw, "%u %u %u %u %u %u %u %u\n", ch, para, line, to, book_avg, book_samples, book_long_avg,
+                     book_long_samples);
         std::fclose(fw);
       }
     }

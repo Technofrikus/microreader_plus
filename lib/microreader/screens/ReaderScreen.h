@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <climits>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -193,7 +194,11 @@ class ReaderScreen final : public IScreen {
   // steady_clock on desktop) rather than a frame counter, so it stays accurate
   // even when the main loop stalls on SD I/O or chapter conversion.
   static constexpr uint32_t kMinPageTimeMs = 5000;   // minimum page display time to count (5s)
-  static constexpr uint32_t kMaxPageTimeMs = 300000; // maximum page display time to count (5min)
+  // More than ten minutes on one page is always treated as an interruption.
+  // Shorter pauses are detected relative to the expected time for that page.
+  static constexpr uint32_t kMaxPageTimeMs = 600000;
+  static constexpr uint32_t kPauseMinTimeMs = 120000;
+  static constexpr uint8_t kEtaOutlierConfirmSamples = 5;
   // ms-per-char stored as fixed-point Q16 (value = stored / 65536). This keeps
   // sub-millisecond precision (a fast reader does ~5-10 ms/char) in a uint32.
   static constexpr uint32_t kMsPerCharShift = 16;
@@ -203,13 +208,47 @@ class ReaderScreen final : public IScreen {
   // otherwise skew the average or overflow the Q16 sample value.
   static constexpr uint32_t kMinMsPerCharQ16 = 1u << kMsPerCharShift;      // ~1 ms/char
   static constexpr uint32_t kMaxMsPerCharQ16 = 120u << kMsPerCharShift;    // ~120 ms/char
-  // EMA smoothing factor (Q16). alpha = 2/(N+1) with N=10 gives an effective
-  // ~10-page window: recent pages dominate, so the ETA tracks the current pace
-  // and recovers quickly from a burst of fast page flips.
+  // Stable-phase smoothing factor (Q16). alpha = 2/(N+1) with N=10 gives an
+  // effective ~10-page window. New books use the faster kEtaWarmupAlphaQ16
+  // for their first few samples so a different language/text difficulty is
+  // learned quickly without making established estimates jumpy.
   static constexpr uint32_t kEtaAlphaQ16 = (2u << kMsPerCharShift) / 11u;  // ~0.1818
+  static constexpr uint32_t kEtaWarmupAlphaQ16 = (3u << kMsPerCharShift) / 10u;  // 0.30
+  static constexpr uint8_t kEtaWarmupSamples = 5;
+  // Book ETA uses a second, much slower average. It learns quickly enough for
+  // short books, then settles to roughly a 60-page window.
+  static constexpr uint32_t kBookEtaEarlyAlphaQ16 = (15u << kMsPerCharShift) / 100u;
+  static constexpr uint32_t kBookEtaMiddleAlphaQ16 = (8u << kMsPerCharShift) / 100u;
+  static constexpr uint32_t kBookEtaAlphaQ16 = (3u << kMsPerCharShift) / 100u;
+  static constexpr uint8_t kBookEtaEarlySamples = 5;
+  static constexpr uint8_t kBookEtaMiddleSamples = 15;
+  static constexpr uint32_t kBookEtaBlendWindowMs = 60u * 60u * 1000u;
+  static constexpr uint32_t kGlobalEtaAlphaQ16 = (2u << kMsPerCharShift) / 100u;  // 0.02
   // Single running average (Q16). No ring buffer needed.
   uint32_t avg_ms_per_char_ = 0;
+  uint32_t book_avg_ms_per_char_ = 0;
   bool has_valid_eta_ = false;
+  // A book keeps its own calibration in its .pos file. The global setting is
+  // only a seed for a book that has not yet been calibrated.
+  uint8_t book_eta_sample_count_ = 0;
+  uint8_t book_long_eta_sample_count_ = 0;
+  uint32_t loaded_book_avg_ms_per_char_ = 0;
+  uint8_t loaded_book_eta_sample_count_ = 0;
+  uint32_t loaded_book_long_avg_ms_per_char_ = 0;
+  uint8_t loaded_book_long_eta_sample_count_ = 0;
+  // A fresh installation waits for three samples and uses their median, so a
+  // distracted first page cannot become the initial reading speed.
+  std::array<uint32_t, 3> eta_initial_samples_{};
+  uint8_t eta_initial_sample_count_ = 0;
+  // A single page can be a pause or a skipped page. A pace change is only
+  // trusted after five consecutive relative outliers in the same direction.
+  int8_t eta_outlier_direction_ = 0;  // -1 fast, +1 slow, 0 none
+  uint8_t eta_outlier_streak_ = 0;
+  uint8_t eta_transition_samples_ = 0;
+  // Separate display state: the underlying speed remains responsive while the
+  // book ETA is allowed to correct only gradually from one page to the next.
+  uint64_t displayed_book_eta_ms_ = UINT64_MAX;
+  uint32_t last_valid_reading_ms_ = 0;
   // Monotonic-ms timestamp captured when the current page was first rendered.
   // 0 means "no page shown yet". Wraps every ~49.7 days; the elapsed-time
   // math is wrap-safe as long as a single page is shown for < 49 days.
@@ -348,8 +387,11 @@ class ReaderScreen final : public IScreen {
     const uint64_t cur =
         chars_before + (chapter_src_ ? chapter_src_->char_before_para(page_pos_.paragraph) : 0) + page_pos_.text_offset;
     if (cur >= total_chars)
-      return eta_minutes_(0);  // at/after end of book → <1m
-    return eta_minutes_(total_chars - cur);
+      return 0;
+    const uint64_t raw_ms = book_eta_ms_(total_chars - cur);
+    if (raw_ms == UINT64_MAX)
+      return -1;
+    return round_book_eta_minutes_(displayed_book_eta_ms_ != UINT64_MAX ? displayed_book_eta_ms_ : raw_ms);
   }
 
  private:
@@ -362,21 +404,33 @@ class ReaderScreen final : public IScreen {
   // based on the EMA ms-per-char. Returns -1 if no valid measurement is
   // available, 0 if the remaining time is less than 1 minute.
   int eta_minutes_(uint64_t remaining_chars) const {
-    if (!has_valid_eta_ || avg_ms_per_char_ == 0)
+    const uint64_t eta_ms = eta_ms_(remaining_chars);
+    if (eta_ms == UINT64_MAX)
       return -1;
-    // At the very end (no chars left), the remaining time is under a minute.
+    const uint64_t eta_min = eta_ms / 60000u;
+    return eta_min > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(eta_min);
+  }
+
+  // UINT64_MAX denotes that no ETA is available.
+  uint64_t eta_ms_(uint64_t remaining_chars) const {
+    if (!has_valid_eta_ || avg_ms_per_char_ == 0)
+      return UINT64_MAX;
     if (remaining_chars == 0)
       return 0;
     // eta_ms = remaining_chars * avg_ms_per_char = remaining_chars * avg_q16 / 2^16
     // Guard against uint64 overflow: skip the estimate if the product would wrap.
     if (remaining_chars > UINT64_MAX / avg_ms_per_char_)
-      return -1;
-    const uint64_t eta_ms = (remaining_chars * avg_ms_per_char_) >> kMsPerCharShift;
-    const uint64_t eta_min = eta_ms / 60000u;
-    return eta_min > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(eta_min);
+      return UINT64_MAX;
+    return (remaining_chars * avg_ms_per_char_) >> kMsPerCharShift;
   }
 
+  // Book ETA uses the long-running book pace, blending back towards the
+  // current pace during the final hour so the last pages remain realistic.
+  uint64_t book_eta_ms_(uint64_t remaining_chars) const;
+
   void track_page_time_();
+  void update_displayed_book_eta_();
+  int round_book_eta_minutes_(uint64_t eta_ms) const;
   void reset_eta_();
 };
 
