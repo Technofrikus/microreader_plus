@@ -15,7 +15,6 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 | 7 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
 | 8 | Rotate the screen (portrait ↔ landscape) by long-pressing the Select button while reading | — |
 | 9 | Added a configurable three-slot status bar with chapter/book progress, ETA, battery, and paragraph counters | — |
-| 10 | Added configurable half-refresh behavior (`Never`, `Pages`, or `Always`) | — |
 | 11 | Added a fast native 1-bit/two-plane sleep-image path with direct and byte-aligned uploads | — |
 | 12 | Added model-native X3/X4 sleep assets and optimized X3 transfers, reducing sleep and boot overhead | — |
 | 13 | Added X3 fuel-gauge voltage logging and improved startup diagnostics | — |
@@ -49,7 +48,6 @@ This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/mi
 ### Reader Options
 - Antialiasing On/Off
 - Configurable status-bar slots for chapter/book progress, ETA, battery, and paragraph counts
-- Half-refresh mode: Never, Pages, or Always
 
 ### Support for X3
 - **Auto-detect** X3 vs X4 at boot via I2C hardware fingerprint

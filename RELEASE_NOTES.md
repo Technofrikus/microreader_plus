@@ -5,9 +5,7 @@
 ### Reader and settings
 
 - Added paragraph counters for the status bar: current chapter/book paragraph and totals.
-- Added configurable half-refresh behavior with `Never`, `Pages`, and `Always` modes.
 - Improved ETA calculation with a more robust adaptive reading-speed estimate.
-- Fixed the panel preparation required before grayscale sleep images when half-refresh is enabled.
 - Added persistent settings support and aligned the sleep-image directory with the visible SD-card folder.
 
 ### Sleep images and display performance

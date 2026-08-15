@@ -350,29 +350,10 @@ class DrawBuffer {
     return inactive_();
   }
 
-  // Controls whether refresh() uses the fast/partial waveform or the slower,
-  // cleaner half-refresh waveform. Configurable at runtime via the Settings
-  // menu (Half Refresh: Never / Pages / Always).
-  enum class HalfRefreshMode : uint8_t {
-    Never = 0,   // always fast/partial refresh
-    Pages = 1,   // half refresh for reader page turns only, fast for menus
-    Always = 2,  // half refresh for every display change
-  };
-
-  void set_half_refresh_mode(HalfRefreshMode m) {
-    half_refresh_mode_ = m;
-  }
-  HalfRefreshMode half_refresh_mode() const {
-    return half_refresh_mode_;
-  }
-
   void refresh() {
-    refresh_impl_(false);
-  }
-
-  // Page-turn variant: honors the Pages mode (half refresh for reader pages).
-  void refresh_page() {
-    refresh_impl_(true);
+    display_.partial_refresh(inactive_(), active_());
+    active_idx_ = 1 - active_idx_;
+    active_valid_ = true;
   }
 
   void full_refresh(RefreshMode mode = RefreshMode::Half, bool turnOffScreen = false, bool singlePhase = false) {
@@ -382,21 +363,6 @@ class DrawBuffer {
     active_valid_ = true;
   }
 
- private:
-  void refresh_impl_(bool is_page) {
-    if (half_refresh_mode_ == HalfRefreshMode::Always ||
-        (half_refresh_mode_ == HalfRefreshMode::Pages && is_page)) {
-      full_refresh();
-      return;
-    }
-    display_.partial_refresh(inactive_(), active_());
-    active_idx_ = 1 - active_idx_;
-    active_valid_ = true;
-  }
-
-  HalfRefreshMode half_refresh_mode_ = HalfRefreshMode::Never;
-
- public:
   void deep_sleep() {
     display_.deep_sleep();
   }

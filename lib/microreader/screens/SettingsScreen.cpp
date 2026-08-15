@@ -56,15 +56,6 @@ static std::string get_rotate_display_label(bool rotated) {
   return std::string("Display: ") + (rotated ? "Landscape" : "Portrait");
 }
 
-static std::string get_half_refresh_label(DrawBuffer::HalfRefreshMode mode) {
-  const char* name = "Never";
-  if (mode == DrawBuffer::HalfRefreshMode::Pages)
-    name = "Pages";
-  else if (mode == DrawBuffer::HalfRefreshMode::Always)
-    name = "Always";
-  return std::string("Half Refresh: ") + name;
-}
-
 static std::string get_menu_font_label(int size) {
   return std::string("Menu Size: ") + (size == 0 ? "Small" : (size == 1 ? "Medium" : "Large"));
 }
@@ -200,9 +191,6 @@ void SettingsScreen::on_start() {
   // --- Appearance ---
   idx_rotate_display_ = count();
   add_item(get_rotate_display_label(app_ && app_->rotate_display()));
-
-  idx_half_refresh_ = count();
-  add_item(get_half_refresh_label(app_ ? app_->half_refresh_mode() : DrawBuffer::HalfRefreshMode::Never));
 
   idx_menu_font_ = count();
   add_item(get_menu_font_label(app_ ? app_->menu_font_size() : 0));
@@ -378,16 +366,6 @@ void SettingsScreen::on_select(int index) {
     }
     return;
   }
-  if (index == idx_half_refresh_) {
-    if (app_ && buf_) {
-      DrawBuffer::HalfRefreshMode v = static_cast<DrawBuffer::HalfRefreshMode>(
-          (static_cast<uint8_t>(app_->half_refresh_mode()) + 1) % 3);
-      app_->set_half_refresh_mode(v);
-      buf_->set_half_refresh_mode(v);
-      set_item_label(idx_half_refresh_, get_half_refresh_label(v));
-    }
-    return;
-  }
   if (index == idx_menu_font_) {
     if (app_) {
       int v = (app_->menu_font_size() + 1) % 3;
@@ -545,16 +523,6 @@ void SettingsScreen::on_long_select(int index) {
       app_->set_rotate_display(v);
       set_item_label(idx_rotate_display_, get_rotate_display_label(v));
       buf_->set_rotation(v ? Rotation::Deg0 : Rotation::Deg90);
-    }
-    return;
-  }
-  if (index == idx_half_refresh_) {
-    if (app_ && buf_) {
-      DrawBuffer::HalfRefreshMode v = static_cast<DrawBuffer::HalfRefreshMode>(
-          (static_cast<uint8_t>(app_->half_refresh_mode()) + 2) % 3);
-      app_->set_half_refresh_mode(v);
-      buf_->set_half_refresh_mode(v);
-      set_item_label(idx_half_refresh_, get_half_refresh_label(v));
     }
     return;
   }

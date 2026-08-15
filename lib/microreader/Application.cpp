@@ -72,9 +72,6 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   // Apply persisted display rotation.
   buf.set_rotation(rotate_display_ ? Rotation::Deg0 : Rotation::Deg90);
 
-  // Apply persisted half-refresh preference.
-  buf.set_half_refresh_mode(half_refresh_mode_);
-
   // Keep the menu below a restored reader, but do not build its directory
   // listing until it is actually shown after the reader is closed.
   const bool auto_open_reader = !pending_book_path_.empty() && reader_font_ && reader_font_->valid();
@@ -506,7 +503,6 @@ void microreader::Application::save_settings_() {
   std::fprintf(f, "reader_ctrl=%u\n", static_cast<unsigned>(reader_controls_));
   std::fprintf(f, "menu_ctrl=%u\n", static_cast<unsigned>(menu_controls_));
   std::fprintf(f, "rotate_display=%u\n", rotate_display_ ? 1u : 0u);
-  std::fprintf(f, "half_refresh=%u\n", static_cast<unsigned>(half_refresh_mode_));
   std::fprintf(f, "menu_font_size=%d\n", menu_font_size_);
 
   if (!custom_font_path_.empty())
@@ -633,9 +629,6 @@ void microreader::Application::load_settings_() {
     }
     else if (std::sscanf(line, "rotate_display=%u", &uval) == 1)
       rotate_display_ = (uval != 0);
-    else if (std::sscanf(line, "half_refresh=%u", &uval) == 1)
-      half_refresh_mode_ = uval <= 2 ? static_cast<DrawBuffer::HalfRefreshMode>(uval)
-                                     : DrawBuffer::HalfRefreshMode::Never;
     else if (std::sscanf(line, "menu_font_size=%u", &uval) == 1)
       menu_font_size_ = static_cast<int>(uval > 2 ? 2 : uval);
     else if (std::sscanf(line, "custom_font=%511[^\n]", sval) == 1)

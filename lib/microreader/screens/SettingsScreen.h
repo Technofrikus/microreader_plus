@@ -60,7 +60,6 @@ class SettingsScreen final : public ListMenuScreen {
   int idx_reader_controls_ = -1;
   int idx_menu_controls_ = -1;
   int idx_rotate_display_ = -1;
-  int idx_half_refresh_ = -1;
   int idx_menu_font_ = -1;
   int idx_font_ = -1;
   int idx_sleep_image_ = -1;
