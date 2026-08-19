@@ -518,8 +518,9 @@ static bool read_cmd_path(const char* log_label) {
   return true;
 }
 
-// Recursively delete a file or directory tree. Best-effort: deletes as much as
-// possible, does not abort on partial failures.
+// Recursively delete a file or directory tree. Do not rely on dirent::d_type:
+// FATFS may report DT_UNKNOWN for directories, in which case treating an entry
+// as a file leaves that directory behind and makes the final rmdir() fail.
 static void remove_recursive(const char* path) {
   DIR* d = opendir(path);
   if (!d) {
@@ -528,15 +529,16 @@ static void remove_recursive(const char* path) {
     return;
   }
   struct dirent* ent;
-  char child[300];
+  char child[512];
   while ((ent = readdir(d)) != nullptr) {
-    if (ent->d_name[0] == '.') continue;
+    // Skip only the traversal entries. Dot-prefixed files are valid FAT files
+    // and must be removed too, otherwise the parent directory stays non-empty.
+    if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+      continue;
     snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
-    if (ent->d_type == DT_DIR) {
-      remove_recursive(child);
-    } else {
-      remove(child);
-    }
+    // remove_recursive() first tries opendir(), then falls back to remove(),
+    // so it correctly handles both files and directories even for DT_UNKNOWN.
+    remove_recursive(child);
   }
   closedir(d);
   rmdir(path);
