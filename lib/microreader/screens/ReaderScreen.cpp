@@ -742,7 +742,9 @@ void ReaderScreen::resume(DrawBuffer& buf, IRuntime& runtime) {
   }
   // Check if font settings changed (font_size_idx may have been updated in options).
   if (const BitmapFontSet* fset = ext_font_set_ ? ext_font_set_ : (font_set_.valid() ? &font_set_ : nullptr)) {
-    const_cast<BitmapFontSet*>(fset)->set_base_size_index(reader_settings_.font_size_idx);
+    auto* mutable_fset = const_cast<BitmapFontSet*>(fset);
+    mutable_fset->set_base_size_index(reader_settings_.font_size_idx);
+    reader_settings_.font_size_idx = static_cast<uint8_t>(mutable_fset->base_size_index());
   }
 
   // Make sure to apply settings when coming from the reader options screen
@@ -1055,7 +1057,9 @@ void ReaderScreen::render_page_(DrawBuffer& buf) {
   FixedFont fixed_font(kGlyphW * kScale, kGlyphH * kScale + 4);
   const BitmapFontSet* fset = ext_font_set_ ? ext_font_set_ : (font_set_.valid() ? &font_set_ : nullptr);
   if (fset) {
-    const_cast<BitmapFontSet*>(fset)->set_base_size_index(reader_settings_.font_size_idx);
+    auto* mutable_fset = const_cast<BitmapFontSet*>(fset);
+    mutable_fset->set_base_size_index(reader_settings_.font_size_idx);
+    reader_settings_.font_size_idx = static_cast<uint8_t>(mutable_fset->base_size_index());
   }
   IFont& font = fset ? static_cast<IFont&>(const_cast<BitmapFontSet&>(*fset)) : static_cast<IFont&>(fixed_font);
   std::optional<Alignment> align_override = std::nullopt;

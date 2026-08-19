@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstring>
 
 #include "asset_blob.h"
@@ -102,6 +103,14 @@ class FontManager : public microreader::FontManager {
 
     buf.sync_bw_ram();
     buf.show_loading("Installing fonts...", 0);
+    int last_progress_bucket = 0;
+    auto show_install_progress = [&buf, &last_progress_bucket](int pct) {
+      int bucket = std::max(0, std::min(100, pct)) / 25;
+      if (bucket <= last_progress_bucket)
+        return;
+      last_progress_bucket = bucket;
+      buf.show_loading("Installing fonts...", bucket * 25);
+    };
 
     if (is_embedded) {
       ESP_LOGI("font", "Provisioning font \"%s\" from firmware...", target_asset);
@@ -115,7 +124,7 @@ class FontManager : public microreader::FontManager {
       }
       bool ok = FontPartition::provision_embedded(
           data, mapped_size, target_crc, buf.scratch_buf1(), microreader::DrawBuffer::kBufSize, buf.scratch_buf2(),
-          microreader::DrawBuffer::kBufSize, [&buf](int pct) { buf.show_loading("Installing fonts...", pct); });
+          microreader::DrawBuffer::kBufSize, show_install_progress);
       asset_blob::g_assets.unmap(mmap_h);
 
       if (ok) {
@@ -129,8 +138,7 @@ class FontManager : public microreader::FontManager {
     } else {
       ESP_LOGI("font", "Provisioning font from SD card: %s", custom_font.c_str());
       bool prov_ok = FontPartition::provision_uncompressed_file(
-          custom_font.c_str(), buf.scratch_buf2(), microreader::DrawBuffer::kBufSize,
-          [&buf](int pct) { buf.show_loading("Installing fonts...", pct); });
+          custom_font.c_str(), buf.scratch_buf2(), microreader::DrawBuffer::kBufSize, show_install_progress);
       buf.reset_after_scratch();
       if (prov_ok) {
         if (font_part_.mmap()) {

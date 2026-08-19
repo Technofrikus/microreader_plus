@@ -155,6 +155,7 @@ add_executable(microreader_tests
     unit/MrbLayoutComparisonTest.cpp
     unit/StreamingPipelineTest.cpp
     unit/NavigationTest.cpp
+    unit/ApplicationFontTest.cpp
     unit/BmpSleepConverterTest.cpp
     integration/RealBookTest.cpp
     integration/BulkBookTest.cpp

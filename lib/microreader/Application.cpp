@@ -66,6 +66,13 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   // Load settings first so initial_selection_ and reader settings are ready
   // before the menu's on_start() (directory scan + selection restore) runs.
   load_settings_();
+  // A font selected previously may expose more sizes than the active bundle.
+  // Re-apply the mapped bundle after loading settings so an out-of-range saved
+  // index is clamped and persisted before any reader/options screen is shown.
+  const uint8_t loaded_font_size_idx = reader_.reader_settings().font_size_idx;
+  if (reader_font_)
+    set_reader_font(reader_font_);
+  const bool font_size_was_normalized = reader_.reader_settings().font_size_idx != loaded_font_size_idx;
   // Apply persisted menu font size to all list screens.
   ListMenuScreen::set_font_size(menu_font_size_);
 
@@ -97,6 +104,8 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
     screen_mgr_.push(&settings_, buf, runtime);
   }
   pending_screen_.clear();
+  if (font_size_was_normalized)
+    save_settings_();
   buf.full_refresh();
 
   // The first page is now visible.  These small SD/I2C bookkeeping tasks are

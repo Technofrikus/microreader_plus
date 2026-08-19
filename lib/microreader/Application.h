@@ -85,12 +85,30 @@ class Application {
   void set_reader_font(const BitmapFontSet* fonts) {
     reader_font_ = fonts;
     reader_.set_fonts(fonts);
+    if (fonts && fonts->num_fonts() > 0) {
+      ReaderSettings& settings = reader_.reader_settings();
+      const uint8_t resolved = static_cast<uint8_t>(fonts->clamp_size_index(settings.font_size_idx));
+      if (resolved != settings.font_size_idx) {
+        settings.font_size_idx = resolved;
+        // During start(), the screen stack is still empty; saving there would
+        // overwrite the restored screen with "menu". start() persists the
+        // normalized value after it has rebuilt the stack instead.
+        if (!settings_path_.empty() && !screen_mgr_.empty())
+          save_settings_();
+      }
+    }
   }
   void set_font_manager(FontManager* fm) {
     font_manager_ = fm;
   }
   FontManager* font_manager() const {
     return font_manager_;
+  }
+  ReaderSettings& reader_settings() {
+    return reader_.reader_settings();
+  }
+  const ReaderSettings& reader_settings() const {
+    return reader_.reader_settings();
   }
 
   // Optional callback for "Invalidate Font" in the Settings menu (ESP32 only).

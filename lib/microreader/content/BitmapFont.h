@@ -365,9 +365,14 @@ class BitmapFontSet : public IFont {
   }
 
   void set_base_size_index(int base_idx) {
-    if (base_idx >= 0 && base_idx < num_fonts_) {
-      base_idx_ = base_idx;
-    }
+    if (num_fonts_ > 0)
+      base_idx_ = clamp_size_index(base_idx);
+  }
+
+  int clamp_size_index(int size_idx) const {
+    if (num_fonts_ <= 0 || size_idx <= 0)
+      return 0;
+    return size_idx < num_fonts_ ? size_idx : num_fonts_ - 1;
   }
 
   int base_size_index() const {

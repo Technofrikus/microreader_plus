@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cstring>
 #include <vector>
 
 #include "FontLoader.h"
@@ -33,6 +35,31 @@ TEST(BitmapFontSyntheticTest, TruncatedHeaderIsInvalid) {
   uint8_t buf[4] = {'M', 'B', 'F', '1'};
   microreader::BitmapFont font(buf, 4);
   EXPECT_FALSE(font.valid());
+}
+
+TEST(BitmapFontSyntheticTest, BaseSizeIndexClampsToLargestAvailableFont) {
+  constexpr size_t kFontCount = 4;
+  std::array<std::array<uint8_t, sizeof(microreader::MbfHeader)>, kFontCount> data{};
+  std::array<microreader::BitmapFont, kFontCount> fonts;
+  microreader::BitmapFontSet font_set;
+
+  for (size_t i = 0; i < kFontCount; ++i) {
+    microreader::MbfHeader header{};
+    header.magic = microreader::kMbfMagic;
+    header.version = microreader::kMbfVersion;
+    header.nominal_size = static_cast<uint16_t>(20 + i * 4);
+    header.y_advance = static_cast<uint8_t>(header.nominal_size + 4);
+    header.bitmap_data_offset = sizeof(microreader::MbfHeader);
+    std::memcpy(data[i].data(), &header, sizeof(header));
+    fonts[i].init(data[i].data(), data[i].size());
+    ASSERT_TRUE(fonts[i].valid());
+    font_set.add(&fonts[i]);
+  }
+
+  ASSERT_EQ(font_set.num_fonts(), 4);
+  font_set.set_base_size_index(5);
+  EXPECT_EQ(font_set.base_size_index(), 3);
+  EXPECT_EQ(font_set.get_font(font_set.base_size_index())->nominal_size(), 32);
 }
 
 // ---------------------------------------------------------------------------
