@@ -12,6 +12,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "microreader/DiagnosticLog.h"
 #include "microreader/display/DeviceConfig.h"
 #include "microreader/display/DrawBuffer.h"
 
@@ -984,6 +985,7 @@ class EInkDisplay : public microreader::IDisplay {
 
   void waitWhileBusy(const char* comment = nullptr) {
     uint32_t start = millis();
+    bool timed_out = false;
     if (config_.model == microreader::DeviceModel::X3) {
       // No pending fire-and-forget CMD12 → BUSY is idle HIGH, skip wait.
       if (x3_cmd12_in_flight_ == 0)
@@ -992,7 +994,10 @@ class EInkDisplay : public microreader::IDisplay {
       if (gpio_get_level(EPD_BUSY) == 0) {
         while (gpio_get_level(EPD_BUSY) == 0) {
           vTaskDelay(pdMS_TO_TICKS(10));
-          if (millis() - start > 30000) break;
+          if (millis() - start > 30000) {
+            timed_out = true;
+            break;
+          }
         }
       }
       --x3_cmd12_in_flight_;
@@ -1001,9 +1006,15 @@ class EInkDisplay : public microreader::IDisplay {
         vTaskDelay(pdMS_TO_TICKS(10));
         if (millis() - start > 10000) {
           ESP_LOGW("epd", "waitWhileBusy timeout%s", comment ? comment : "");
+          timed_out = true;
           break;
         }
       }
+    }
+    if (timed_out) {
+      MR_DIAG("epd_timeout", "wait model=%u busy=%d elapsed=%lu phase=%s",
+              static_cast<unsigned>(config_.model), gpio_get_level(EPD_BUSY),
+              static_cast<unsigned long>(millis() - start), comment ? comment : "none");
     }
     if (comment) {
       ESP_LOGI("epd", "waitWhileBusy done: %s (%lu ms)", comment, millis() - start);
@@ -1530,10 +1541,12 @@ class EInkDisplay : public microreader::IDisplay {
   void x3WaitBusy_(const char* comment) {
     uint32_t start = millis();
     bool sawLow = false;
+    bool timed_out = false;
     while (gpio_get_level(EPD_BUSY) == 1) {
       vTaskDelay(pdMS_TO_TICKS(10));
       if (millis() - start > 1000) {
         ESP_LOGW("epd", "waitWhileBusy timeout%s", comment ? comment : "");
+        timed_out = true;
         break;
       }
     }
@@ -1541,8 +1554,16 @@ class EInkDisplay : public microreader::IDisplay {
       sawLow = true;
       while (gpio_get_level(EPD_BUSY) == 0) {
         vTaskDelay(pdMS_TO_TICKS(10));
-        if (millis() - start > 30000) break;
+        if (millis() - start > 30000) {
+          timed_out = true;
+          break;
+        }
       }
+    }
+    if (timed_out) {
+      MR_DIAG("epd_timeout", "x3 busy=%d saw_low=%u elapsed=%lu phase=%s", gpio_get_level(EPD_BUSY),
+              static_cast<unsigned>(sawLow), static_cast<unsigned long>(millis() - start),
+              comment ? comment : "none");
     }
     if (!sawLow) return;
   }

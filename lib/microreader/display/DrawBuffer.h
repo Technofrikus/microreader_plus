@@ -6,6 +6,7 @@
 #include <cstring>
 #include <utility>
 
+#include "../DiagnosticLog.h"
 #include "../HeapLog.h"
 #include "../content/BitmapFont.h"
 #include "../content/TextLayout.h"
@@ -351,20 +352,28 @@ class DrawBuffer {
   }
 
   void refresh() {
+    MR_DIAG("refresh", "partial_begin width=%u height=%u", static_cast<unsigned>(width()),
+            static_cast<unsigned>(height()));
     display_.partial_refresh(inactive_(), active_());
     active_idx_ = 1 - active_idx_;
     active_valid_ = true;
+    MR_DIAG("refresh", "partial_end");
   }
 
   void full_refresh(RefreshMode mode = RefreshMode::Half, bool turnOffScreen = false, bool singlePhase = false) {
+    MR_DIAG("refresh", "full_begin mode=%u off=%u single=%u", static_cast<unsigned>(mode),
+            static_cast<unsigned>(turnOffScreen), static_cast<unsigned>(singlePhase));
     display_.full_refresh(inactive_(), mode, turnOffScreen, singlePhase);
     memcpy(bufs_[active_idx_], bufs_[1 - active_idx_], config_.pixel_bytes);
     active_idx_ = 1 - active_idx_;
     active_valid_ = true;
+    MR_DIAG("refresh", "full_end mode=%u", static_cast<unsigned>(mode));
   }
 
   void deep_sleep() {
+    MR_DIAG("refresh", "panel_sleep_begin");
     display_.deep_sleep();
+    MR_DIAG("refresh", "panel_sleep_end");
   }
 
   void sync_bw_ram() {

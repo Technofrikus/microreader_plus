@@ -12,6 +12,7 @@
 #include "../content/TextLayout.h"
 #include "../content/mrb/MrbConverter.h"
 #include "../content/mrb/MrbReader.h"
+#include "../DebugConfig.h"
 #include "../display/DeviceConfig.h"
 #include "../display/DrawBuffer.h"
 #include "IScreen.h"
@@ -19,13 +20,8 @@
 
 namespace microreader {
 
-// Compile-time ETA debug overlay. When enabled (via build flag -DMR_ETA_DEBUG=1,
-// or by flipping this to 1), ReaderScreen draws a small overlay in the top-left
-// corner showing the raw ETA internals (ms/char, page time, char counts, ETA
-// minutes). Defaults to OFF so the shipping firmware stays clean and small.
-#ifndef MR_ETA_DEBUG
-#define MR_ETA_DEBUG 1
-#endif
+// MR_ETA_DEBUG is defined centrally in DebugConfig.h.  It controls both this
+// overlay and, by default, the persistent diagnostic log.
 
 // Simple EPUB page viewer.
 // Renders text using the 8Ã—8 bitmap font scaled 2Ã— (16Ã—16 glyphs).

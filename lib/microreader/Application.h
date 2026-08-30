@@ -4,6 +4,7 @@
 #include <functional>
 
 #include "FontManager.h"
+#include "DebugConfig.h"
 #include "Input.h"
 #include "Runtime.h"
 #include "ScreenManager.h"
@@ -278,6 +279,9 @@ class Application {
   ButtonState buttons_{};
   uint64_t ticks_ = 0;
   uint32_t uptime_ms_ = 0;
+#if MR_DIAGNOSTIC_LOG
+  uint32_t diag_heartbeat_ms_ = 0;
+#endif
 
   bool started_ = false;
   bool running_ = true;

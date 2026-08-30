@@ -6,6 +6,7 @@ set(LIB ${CMAKE_CURRENT_LIST_DIR}/../../lib/microreader)
 
 set(lib_sources
     ${LIB}/Application.cpp
+    ${LIB}/DiagnosticLog.cpp
     ${LIB}/Loop.cpp
     ${LIB}/screens/demo/BouncingBallDemo.cpp
     ${LIB}/screens/demo/GrayscaleDemo.cpp
@@ -54,6 +55,5 @@ idf_component_register(
 idf_build_get_property(compile_opts COMPILE_OPTIONS)
 list(REMOVE_ITEM compile_opts "-Wno-old-style-declaration" "-Werror=old-style-declaration")
 idf_build_set_property(COMPILE_OPTIONS "${compile_opts}")
-
 
 

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../Application.h"
+#include "../DiagnosticLog.h"
 #include "../HeapLog.h"
 #include "../display/ui_font_small.h"
 #include "../display/ui_font_medium.h"
@@ -573,10 +574,12 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   book_key_.clear();
   pos_path_.clear();
   MR_LOGI("reader", "start: path='%s'", path_.c_str());
+  MR_DIAG("reader", "start path=%s", path_.c_str());
 
   if (app_ && app_->font_manager())
     app_->font_manager()->ensure_ready(buf);
   MR_LOGI("reader", "font ready");
+  MR_DIAG("reader", "font_ready");
 
   // Build cache path: <data_dir>/cache/<stem>/book.mrb
   book_cache_dir_ = data_dir_ + "/cache/" + book_stem_();
@@ -590,11 +593,13 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   MR_LOGI("reader", "mrb_path='%s'", mrb_path_.c_str());
   bool mrb_ok = mrb_.open(mrb_path_.c_str());
   MR_LOGI("reader", "mrb_ok=%d", (int)mrb_ok);
+  MR_DIAG("reader", "mrb_open ok=%u", static_cast<unsigned>(mrb_ok));
 
   const bool cache_only = cache_only_;
   cache_only_ = false;
   if (!mrb_ok && cache_only) {
     MR_LOGI("reader", "cache-only open: MRB missing — returning to book list");
+    MR_DIAG("reader", "cache_only_miss");
     open_ok_ = false;
     if (app_) app_->pop_screen();
     return;
@@ -605,6 +610,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     // Upload the current frame before scratch buffer use so the display
     // controller has a valid reference frame for partial refreshes.
     MR_LOGI("reader", "mrb miss — opening epub: '%s'", path_.c_str());
+    MR_DIAG("reader", "conversion_begin");
     {
       FILE* check = std::fopen(path_.c_str(), "r");
       if (!check) {
@@ -628,6 +634,8 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
 #endif
     if (err != EpubError::Ok || book_.chapter_count() == 0) {
       MR_LOGI("reader", "epub open failed: err=%d chapters=%u", (int)err, (unsigned)book_.chapter_count());
+      MR_DIAG("reader", "epub_open_failed err=%d chapters=%u", static_cast<int>(err),
+              static_cast<unsigned>(book_.chapter_count()));
       open_ok_ = false;
       goto show_error;
     }
@@ -641,6 +649,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
                                          buf.show_loading("Converting...", pct);
                                        })) {
       MR_LOGI("reader", "mrb conversion failed");
+      MR_DIAG("reader", "conversion_failed");
       open_ok_ = false;
       goto show_error;
     }
@@ -658,6 +667,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     mrb_ok = mrb_.open(mrb_path_.c_str());
     if (!mrb_ok) {
       MR_LOGI("reader", "mrb open failed after conversion");
+      MR_DIAG("reader", "mrb_reopen_failed");
       open_ok_ = false;
       goto show_error;
     }
@@ -700,12 +710,15 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
 #ifdef ESP_PLATFORM
   ESP_LOGI("reader", "BOOK_OK: %s", path_.c_str());
 #endif
+  MR_DIAG("reader", "ready chapter=%u paragraph=%u", static_cast<unsigned>(chapter_idx_),
+          static_cast<unsigned>(page_pos_.paragraph));
   return;
 
 show_error:
 #ifdef ESP_PLATFORM
   ESP_LOGE("reader", "BOOK_FAIL: %s", path_.c_str());
 #endif
+  MR_DIAG("reader", "failed");
   if (buf_was_touched_) {
     buf.fill(true);
     buf.draw_text(kPaddingLeft, kPaddingTop, "Failed to open book", true, kScale);

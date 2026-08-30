@@ -75,6 +75,7 @@ based on https://github.com/crosspoint-reader/crosspoint-reader/pull/1786
 ### System
 - **Auto-migration** of settings (bool invert → ControlMode)
 - **Button state cleanup** post-transition (prevents ghost presses)
+- **Persistent diagnostics:** see [Diagnostics and persistent logging](docs/diagnostics.md) for log retention, debug switches, event format, access, and core-dump behavior.
   
 ---
 

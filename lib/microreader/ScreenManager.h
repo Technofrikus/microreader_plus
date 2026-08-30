@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+#include "DiagnosticLog.h"
 #include "HeapLog.h"
 #include "display/DrawBuffer.h"
 #include "screens/IScreen.h"
@@ -19,10 +20,13 @@ class ScreenManager {
   void push(IScreen* screen, DrawBuffer& buf, IRuntime& runtime) {
     if (depth_ >= kMaxDepth)
       return;
+    MR_DIAG("screen", "push_begin from=%s to=%s depth=%d", depth_ > 0 ? stack_[depth_ - 1]->name() : "none",
+            screen ? screen->name() : "none", depth_);
     if (depth_ > 0)
       stack_[depth_ - 1]->pause();
     stack_[depth_++] = screen;
     screen->start(buf, runtime);
+    MR_DIAG("screen", "push_end top=%s depth=%d", screen->name(), depth_);
   }
 
   // Put a screen at the bottom of the stack without activating it yet.  The
@@ -33,6 +37,7 @@ class ScreenManager {
     if (depth_ >= kMaxDepth)
       return;
     stack_[depth_++] = screen;
+    MR_DIAG("screen", "push_deferred screen=%s depth=%d", screen ? screen->name() : "none", depth_);
   }
 
   // Pop the top screen(s). Stops all removed screens, then resumes the new top.
@@ -41,6 +46,7 @@ class ScreenManager {
       return;
     if (count > depth_)
       count = depth_;
+    MR_DIAG("screen", "pop_begin top=%s count=%d depth=%d", stack_[depth_ - 1]->name(), count, depth_);
 
     // Stop all screens being removed from the stack.
     for (int i = depth_ - 1; i >= depth_ - count; --i)
@@ -51,6 +57,7 @@ class ScreenManager {
       stack_[depth_ - 1]->resume(buf, runtime);
       HEAP_LOG("pop: after prev resume");
     }
+    MR_DIAG("screen", "pop_end top=%s depth=%d", depth_ > 0 ? stack_[depth_ - 1]->name() : "none", depth_);
   }
 
   void pop(DrawBuffer& buf, IRuntime& runtime) {
@@ -61,8 +68,10 @@ class ScreenManager {
   void restart_top(DrawBuffer& buf, IRuntime& runtime) {
     if (depth_ == 0)
       return;
+    MR_DIAG("screen", "restart_begin top=%s depth=%d", stack_[depth_ - 1]->name(), depth_);
     stack_[depth_ - 1]->stop();
     stack_[depth_ - 1]->start(buf, runtime);
+    MR_DIAG("screen", "restart_end top=%s depth=%d", stack_[depth_ - 1]->name(), depth_);
   }
 
   IScreen* top() const {

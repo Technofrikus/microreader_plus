@@ -13,6 +13,7 @@
 #include "font_manager.h"
 #include "input.h"
 #include "microreader/Application.h"
+#include "microreader/DiagnosticLog.h"
 #include "microreader/HeapLog.h"
 #include "microreader/Loop.h"
 #include "microreader/content/Book.h"
@@ -205,6 +206,17 @@ extern "C" void app_main(void) {
       app.set_books_dir("/sdcard");
     }
     app.set_data_dir("/sdcard/.microreader");
+#if MR_DIAGNOSTIC_LOG
+    MR_DIAG_INIT("/sdcard/.microreader");
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    const int diag_wake_cause = static_cast<int>(esp_sleep_get_wakeup_cause());
+#pragma GCC diagnostic pop
+    MR_DIAG("boot", "sd_ready reset=%d wake=%d model=%u free=%lu largest=%lu", static_cast<int>(esp_reset_reason()),
+            diag_wake_cause, static_cast<unsigned>(device_config.model),
+            static_cast<unsigned long>(esp_get_free_heap_size()),
+            static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+#endif
   } else {
     MR_LOGI("app", "SD card not available");
   }
@@ -216,6 +228,8 @@ extern "C" void app_main(void) {
   static FontManager font_mgr(app);
   font_mgr.init();
   app.set_font_manager(&font_mgr);
+  MR_DIAG("boot", "font_ready free=%lu largest=%lu", static_cast<unsigned long>(esp_get_free_heap_size()),
+          static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
 
   ESP_LOGI("mem", "after font init: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -223,6 +237,9 @@ extern "C" void app_main(void) {
   app.set_invalidate_font_fn([]() { FontPartition::invalidate(); });
 
   app.start(buf, runtime);
+  MR_DIAG("boot", "app_ready screen=%s free=%lu largest=%lu", app.top_screen_name(),
+          static_cast<unsigned long>(esp_get_free_heap_size()),
+          static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
 
   ESP_LOGI("mem", "after app.start: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
@@ -420,6 +437,7 @@ extern "C" void app_main(void) {
   }
 
   MR_LOGI("app", "Shutting down, entering deep sleep...");
+  MR_DIAG("sleep", "main_loop_end");
 
 #ifndef QEMU_BUILD
   // Unmount SD card and release CS pin to minimise sleep current.

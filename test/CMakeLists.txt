@@ -86,6 +86,7 @@ target_link_libraries(microreader_content PUBLIC miniz)
 # ---------------------------------------------------------------------------
 add_library(microreader_core STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/Application.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/DiagnosticLog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/Loop.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/demo/BouncingBallDemo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/demo/GrayscaleDemo.cpp
@@ -107,6 +108,8 @@ target_link_libraries(microreader_core PUBLIC microreader_content)
 # Fast unit tests (no real EPUB files, runs in milliseconds)
 # ---------------------------------------------------------------------------
 add_executable(unit_tests
+    ${LIB_DIR}/DiagnosticLog.cpp
+    unit/DiagnosticLogTest.cpp
     unit/ZipReaderTest.cpp
     unit/XmlReaderTest.cpp
     unit/CssParserTest.cpp
@@ -142,6 +145,7 @@ target_compile_definitions(unit_tests PRIVATE
 # Full test executable (includes slow book integration tests)
 # ---------------------------------------------------------------------------
 add_executable(microreader_tests
+    unit/DiagnosticLogTest.cpp
     unit/ZipReaderTest.cpp
     unit/XmlReaderTest.cpp
     unit/CssParserTest.cpp

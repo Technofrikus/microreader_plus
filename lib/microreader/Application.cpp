@@ -5,6 +5,7 @@
 #include <ctime>
 
 #include "HeapLog.h"
+#include "DiagnosticLog.h"
 #include "content/BookIndex.h"
 #include "content/BmpSleepConverter.h"
 
@@ -29,6 +30,9 @@ namespace microreader {
 void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   ticks_ = 0;
   uptime_ms_ = 0;
+#if MR_DIAGNOSTIC_LOG
+  diag_heartbeat_ms_ = 0;
+#endif
   buttons_ = ButtonState{};
   started_ = true;
   running_ = true;
@@ -182,6 +186,7 @@ void Application::do_sleep_(DrawBuffer& buf) {
   // hit the SD card over SPI. Emitted as "STEP:<name>=<ms>" lines plus a
   // "SLEEPTIME:total=<ms>" summary so a serial capture can be parsed.
   const long long t_sleep_begin = mr_now_us();
+  MR_DIAG("sleep", "begin screen=%s uptime=%lu", top_screen_name(), static_cast<unsigned long>(uptime_ms_));
 
   // Stop the active screen so it can save state (e.g. reading position).
   MR_TIME_STEP("sleep", "screen_stop", {
@@ -348,6 +353,8 @@ void Application::log_battery_event_(const char* event) {
 
   std::fclose(f);
 
+  MR_DIAG("battery", "boot=%lu event=%s pct=%d mv=%d wake=%d reset=%d", static_cast<unsigned long>(boot_count_),
+          event, pct.value_or(-1), mv.value_or(-1), is_boot ? wake_cause : -1, is_boot ? reset_reason : -1);
   MR_LOGI("batt", "log: boot=%u %s pct=%d mv=%d up=%u wc=%d rr=%d",
           boot_count_, event, pct.value_or(-1), mv.value_or(-1), uptime_ms_,
           is_boot ? wake_cause : -1, is_boot ? reset_reason : -1);
@@ -362,6 +369,26 @@ void Application::update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer&
   ++ticks_;
   uptime_ms_ += dt_ms;
   buttons_ = buttons;
+
+#if MR_DIAGNOSTIC_LOG
+  if (buttons_.pressed_latch != 0) {
+    MR_DIAG("input", "screen=%s current=0x%02x pressed=0x%02x history=%u", top_screen_name(),
+            static_cast<unsigned>(buttons_.current), static_cast<unsigned>(buttons_.pressed_latch),
+            static_cast<unsigned>(buttons_.press_history_count));
+  }
+  diag_heartbeat_ms_ += dt_ms;
+  if (diag_heartbeat_ms_ >= 5u * 60u * 1000u) {
+    diag_heartbeat_ms_ %= 5u * 60u * 1000u;
+#ifdef ESP_PLATFORM
+    MR_DIAG("heartbeat", "screen=%s free=%lu largest=%lu idle=%lu", top_screen_name(),
+            static_cast<unsigned long>(esp_get_free_heap_size()),
+            static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
+            static_cast<unsigned long>(inactivity_ms_));
+#else
+    MR_DIAG("heartbeat", "screen=%s idle=%lu", top_screen_name(), static_cast<unsigned long>(inactivity_ms_));
+#endif
+  }
+#endif
 
   // Discard button presses that accumulated during the previous transition
   // (e.g. while a blocking on_select/on_start such as book conversion, index
