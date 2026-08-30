@@ -110,6 +110,7 @@ target_link_libraries(microreader_core PUBLIC microreader_content)
 add_executable(unit_tests
     ${LIB_DIR}/DiagnosticLog.cpp
     unit/DiagnosticLogTest.cpp
+    unit/EtaDisplayTest.cpp
     unit/ZipReaderTest.cpp
     unit/XmlReaderTest.cpp
     unit/CssParserTest.cpp
@@ -146,6 +147,7 @@ target_compile_definitions(unit_tests PRIVATE
 # ---------------------------------------------------------------------------
 add_executable(microreader_tests
     unit/DiagnosticLogTest.cpp
+    unit/EtaDisplayTest.cpp
     unit/ZipReaderTest.cpp
     unit/XmlReaderTest.cpp
     unit/CssParserTest.cpp

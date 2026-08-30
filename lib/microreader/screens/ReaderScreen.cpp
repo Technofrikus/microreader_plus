@@ -515,21 +515,22 @@ uint64_t ReaderScreen::book_eta_ms_(uint64_t remaining_chars) const {
   const uint64_t current_eta = eta_ms_(remaining_chars);
   if (current_eta == UINT64_MAX || long_eta >= kBookEtaBlendWindowMs)
     return long_eta;
-  // Within the final hour, linearly blend in current pace. This deliberately
-  // makes the last pages accurate without making a long book jumpy.
+  // During the final hour, linearly blend in current pace. The final quarter
+  // hour is fully responsive, so the book ETA joins the chapter ETA smoothly.
+  if (long_eta <= kBookEtaFinalSyncWindowMs)
+    return current_eta;
   const uint64_t current_weight = kBookEtaBlendWindowMs - long_eta;
+  const uint64_t blend_span = kBookEtaBlendWindowMs - kBookEtaFinalSyncWindowMs;
   if (current_eta >= long_eta)
-    return long_eta + ((current_eta - long_eta) * current_weight) / kBookEtaBlendWindowMs;
-  return long_eta - ((long_eta - current_eta) * current_weight) / kBookEtaBlendWindowMs;
+    return long_eta + ((current_eta - long_eta) * current_weight) / blend_span;
+  return long_eta - ((long_eta - current_eta) * current_weight) / blend_span;
 }
 
-int ReaderScreen::round_book_eta_minutes_(uint64_t eta_ms) const {
-  const uint64_t minutes = (eta_ms + 59999u) / 60000u;
-  if (minutes == 0)
-    return 0;
-  const uint64_t step = minutes < 60 ? 1u : minutes <= 180 ? 5u : 10u;
-  const uint64_t rounded = ((minutes + step / 2u) / step) * step;
-  return rounded > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(rounded);
+uint64_t ReaderScreen::book_eta_long_ms_(uint64_t remaining_chars) const {
+  if (!has_valid_eta_ || book_avg_ms_per_char_ == 0 ||
+      remaining_chars > UINT64_MAX / book_avg_ms_per_char_)
+    return UINT64_MAX;
+  return (remaining_chars * book_avg_ms_per_char_) >> kMsPerCharShift;
 }
 
 void ReaderScreen::update_displayed_book_eta_() {
@@ -1263,39 +1264,11 @@ void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRun
       snprintf(out, outsz, "%d%%", chapter_progress_pct());
       break;
     case StatusInfo::EtaBook: {
-      int eta = eta_minutes_book();
-      if (eta < 0) {
-        snprintf(out, outsz, "---");
-      } else if (eta == 0) {
-        snprintf(out, outsz, "<1m");
-      } else if (eta >= 60) {
-        int hrs = eta / 60;
-        int mins = eta % 60;
-        if (mins == 0)
-          snprintf(out, outsz, "%dh", hrs);
-        else
-          snprintf(out, outsz, "%dh %dm", hrs, mins);
-      } else {
-        snprintf(out, outsz, "%dm", eta);
-      }
+      eta_display::format_minutes(eta_minutes_book(), out, outsz);
       break;
     }
     case StatusInfo::EtaChapter: {
-      int eta = eta_minutes_chapter();
-      if (eta < 0) {
-        snprintf(out, outsz, "---");
-      } else if (eta == 0) {
-        snprintf(out, outsz, "<1m");
-      } else if (eta >= 60) {
-        int hrs = eta / 60;
-        int mins = eta % 60;
-        if (mins == 0)
-          snprintf(out, outsz, "%dh", hrs);
-        else
-          snprintf(out, outsz, "%dh %dm", hrs, mins);
-      } else {
-        snprintf(out, outsz, "%dm", eta);
-      }
+      eta_display::format_minutes(eta_minutes_chapter(), out, outsz);
       break;
     }
     case StatusInfo::Battery: {

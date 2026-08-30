@@ -16,6 +16,7 @@
 #include "../display/DeviceConfig.h"
 #include "../display/DrawBuffer.h"
 #include "IScreen.h"
+#include "EtaDisplay.h"
 #include "ReaderOptionsScreen.h"
 
 namespace microreader {
@@ -219,6 +220,9 @@ class ReaderScreen final : public IScreen {
   static constexpr uint8_t kBookEtaEarlySamples = 5;
   static constexpr uint8_t kBookEtaMiddleSamples = 15;
   static constexpr uint32_t kBookEtaBlendWindowMs = 60u * 60u * 1000u;
+  // The final quarter-hour uses the responsive ETA directly. The preceding
+  // 45 minutes blend continuously into it, so the hand-off is not abrupt.
+  static constexpr uint32_t kBookEtaFinalSyncWindowMs = 15u * 60u * 1000u;
   static constexpr uint32_t kGlobalEtaAlphaQ16 = (2u << kMsPerCharShift) / 100u;  // 0.02
   // Single running average (Q16). No ring buffer needed.
   uint32_t avg_ms_per_char_ = 0;
@@ -387,7 +391,14 @@ class ReaderScreen final : public IScreen {
     const uint64_t raw_ms = book_eta_ms_(total_chars - cur);
     if (raw_ms == UINT64_MAX)
       return -1;
-    return round_book_eta_minutes_(displayed_book_eta_ms_ != UINT64_MAX ? displayed_book_eta_ms_ : raw_ms);
+    // When the book ETA has fully converged to the responsive pace in the
+    // final chapter, both scopes describe the same remaining text. Return the
+    // same fine-grained value rather than retaining book-display smoothing.
+    const bool is_last_chapter = chapter_idx_ + 1 >= mrb_.chapter_count();
+    if (eta_display::use_fine_book_eta_in_final_chapter(
+            is_last_chapter, book_eta_long_ms_(total_chars - cur), kBookEtaFinalSyncWindowMs))
+      return eta_minutes_(total_chars - cur);
+    return eta_display::coarse_book_minutes(displayed_book_eta_ms_ != UINT64_MAX ? displayed_book_eta_ms_ : raw_ms);
   }
 
  private:
@@ -403,8 +414,7 @@ class ReaderScreen final : public IScreen {
     const uint64_t eta_ms = eta_ms_(remaining_chars);
     if (eta_ms == UINT64_MAX)
       return -1;
-    const uint64_t eta_min = eta_ms / 60000u;
-    return eta_min > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(eta_min);
+    return eta_display::fine_minutes(eta_ms);
   }
 
   // UINT64_MAX denotes that no ETA is available.
@@ -423,10 +433,10 @@ class ReaderScreen final : public IScreen {
   // Book ETA uses the long-running book pace, blending back towards the
   // current pace during the final hour so the last pages remain realistic.
   uint64_t book_eta_ms_(uint64_t remaining_chars) const;
+  uint64_t book_eta_long_ms_(uint64_t remaining_chars) const;
 
   void track_page_time_();
   void update_displayed_book_eta_();
-  int round_book_eta_minutes_(uint64_t eta_ms) const;
   void reset_eta_();
 };
 

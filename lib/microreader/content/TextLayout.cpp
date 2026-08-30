@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <optional>
 
 // Set to 1 to print per-paragraph budget trace for layout_backward().
