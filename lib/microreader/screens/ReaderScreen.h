@@ -401,6 +401,20 @@ class ReaderScreen final : public IScreen {
     return eta_display::coarse_book_minutes(displayed_book_eta_ms_ != UINT64_MAX ? displayed_book_eta_ms_ : raw_ms);
   }
 
+  // Returns the estimated reading time already covered in the whole book.
+  // This is position-based rather than a wall-clock statistic: it applies the
+  // long-running book pace to the number of characters before this page.
+  int estimated_time_read_minutes_book() const {
+    if (mrb_.paragraph_count() == 0)
+      return -1;
+    uint64_t chars_read = 0;
+    for (size_t i = 0; i < chapter_idx_; ++i)
+      chars_read += mrb_.chapter_char_count(static_cast<uint16_t>(i));
+    chars_read += (chapter_src_ ? chapter_src_->char_before_para(page_pos_.paragraph) : 0) + page_pos_.text_offset;
+    const uint64_t estimated_ms = book_eta_long_ms_(chars_read);
+    return estimated_ms == UINT64_MAX ? -1 : eta_display::coarse_book_minutes(estimated_ms);
+  }
+
  private:
   // Counts the visible text characters (UTF-8 bytes, matching MRB char_count)
   // on the currently displayed page. Images and HR rules are ignored — image

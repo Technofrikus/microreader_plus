@@ -1271,6 +1271,17 @@ void ReaderScreen::format_status_(StatusInfo info, char* out, size_t outsz, IRun
       eta_display::format_minutes(eta_minutes_chapter(), out, outsz);
       break;
     }
+    case StatusInfo::EstimatedTimeRead: {
+      const int minutes = estimated_time_read_minutes_book();
+      if (minutes < 0) {
+        eta_display::format_minutes(minutes, out, outsz);
+      } else {
+        char time[24];
+        eta_display::format_minutes(minutes, time, sizeof(time));
+        snprintf(out, outsz, "%s", time);
+      }
+      break;
+    }
     case StatusInfo::Battery: {
       if (runtime) {
         auto pct = runtime->battery_percentage();

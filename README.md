@@ -1,6 +1,6 @@
 # microreader+ (TF Edition)
 
-Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devices** — fork of [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader)
+Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended for locked devices** — fork of [CidVonHighwind/microreader](https://github.com/CidVonHighwind/microreader) and Microreader+
 
 ## Changes vs upstream (microreader)
 
@@ -10,7 +10,7 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 | 2 | Added 2bpp bitmap support (for the awesome images from the lector wallpaper gallery) | [7129706](https://github.com/CidVonHighwind/microreader-plus/commit/7129706) |
 | 3 | Added 'Rebuild Sleep Images' menu entry with progress bar and cancel (sleep images are converted all at once, making shutdown faster) | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
 | 4 | Added device-native resolution with cover-fit (scale + crop) for sleep BMPs | [6590639](https://github.com/CidVonHighwind/microreader-plus/commit/6590639) |
-| 5 | Added ETA estimation in the reader screen (chapter and book), including adaptive reading-speed estimation | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
+| 5 | Added **ETA estimation in the reader screen** (chapter and book), including adaptive reading-speed estimation | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
 | 6 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
 | 7 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
 | 8 | Rotate the screen (portrait ↔ landscape) by long-pressing the Select button while reading | — |
@@ -19,18 +19,10 @@ Minimal EPUB reader for **Xteink X4 and X3**. **Not recommended for locked devic
 | 12 | Added model-native X3/X4 sleep assets and optimized X3 transfers, reducing sleep and boot overhead | — |
 | 13 | Added X3 fuel-gauge voltage logging and improved startup diagnostics | — |
 | 14 | Added versioned GitHub Releases for firmware and the Calibre plugin | — |
-
-### Tips for merging upstream changes
-
-This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/microreader) repo. To keep merges easy:
-
-- **Keep changes localized.** Each fork feature lives in its own files or clearly marked sections — avoid editing shared `lib/microreader/` code unless the change is intended for both.
-- **Use descriptive commits.** Each commit should describe a single logical change so `git log --oneline upstream/...` is readable.
-- **Frequent rebases onto upstream.** Run `git fetch upstream && git rebase upstream/main` regularly; resolve conflicts while the change is still fresh in your mind.
-- **Prefer additions over modifications.** When adding a feature, add new files/functions rather than editing existing shared code. This makes `git diff upstream/...` clean and conflict-free.
-- **Track what's merged upstream.** The "Features merged upstream" section below this list is manually kept up to date — update it whenever an upstream PR is accepted so you know what to drop or rebase.
-
----
+| 15 | Refined book and chapter ETA estimation with separate short- and long-term reading pace, persistent calibration, and responsive estimates near completion | [9b3bc9b](https://github.com/Technofrikus/microreader_plus/commit/9b3bc9b) |
+| 16 | Added optional persistent SD-card diagnostic ring logs for boot, reader, input, display, and shutdown events | [513c284](https://github.com/Technofrikus/microreader_plus/commit/513c284) |
+| 17 | Improved EPUB line breaking so punctuation-only runs remain with the preceding word | [bfdef4f](https://github.com/Technofrikus/microreader_plus/commit/bfdef4f) |
+| 18 | Added an **Estimated Time Read** option for a configurable reader status-bar slot | — |
 
 ## Fork Features
 
@@ -61,76 +53,35 @@ This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/mi
 <img width="488" height="695" alt="Screenshot_2026-06-15-08-56-09-48_99c04817c0de5652397fc8b56c3b3817" src="https://github.com/user-attachments/assets/3b57a53e-4c3d-48b5-b600-4c290dddcf38" />
 
 
-### Firmware Update via SD
-based on https://github.com/crosspoint-reader/crosspoint-reader/pull/1786
-- ESP32 image validation (magic 0xE9, segment walk, XOR, CRC32)
-- Chip/revision guard + SHA256 + battery check
-- OTA rollback via ESP_IMG_PENDING_VERIFY
-- Force switch via otadata direct write as fallback
-- **Device-model compatibility gate**: firmware may declare supported models (X4/X3) via an embedded marker. On X3, explicitly incompatible firmware is blocked and unverified firmware warns before flashing.
+### Firmware Update
+Just use the providede .bin file with the Crosspoint Web Falsher https://crosspointreader.com/ and choose custom firmware there.
 
-### UI
-- **Custom Logo**
-
-### System
-- **Auto-migration** of settings (bool invert → ControlMode)
-- **Button state cleanup** post-transition (prevents ghost presses)
-- **Persistent diagnostics:** see [Diagnostics and persistent logging](docs/diagnostics.md) for log retention, debug switches, event format, access, and core-dump behavior.
-  
----
-
-## Features merged upstream
-
-https://github.com/CidVonHighwind/microreader/pull/25
-- Horizontal rule: centered at 1/3 width, 2px thickness
-- CSS `width: XX%` parsing for `<hr>`
-
-https://github.com/CidVonHighwind/microreader/pull/26
-- Drop caps from `<span style="float: left; font-size: ...">`
-
-https://github.com/CidVonHighwind/microreader/pull/30
-- `--upload-dir` for batch EPUB upload via serial
-
-https://github.com/CidVonHighwind/microreader/pull/33
-- ReaderOptions: book title as header
-- Toast feedback on actions
-
-https://github.com/CidVonHighwind/microreader/pull/40
-- Add case-insensitive alphabetical sort
-- Add secondary alphabetical sort for unopened books in LastOpened mode
-- Add visual separator between opened/unopened books
-- Preserve last_open_order during index rebuild
 
 ---
 
-## Original README
-
-Minimal EPUB reader for the [Xteink X4](https://xteink.com) device (ESP32-C3 + SSD1677 e-ink display, 480×800 portrait).
-Includes a desktop SDL2 emulator for development without hardware.
 
 ## Hardware
 
-| | |
-|---|---|
-| MCU | ESP32-C3 (RISC-V, 160 MHz) |
-| Display | 4.26" e-ink 800×480 (SSD1677), rotated → 480×800 portrait |
-| Storage | SD card (FAT32, SPI) |
-| Flash | 16 MB |
-| Input | ADC buttons |
+Works on X3 and X4 by XTEink
 
 ## Device Management
 
-Books (`.epub`) can go anywhere on the SD card — the device scans recursively from the root. Fonts (`.mfb`) go in the `fonts/` folder on the SD card.
+Books (`.epub`) should go in the books folder.
+
+Fonts (`.mfb`) go in the `fonts/` folder on the SD card.
 
 Simply copy files to the SD card while it is connected to your computer, then reinsert it into the device.
 
 ## Sleep Screen
 
-The device displays an image when it enters deep sleep. Several images are built into the firmware. You can also add your own by placing BMP files in the `sleep/` folder on the SD card.
+The device displays an image when it enters deep sleep. One image is built into the firmware. You can also add your own by placing BMP files in the `sleep/` folder on the SD card.
 
-Supported BMP variants: 1 bpp monochrome, 4 bpp indexed, 8 bpp indexed, 16 bpp RGB565 / BGR555, 24 bpp BGR, 32 bpp BGRA. Use 800×480 pixels for best quality (landscape) or 480×800 (portrait — automatically rotated 90° CCW). Other sizes are scaled to fit.
+Supported BMP variants: 1 bpp monochrome, 2bpp indexed, 4 bpp indexed, 8 bpp indexed, 16 bpp RGB565 / BGR555, 24 bpp BGR, 32 bpp BGRA.
+
+Recommended Source for nice pictures: https://diogo7dias.github.io/lector-xteink-firmware/#flash
 
 The first time an image is shown it is converted and cached; subsequent sleeps load the cache directly. The cache is cleared by **Settings → Clear Cache**.
+You can *convert all sleep images* in the menu so shutting down is faster every time.
 
 ### Adding sleep images
 
@@ -163,6 +114,16 @@ The device is detected automatically. Books on the device show checkmarks; you c
 Requires Calibre 5+ and the device connected over USB.
 
 ### Build
+
+#### Tips for merging upstream changes
+
+This fork tracks the upstream [microreader](https://github.com/CidVonHighwind/microreader) repo. To keep merges easy:
+
+- **Keep changes localized.** Each fork feature lives in its own files or clearly marked sections — avoid editing shared `lib/microreader/` code unless the change is intended for both.
+- **Use descriptive commits.** Each commit should describe a single logical change so `git log --oneline upstream/...` is readable.
+- **Frequent rebases onto upstream.** Run `git fetch upstream && git rebase upstream/main` regularly; resolve conflicts while the change is still fresh in your mind.
+- **Prefer additions over modifications.** When adding a feature, add new files/functions rather than editing existing shared code. This makes `git diff upstream/...` clean and conflict-free.
+- **Track what's merged upstream.** The "Features merged upstream" section below this list is manually kept up to date — update it whenever an upstream PR is accepted so you know what to drop or rebase.
 
 ```powershell
 cd tools/calibre-plugin
@@ -268,19 +229,6 @@ python tools/generate_font.py resources/fonts/terminus/Terminus-Bold.ttf 32 --he
 
 > **Font partition limit**: SD card fonts must fit within 3.375 MB. The font data + 4 KB header must not exceed `0x360000` bytes.
 
-## Firmware Backup & Restore
-
-```powershell
-# Backup running firmware partition
-python -m esptool --port COM4 read_flash 0x10000 0x650000 app0_backup.bin
-
-# Restore
-python -m esptool --port COM4 write_flash 0x10000 app0_backup.bin
-
-# Switch OTA boot partition
-python tools/switch_partition.py app0 --port COM4 --flash
-python tools/switch_partition.py app1 --port COM4 --flash
-```
 
 ## Hyphenation
 
@@ -307,13 +255,3 @@ To add a new language:
 2. Generate the header: `python tools/generate_trie_header.py tools/hyphenation/<lang>.bin lib/microreader/content/hyphenation/Liang/hyph-<lang>.trie.h <lang>`
 3. Add the new enum value to `HyphenationLang` in `Hyphenation.h`
 4. Add a `#include` + `case` in `Hyphenation.cpp` (`hyphenate_word`) and an `ieq` check in `detect_language`
-
-## QEMU Testing (no hardware needed)
-
-```powershell
-# Terminal 1
-python tools/run_qemu.py --with-books
-
-# Terminal 2
-python tools/test_books.py --port socket://localhost:4444 --pages 20 --delay 0.1
-```
