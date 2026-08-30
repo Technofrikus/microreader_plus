@@ -175,6 +175,41 @@ static std::vector<WordSpan> split_words(const char* text, size_t text_len) {
   return spans;
 }
 
+// True for a token consisting exclusively of punctuation that must stay with
+// the preceding word. EPUB inline styling can put a closing quote or a full
+// stop in a separate Run, so whitespace alone is not enough to keep it from
+// being wrapped onto a line of its own.
+static bool is_trailing_punctuation(const char* text, size_t len) {
+  if (len == 0)
+    return false;
+
+  for (size_t i = 0; i < len;) {
+    const unsigned char ch = static_cast<unsigned char>(text[i]);
+    if (ch < 0x80) {
+      if (std::strchr(".,;:!?)]}\\\"'", static_cast<int>(ch)) == nullptr)
+        return false;
+      ++i;
+      continue;
+    }
+
+    // « » … ’ ” › — common closing punctuation in EPUBs (all UTF-8).
+    if (i + 1 < len && ch == 0xC2 &&
+        (static_cast<unsigned char>(text[i + 1]) == 0xAB || static_cast<unsigned char>(text[i + 1]) == 0xBB)) {
+      i += 2;
+      continue;
+    }
+    if (i + 2 < len && ch == 0xE2 && static_cast<unsigned char>(text[i + 1]) == 0x80) {
+      const unsigned char tail = static_cast<unsigned char>(text[i + 2]);
+      if (tail == 0xA6 || tail == 0x99 || tail == 0x9D || tail == 0xBA || tail == 0x94) {
+        i += 3;
+        continue;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Alignment helpers
 // ---------------------------------------------------------------------------
@@ -270,6 +305,22 @@ static std::vector<LayoutLine> layout_para_lines(const IFont& font, const Layout
   bool first_line = true, prev_run_ended_space = true;
   uint32_t para_byte_offset = 0;
 
+  // This is used only by the exceptional punctuation-reflow path below.
+  // LayoutWord deliberately stays compact, so do not retain a source offset
+  // for every rendered word.
+  auto source_offset_of = [&](const LayoutWord& word) {
+    const uintptr_t word_addr = reinterpret_cast<uintptr_t>(word.text);
+    uint32_t offset = 0;
+    for (const auto& source_run : para.runs) {
+      const uintptr_t begin = reinterpret_cast<uintptr_t>(source_run.text.c_str());
+      const size_t size = source_run.text.size();
+      if (word_addr >= begin && word_addr < begin + size)
+        return offset + static_cast<uint32_t>(word_addr - begin);
+      offset += static_cast<uint32_t>(size);
+    }
+    return current.text_offset;
+  };
+
   // For Center/End alignment, words start at margin_left (not 0), which would
   // otherwise skew the centering. This helper normalises word x to [0..text_width]
   // before computing room so that align_line produces a symmetric result.
@@ -323,6 +374,7 @@ static std::vector<LayoutLine> layout_para_lines(const IFont& font, const Layout
       if (span.no_space_before)
         needs_space = false;
       first_word_of_run = false;
+      bool retried_trailing_punctuation = false;
 
       // Loop handles multi-line hyphenation: each iteration places a chunk or
       // emits a hyphenated prefix and continues with the remaining suffix.
@@ -350,6 +402,37 @@ static std::vector<LayoutLine> layout_para_lines(const IFont& font, const Layout
           x += word_w;
           break;
         }
+
+        // Do not leave closing punctuation (for example ".«") on a line by
+        // itself when an inline-style boundary made it a separate Run. Move
+        // the preceding word to the next line and retry this punctuation
+        // there. This does no work on the normal fitting path.
+        if (!retried_trailing_punctuation && !needs_space && is_trailing_punctuation(word_ptr, word_len) &&
+            !current.words.empty()) {
+          LayoutWord carried = current.words.back();
+          const uint32_t carried_offset = source_offset_of(carried);
+          current.words.pop_back();
+
+          if (!current.words.empty()) {
+            const LayoutWord& last = current.words.back();
+            x = last.x + font.word_width(last.text, last.len, last.style, last.size_pct);
+            flush_line(line_width, current.words, false);
+            lines.push_back(std::move(current));
+          }
+
+          current.words.clear();
+          current.words.reserve(16);
+          current.hyphenated = false;
+          current.text_offset = carried_offset;
+          carried.x = 0;
+          carried.continues_prev = false;
+          current.words.push_back(carried);
+          x = font.word_width(carried.text, carried.len, carried.style, carried.size_pct);
+          first_line = false;
+          retried_trailing_punctuation = true;
+          continue;
+        }
+
         // Doesn't fit — try to hyphenate at the best break point.
         uint16_t avail =
             line_width > x + (needs_space ? space_width : 0) ? line_width - x - (needs_space ? space_width : 0) : 0;

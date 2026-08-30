@@ -619,6 +619,28 @@ TEST(TextLayout, CrossRunDifferentStyles) {
   EXPECT_EQ(lines[0].words[1].x, 8);  // no space between them
 }
 
+TEST(TextLayout, KeepsTrailingPunctuationWithPreviousWordAcrossRuns) {
+  // EPUB styling commonly puts the final punctuation in a separate Run, e.g.
+  // an italic quote followed by regular ".«". It must not become a line by
+  // itself merely because the preceding line is full.
+  TextParagraph para;
+  para.runs.push_back(microreader::Run("aaaa word", FontStyle::Italic));
+  para.runs.push_back(microreader::Run(".\xC2\xAB", FontStyle::Regular));
+
+  LayoutOptions opts;
+  opts.width = 80;  // "aaaa word" = 72px; adding ".«" would be 88px.
+  auto lines = TextLayout(font8).layout_paragraph(opts, para);
+
+  ASSERT_EQ(lines.size(), 2u);
+  ASSERT_EQ(word_str(lines[0].words[0]), "aaaa");
+  ASSERT_EQ(lines[1].words.size(), 2u);
+  EXPECT_EQ(word_str(lines[1].words[0]), "word");
+  EXPECT_EQ(word_str(lines[1].words[1]), ".\xC2\xAB");
+  EXPECT_TRUE(lines[1].words[1].continues_prev);
+  EXPECT_EQ(lines[1].words[0].x, 0u);
+  EXPECT_EQ(lines[1].words[1].x, 32u);
+}
+
 // ---------------------------------------------------------------------------
 // Hyphenation tests
 // ---------------------------------------------------------------------------
