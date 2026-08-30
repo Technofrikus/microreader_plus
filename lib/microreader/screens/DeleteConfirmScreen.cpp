@@ -69,14 +69,14 @@ void DeleteConfirmScreen::on_start() {
   for (const auto& line : lines)
     add_separator(line);
   add_separator("");
-  delete_idx_ = count();
-  add_item("Delete");
   cancel_idx_ = count();
   add_item("Cancel");
   if (was_opened_) {
     remove_recent_idx_ = count();
-    add_item("Remove");
+    add_item("Remove from Recents");
   }
+  delete_idx_ = count();
+  add_item("Delete from Device");
   set_selected(cancel_idx_);
 }
 
