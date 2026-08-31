@@ -6,23 +6,23 @@ Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended 
 
 | # | Change | Commit / PR |
 |---|--------|-------------|
-| 1 | Removed the "sleeping..." text drawn on the sleep screen in `DrawBuffer::show_mgr2_sleep_()` | — |
-| 2 | Added 2bpp bitmap support (for the awesome images from the lector wallpaper gallery) | [7129706](https://github.com/CidVonHighwind/microreader-plus/commit/7129706) |
-| 3 | Added 'Rebuild Sleep Images' menu entry with progress bar and cancel (sleep images are converted all at once, making shutdown faster) | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
-| 4 | Added device-native resolution with cover-fit (scale + crop) for sleep BMPs | [6590639](https://github.com/CidVonHighwind/microreader-plus/commit/6590639) |
-| 5 | Added **ETA estimation in the reader screen** (chapter and book), including adaptive reading-speed estimation | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
-| 6 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
-| 7 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
-| 8 | Rotate the screen (portrait ↔ landscape) by long-pressing the Select button while reading | — |
-| 9 | Added a configurable three-slot status bar with chapter/book progress, ETA, battery, and paragraph counters | — |
-| 11 | Added a fast native 1-bit/two-plane sleep-image path with direct and byte-aligned uploads | — |
-| 12 | Added model-native X3/X4 sleep assets and optimized X3 transfers, reducing sleep and boot overhead | — |
-| 13 | Added X3 fuel-gauge voltage logging and improved startup diagnostics | — |
-| 14 | Added versioned GitHub Releases for firmware and the Calibre plugin | — |
-| 15 | Refined book and chapter ETA estimation with separate short- and long-term reading pace, persistent calibration, and responsive estimates near completion | [9b3bc9b](https://github.com/Technofrikus/microreader_plus/commit/9b3bc9b) |
-| 16 | Added optional persistent SD-card diagnostic ring logs for boot, reader, input, display, and shutdown events | [513c284](https://github.com/Technofrikus/microreader_plus/commit/513c284) |
-| 17 | Improved EPUB line breaking so punctuation-only runs remain with the preceding word | [bfdef4f](https://github.com/Technofrikus/microreader_plus/commit/bfdef4f) |
 | 18 | Added an **Estimated Time Read** option for a configurable reader status-bar slot | — |
+| 17 | Improved EPUB line breaking so punctuation-only runs remain with the preceding word | [bfdef4f](https://github.com/Technofrikus/microreader_plus/commit/bfdef4f) |
+| 16 | Added optional persistent SD-card diagnostic ring logs for boot, reader, input, display, and shutdown events | [513c284](https://github.com/Technofrikus/microreader_plus/commit/513c284) |
+| 15 | Refined book and chapter ETA estimation with separate short- and long-term reading pace, persistent calibration, and responsive estimates near completion | [9b3bc9b](https://github.com/Technofrikus/microreader_plus/commit/9b3bc9b) |
+| 14 | Added versioned GitHub Releases for firmware and the Calibre plugin | — |
+| 13 | Added X3 fuel-gauge voltage logging and improved startup diagnostics | — |
+| 12 | Added model-native X3/X4 sleep assets and optimized X3 transfers, reducing sleep and boot overhead | — |
+| 11 | Added a fast native 1-bit/two-plane sleep-image path with direct and byte-aligned uploads | — |
+| 9 | Added a configurable three-slot status bar with chapter/book progress, ETA, battery, and paragraph counters | — |
+| 8 | Rotate the screen (portrait ↔ landscape) by long-pressing the Select button while reading | — |
+| 7 | Added long-hold select to cycle text selection settings backward | [ba0c7e6](https://github.com/CidVonHighwind/microreader-plus/commit/ba0c7e6) |
+| 6 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
+| 5 | Added **ETA estimation in the reader screen** (chapter and book), including adaptive reading-speed estimation | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
+| 4 | Added device-native resolution with cover-fit (scale + crop) for sleep BMPs | [6590639](https://github.com/CidVonHighwind/microreader-plus/commit/6590639) |
+| 3 | Added 'Rebuild Sleep Images' menu entry with progress bar and cancel (sleep images are converted all at once, making shutdown faster) | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
+| 2 | Added 2bpp bitmap support (for the awesome images from the lector wallpaper gallery) | [7129706](https://github.com/CidVonHighwind/microreader-plus/commit/7129706) |
+| 1 | Removed the "sleeping..." text drawn on the sleep screen in `DrawBuffer::show_mgr2_sleep_()` | — |
 
 ## Fork Features
 

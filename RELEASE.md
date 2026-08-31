@@ -18,7 +18,21 @@ git checkout main
 git pull
 ```
 
-### 2. (Optional) Bump the version
+### 2. Build releases without debug features
+
+Releases must be built with `MR_ETA_DEBUG=0`. This disables the ETA debug
+overlay and, by default, the persistent diagnostic log. The project default is
+currently enabled for development, so verify the release build flags before
+tagging:
+
+```bash
+pio run -e esp32c3-release
+```
+
+The GitHub Release workflow must also pass these flags when building the
+firmware.
+
+### 3. (Optional) Bump the version
 
 Edit `version.txt` if you want a new base version (otherwise it keeps the current value):
 
@@ -29,7 +43,7 @@ git commit -m "bump version to 2.1.0"
 git push
 ```
 
-### 3. Tag and push
+### 4. Tag and push
 
 ```bash
 git tag v2.1.0
@@ -38,11 +52,11 @@ git push origin v2.1.0
 
 The tag **must start with `v`** — that's what triggers the `Release` workflow.
 
-### 4. Watch it run
+### 5. Watch it run
 
 Go to **Actions** tab → look for the `Release` workflow. It takes ~3–4 minutes.
 
-### 5. Find the release
+### 6. Find the release
 
 Go to **Releases** page (right sidebar on the repo home, or `https://github.com/yourname/microreader-plus/releases`).
 
