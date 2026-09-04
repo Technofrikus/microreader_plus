@@ -34,6 +34,10 @@ class PlaneCapturingDisplay final : public microreader::IDisplay {
   std::vector<uint8_t> last_bw_, last_red_;
 };
 
+static void collect_conversion_progress(int progress_pct, void* context) {
+  static_cast<std::vector<int>*>(context)->push_back(progress_pct);
+}
+
 // ---------------------------------------------------------------------------
 // BMP writing helpers
 // ---------------------------------------------------------------------------
@@ -738,6 +742,17 @@ TEST_F(BmpConverterTest, OneBitWritesTwoPlanes) {
     EXPECT_EQ(m.h, 480);
     // White → state 0 → both plane bits 0.
     EXPECT_EQ(mgr2_1b_pixel(m, 400, 240), 0);
+}
+
+TEST_F(BmpConverterTest, OneBitReportsQuarterProgress) {
+    auto src = bmp("onebit_progress.bmp", make_bmp_24(200, 100, 255, 255, 255));
+    auto dst = mgr("onebit_progress.1b.mgr");
+    std::vector<int> progress;
+
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(
+        src.c_str(), dst.c_str(), 800, 480, collect_conversion_progress, &progress));
+
+    EXPECT_EQ(progress, (std::vector<int>{25, 50, 75, 100}));
 }
 
 TEST_F(BmpConverterTest, OneBitBlackMapsToState3) {

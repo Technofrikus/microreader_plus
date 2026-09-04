@@ -285,7 +285,9 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
 // a normal 1bpp row (8 pixels/byte, MSB-first). The output header carries the
 // format byte kTwo1BitPlanes so legacy 2bpp files are still distinguished.
 bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
-                              int out_w, int out_h) {
+                              int out_w, int out_h,
+                              BmpSleepProgressCallback progress,
+                              void* progress_context) {
     FILE* f = std::fopen(bmp_path, "rb");
     if (!f) return false;
 
@@ -385,6 +387,22 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
     uint8_t tile[kTileBytes];
     bool ok = true;
 
+    const int rows_per_tile = std::max(1, (int)(kTileBytes / (size_t)FINAL_STRIDE));
+    const int tiles_per_plane = (final_out_h + rows_per_tile - 1) / rows_per_tile;
+    const int work_per_plane = portrait ? final_out_w * tiles_per_plane : final_out_h;
+    const int total_work = work_per_plane * 2;
+    int completed_work = 0;
+    int next_progress = 25;
+    auto report_progress = [&] {
+        if (!progress || total_work <= 0)
+            return;
+        const int pct = (completed_work * 100) / total_work;
+        while (next_progress <= pct) {
+            progress(next_progress, progress_context);
+            next_progress += 25;
+        }
+    };
+
     auto write_plane = [&](bool red) {
         if (!portrait) {
             // A landscape output row comes from one source row, so it can be
@@ -408,6 +426,10 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
                 }
                 if (std::fwrite(tile, 1, (size_t)FINAL_STRIDE, out) != (size_t)FINAL_STRIDE)
                     ok = false;
+                if (ok) {
+                    ++completed_work;
+                    report_progress();
+                }
             }
             return;
         }
@@ -415,7 +437,6 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
         // After a 90-degree rotation, one source row contributes one byte to
         // every output row. Process a small group of output rows at a time so
         // no full-size plane is needed. The source is scanned once per tile.
-        const int rows_per_tile = std::max(1, (int)(kTileBytes / (size_t)FINAL_STRIDE));
         for (int tile_y = 0; tile_y < final_out_h && ok; tile_y += rows_per_tile) {
             const int tile_h = std::min(rows_per_tile, final_out_h - tile_y);
             std::memset(tile, 0, (size_t)tile_h * FINAL_STRIDE);
@@ -440,6 +461,10 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
             }
             if (ok && std::fwrite(tile, (size_t)FINAL_STRIDE, (size_t)tile_h, out) != (size_t)tile_h)
                 ok = false;
+            if (ok) {
+                completed_work += final_out_w;
+                report_progress();
+            }
         }
     };
 

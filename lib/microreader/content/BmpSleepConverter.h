@@ -4,6 +4,10 @@
 
 namespace microreader {
 
+// Called with progress in the inclusive range 0..100 while a 1-bit sleep
+// image is being produced.  The callback runs synchronously in the converter.
+using BmpSleepProgressCallback = void (*)(int progress_pct, void* context);
+
 // Convert a BMP file to MGR2 format (2bpp, 4-level grayscale encoding).
 // Supports 1/2/4/8/16/24/32-bit uncompressed BMPs; scales to out_w×out_h with nearest-neighbor.
 // Default output dimensions are 800×480 (backward compatible).
@@ -23,6 +27,8 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
 //   *.1b.mgr = two 1-bit planes (no decode needed)
 // Returns true on success; on failure any partial output file is removed.
 bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
-                              int out_w = 800, int out_h = 480);
+                              int out_w = 800, int out_h = 480,
+                              BmpSleepProgressCallback progress = nullptr,
+                              void* progress_context = nullptr);
 
 }  // namespace microreader

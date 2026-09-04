@@ -624,6 +624,11 @@ class EInkDisplay : public microreader::IDisplay {
     wakeIfNeeded();
     waitWhileBusy();
     if (config_.model == microreader::DeviceModel::X3) {
+      // A loading/progress box leaves the controller in a partial-window
+      // session.  RAM uploads for a sleep image are full-frame uploads, so
+      // they must explicitly leave that session first; otherwise the X3
+      // clips every following plane write to the tiny progress-box rectangle.
+      x3ExitPartialMode_();
       // X3 requires Y-mirrored rows. Use the chunked uploader: it pre-mirrors
       // into a contiguous buffer and sends in few large SPI transactions,
       // cutting per-row transaction overhead (~5-10ms over 528 rows).
@@ -638,6 +643,7 @@ class EInkDisplay : public microreader::IDisplay {
     wakeIfNeeded();
     waitWhileBusy();
     if (config_.model == microreader::DeviceModel::X3) {
+      x3ExitPartialMode_();
       // X3 requires Y-mirrored rows. Use the chunked uploader (see write_ram_bw).
       x3SendMirroredPlaneChunked_(CMD_X3_WRITE_OLD, data);
     } else {
@@ -1514,6 +1520,16 @@ class EInkDisplay : public microreader::IDisplay {
     if (gpio_get_level(EPD_BUSY) == 0)
       x3WaitBusy_(" X3_CMD04");
     isScreenOn = true;
+  }
+
+  void x3ExitPartialMode_() {
+    if (!x3_partial_mode_active_)
+      return;
+    sendCommand(CMD_X3_PARTIAL_OUT);
+    x3_partial_mode_active_ = false;
+    // The saved partial region belongs to the old frame.  It must never be
+    // replayed into a later full-frame operation.
+    x3_region_needs_sync_ = false;
   }
 
   void x3PowerOff_() {
