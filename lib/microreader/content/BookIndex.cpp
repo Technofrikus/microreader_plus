@@ -215,16 +215,31 @@ void BookIndex::build_index(const std::string& root_dir, DrawBuffer& buf) {
   int done = 0;
   int total = 0;
 
+  // An X3 waits for every partial refresh. Updating its progress box for every
+  // book makes a large-library scan spend substantial time waiting for the
+  // panel. X4 drops redraws while busy, so it can retain 5% feedback.
+  const int progress_step = buf.config().model == DeviceModel::X3 ? 25 : 5;
+  int last_progress_bucket = 0;
+
   // Reuse one Book instance across all iterations so the ZipReader's internal
   // vectors (entries_, name_blob_) retain their allocated capacity — repeated
   // alloc/free of same-sized buffers fragments the heap on ESP32.
   Book book;
 
+  auto show_index_progress = [&] {
+    const int pct = total > 0 ? 10 + (done * 90 / total) : 10;
+    const int bucket = std::clamp(pct / progress_step, 0, 100 / progress_step);
+    if (bucket <= last_progress_bucket)
+      return;
+    last_progress_bucket = bucket;
+    buf.show_loading("Indexing...", bucket * progress_step);
+  };
+
   // Helper to process a single epub path (keeps peak memory low)
   auto process_path = [&](const std::string& path) {
     if (static_cast<int>(entries_.size()) >= MAX_BOOKS)
       return;
-    buf.show_loading("Indexing...", total > 0 ? 10 + (done * 90 / total) : 10);
+    show_index_progress();
     book.close();
     if (book.open(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2(), false) == EpubError::Ok) {
       auto meta = book.metadata();
@@ -291,6 +306,7 @@ void BookIndex::build_index(const std::string& root_dir, DrawBuffer& buf) {
   // Count then process using the iterator
   iterate_epubs([&](const std::string& p) { total++; });
   MR_LOGI("index", "Found %d epub(s), indexing...", total);
+  buf.show_loading("Indexing...", 0);
   iterate_epubs(process_path);
   MR_LOGI("index", "Indexed %d book(s)", done);
 

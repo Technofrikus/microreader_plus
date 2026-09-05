@@ -103,13 +103,17 @@ class FontManager : public microreader::FontManager {
 
     buf.sync_bw_ram();
     buf.show_loading("Installing fonts...", 0);
+    // X3 blocks for each partial refresh; coarse updates keep flash writes
+    // from being dominated by panel waits. X4 can accept finer progress while
+    // it is busy, so retain a more responsive indicator there.
+    const int progress_step = buf.config().model == microreader::DeviceModel::X3 ? 25 : 5;
     int last_progress_bucket = 0;
-    auto show_install_progress = [&buf, &last_progress_bucket](int pct) {
-      int bucket = std::max(0, std::min(100, pct)) / 25;
+    auto show_install_progress = [&buf, progress_step, &last_progress_bucket](int pct) {
+      int bucket = std::max(0, std::min(100, pct)) / progress_step;
       if (bucket <= last_progress_bucket)
         return;
       last_progress_bucket = bucket;
-      buf.show_loading("Installing fonts...", bucket * 25);
+      buf.show_loading("Installing fonts...", bucket * progress_step);
     };
 
     if (is_embedded) {

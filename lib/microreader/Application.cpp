@@ -173,8 +173,8 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
 #endif
     MR_LOGI("sleep", "converting BMP (1bit): %s", bmp_path);
     // This conversion is synchronous and can take long enough to resemble a
-    // frozen shutdown.  Keep a small partial-refresh status box on-screen,
-    // updating only at 25% boundaries to avoid needless e-paper refreshes.
+    // frozen shutdown. X3 blocks for every partial refresh, so retain its
+    // coarse updates; X4 can show finer progress without stalling conversion.
     buf.show_loading("Converting sleep image...", 0);
     // Convert to the device's native physical resolution using COVER mode
     // (scale to fill, then crop excess) so there are no white borders on
@@ -182,7 +182,8 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
     cached = convert_bmp_to_mgr2_1bit(bmp_path, cache_path,
                                  buf.config().physical_width,
                                  buf.config().physical_height,
-                                 show_sleep_conversion_progress, &buf);
+                                 show_sleep_conversion_progress, &buf,
+                                 buf.config().model == DeviceModel::X3 ? 25 : 5);
     MR_LOGI("sleep", "BMP 1bit convert result: %d cache=%s", (int)cached, cache_path);
   }
   return cached && buf.show_sleep_image(cache_path);

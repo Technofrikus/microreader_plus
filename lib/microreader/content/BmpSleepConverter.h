@@ -29,6 +29,7 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
 bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
                               int out_w = 800, int out_h = 480,
                               BmpSleepProgressCallback progress = nullptr,
-                              void* progress_context = nullptr);
+                              void* progress_context = nullptr,
+                              int progress_step = 25);
 
 }  // namespace microreader

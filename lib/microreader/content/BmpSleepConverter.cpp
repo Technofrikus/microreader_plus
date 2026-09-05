@@ -287,7 +287,8 @@ bool convert_bmp_to_mgr2(const char* bmp_path, const char* mgr_out_path,
 bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
                               int out_w, int out_h,
                               BmpSleepProgressCallback progress,
-                              void* progress_context) {
+                              void* progress_context,
+                              int progress_step) {
     FILE* f = std::fopen(bmp_path, "rb");
     if (!f) return false;
 
@@ -392,14 +393,17 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
     const int work_per_plane = portrait ? final_out_w * tiles_per_plane : final_out_h;
     const int total_work = work_per_plane * 2;
     int completed_work = 0;
-    int next_progress = 25;
+    // Callers choose a panel-appropriate cadence. Clamp invalid values so
+    // this core converter remains safe for non-device callers as well.
+    progress_step = std::max(1, std::min(100, progress_step));
+    int next_progress = progress_step;
     auto report_progress = [&] {
         if (!progress || total_work <= 0)
             return;
         const int pct = (completed_work * 100) / total_work;
         while (next_progress <= pct) {
             progress(next_progress, progress_context);
-            next_progress += 25;
+            next_progress += progress_step;
         }
     };
 

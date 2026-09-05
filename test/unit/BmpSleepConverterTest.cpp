@@ -755,6 +755,18 @@ TEST_F(BmpConverterTest, OneBitReportsQuarterProgress) {
     EXPECT_EQ(progress, (std::vector<int>{25, 50, 75, 100}));
 }
 
+TEST_F(BmpConverterTest, OneBitReportsConfiguredProgressStep) {
+    auto src = bmp("onebit_progress_fine.bmp", make_bmp_24(200, 100, 255, 255, 255));
+    auto dst = mgr("onebit_progress_fine.1b.mgr");
+    std::vector<int> progress;
+
+    ASSERT_TRUE(microreader::convert_bmp_to_mgr2_1bit(
+        src.c_str(), dst.c_str(), 800, 480, collect_conversion_progress, &progress, 5));
+
+    EXPECT_EQ(progress, (std::vector<int>{5, 10, 15, 20, 25, 30, 35, 40, 45, 50,
+                                          55, 60, 65, 70, 75, 80, 85, 90, 95, 100}));
+}
+
 TEST_F(BmpConverterTest, OneBitBlackMapsToState3) {
     auto src = bmp("onebit_black.bmp", make_bmp_24(200, 100, 0, 0, 0));
     auto dst = mgr("onebit_black.1b.mgr");
