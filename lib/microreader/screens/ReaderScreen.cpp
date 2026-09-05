@@ -644,10 +644,20 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
 #ifdef ESP_PLATFORM
     int64_t conv_start = esp_timer_get_time();
 #endif
+    // X3 partial refreshes wait for the panel, so updating after every spine
+    // item can dominate conversion time on books with many short chapters.
+    // X4 returns while the panel is busy (show_loading() drops that redraw),
+    // allowing finer 5% progress without delaying the parser or SD writes.
+    const int progress_step = buf.config().model == DeviceModel::X3 ? 25 : 5;
+    int last_progress_bucket = 0;  // The initial 0% indicator is already shown above.
     if (!convert_epub_to_mrb_streaming(book_, mrb_path_.c_str(), buf.scratch_buf1(), buf.scratch_buf2(),
-                                       [&buf](int done, int total) {
-                                         int pct = total > 0 ? (done * 100 / total) : 0;
-                                         buf.show_loading("Converting...", pct);
+                                       [&buf, progress_step, &last_progress_bucket](int done, int total) {
+                                         const int pct = total > 0 ? (done * 100 / total) : 0;
+                                         const int bucket = std::clamp(pct / progress_step, 0, 100 / progress_step);
+                                         if (bucket <= last_progress_bucket)
+                                           return;
+                                         last_progress_bucket = bucket;
+                                         buf.show_loading("Converting...", bucket * progress_step);
                                        })) {
       MR_LOGI("reader", "mrb conversion failed");
       MR_DIAG("reader", "conversion_failed");
