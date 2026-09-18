@@ -66,6 +66,21 @@ static std::string get_parent_dir(const std::string& path) {
 #endif
 }
 
+// Returns the bare name of the last path component (no extension stripping,
+// unlike filename_sv(), since directory names may legitimately contain dots).
+static std::string dir_basename(const std::string& path) {
+  const char* name = path.c_str();
+  const char* sep = std::strrchr(name, '/');
+#ifdef _WIN32
+  const char* bsep = std::strrchr(name, '\\');
+  if (bsep && (!sep || bsep > sep))
+    sep = bsep;
+#endif
+  if (sep)
+    name = sep + 1;
+  return std::string(name);
+}
+
 static bool is_same_dir(const std::string& a, const std::string& b) {
   if (a == b) return true;
 #ifndef ESP_PLATFORM
@@ -501,7 +516,7 @@ void MainMenu::populate_list_() {
     up_entry.type = EntryType::Directory;
     up_entry.name = "..";
     up_entry.path = get_parent_dir(current_dir_);
-    up_entry.display_name = "/..";
+    up_entry.display_name = "/.. (" + dir_basename(current_dir_) + ")";
     entries_.push_back(std::move(up_entry));
     ++real_count;
   }

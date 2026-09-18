@@ -117,7 +117,7 @@ TEST_F(FolderBrowsingTest, MainMenu_FolderList_FormatAndSorting) {
 
   // In Fiction (not root): no Recent section — just /.. and dune.epub
   EXPECT_EQ(menu.count(), 2);
-  EXPECT_EQ(menu.get_item_label(0), "/..");
+  EXPECT_EQ(menu.get_item_label(0), "/.. (Fiction)");
   EXPECT_EQ(menu.get_item_label(1), "Dune");
 
   // Select /.. (index 0) -> navigate up to root_dir
@@ -208,7 +208,7 @@ TEST_F(FolderBrowsingTest, MainMenu_RecentSection_NotShownInSubfolder) {
   menu.test_select(3);  // /Fiction (index 3 at root)
   EXPECT_STREQ(menu.current_dir(), (root_dir_ / "Fiction").string().c_str());
   EXPECT_EQ(menu.count(), 2);
-  EXPECT_EQ(menu.get_item_label(0), "/..");
+  EXPECT_EQ(menu.get_item_label(0), "/.. (Fiction)");
   EXPECT_EQ(menu.get_item_label(1), "Dune");
 
   BookIndex::instance().clear_entries();
