@@ -6,7 +6,7 @@ Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended 
 
 | # | Change | Commit / PR |
 |---|--------|-------------|
-| 20 | Replaced the sleep-image cycle/back controls with a dedicated list screen supporting live full-screen preview | [b19b5c4](https://github.com/Technofrikus/microreader_plus/commit/b19b5c4) |
+| 20 | List of available sleep images with preview function | [b19b5c4](https://github.com/Technofrikus/microreader_plus/commit/b19b5c4) |
 | 19 | Added a **Book Cover** sleep-image mode that shows the current book's cover as the sleep screen, built once per book and cached for instant loads | [a98140f](https://github.com/Technofrikus/microreader_plus/commit/a98140f) |
 | 18 | Added an **Estimated Time Read** option for a configurable reader status-bar slot | — |
 | 17 | Improved EPUB line breaking so punctuation-only runs remain with the preceding word | [bfdef4f](https://github.com/Technofrikus/microreader_plus/commit/bfdef4f) |
