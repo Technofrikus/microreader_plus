@@ -262,9 +262,6 @@ class ReaderScreen final : public IScreen {
   // steady_clock on desktop). Used for ETA page-time measurement.
   static uint32_t now_ms_();
 
-   // Returns the filename stem of path_ (no directory, no extension).
-   std::string book_stem_() const;
-
   bool decode_image_to_buffer_(uint16_t img_key, uint32_t offset, DrawBuffer& buf, int dest_x, int dest_y,
                                uint16_t max_w, uint16_t max_h, uint16_t src_y = 0, uint16_t clip_h = 0);
   // Render page content (BW only). Sets grayscale_pending_ if font has grayscale.

@@ -297,34 +297,67 @@ static void unfilter_row(uint8_t filter, uint8_t* row, const uint8_t* prev, size
 }
 
 // ---------------------------------------------------------------------------
-// Atkinson dithering (one PNG row → 1-bit output)
+// X-direction box-filter downscale (one PNG row -> out_w grey samples)
+//
+// Point-sampling a single source column per output column aliases away thin
+// strokes (small cover-title text) when downscaling. Averaging every source
+// column that falls under an output column keeps them visible instead.
+// x_step is the same 16.16 fixed-point source-per-output ratio used before;
+// when it's < 65536 (upscaling) the window degenerates to a single sample,
+// matching the old nearest-neighbor behavior for that case.
+// ---------------------------------------------------------------------------
+
+static void compute_grey_row_x_boxed(const uint8_t* src_row, const PngHeader& hdr, const uint8_t palette_grey[256],
+                                     uint32_t x_step, int out_w, uint16_t* out_grey) {
+  bool grey8 = (hdr.color_type == kColorGreyscale && hdr.bit_depth == 8);
+  bool rgb8 = (hdr.color_type == kColorRGB && hdr.bit_depth == 8);
+  bool pal4 = (hdr.color_type == kColorPalette && hdr.bit_depth == 4);
+  const uint32_t src_w = hdr.src_width;
+
+  auto sample = [&](uint32_t sx) -> uint16_t {
+    if (grey8)
+      return src_row[sx];
+    if (rgb8)
+      return rgb_to_grey(src_row[sx * 3], src_row[sx * 3 + 1], src_row[sx * 3 + 2]);
+    if (pal4) {
+      uint8_t n = (sx & 1) ? (src_row[sx >> 1] & 0x0F) : (src_row[sx >> 1] >> 4);
+      return palette_grey[n];
+    }
+    return pixel_to_grey(src_row, sx, hdr, palette_grey);
+  };
+
+  uint32_t sx_fp = 0;
+  for (int ox = 0; ox < out_w; ++ox) {
+    uint32_t sx0 = sx_fp >> 16;
+    sx_fp += x_step;
+    uint32_t sx1 = sx_fp >> 16;
+    if (sx1 <= sx0)
+      sx1 = sx0 + 1;
+    if (sx0 >= src_w)
+      sx0 = src_w - 1;
+    if (sx1 > src_w)
+      sx1 = src_w;
+
+    uint32_t sum = 0, cnt = 0;
+    for (uint32_t sx = sx0; sx < sx1; ++sx) {
+      sum += sample(sx);
+      ++cnt;
+    }
+    out_grey[ox] = static_cast<uint16_t>(sum / cnt);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Atkinson dithering (one already-scaled grey row -> 1-bit output)
 // Distributes 6/8 of error to 6 neighbors; intentionally loses 1/4.
 // Requires 3 error rows: cur (this row), nxt (next), nxt2 (row+2).
 // ---------------------------------------------------------------------------
 
-static void dither_row_png(const uint8_t* src_row, const PngHeader& hdr, const uint8_t palette_grey[256],
-                           uint32_t x_step, int out_w, int16_t* err_cur, int16_t* err_nxt, int16_t* err_nxt2,
-                           uint8_t* out_row) {
-  uint32_t sx_fp = 0;
+static void dither_grey_row(const uint16_t* grey, int out_w, int16_t* err_cur, int16_t* err_nxt, int16_t* err_nxt2,
+                            uint8_t* out_row) {
   uint8_t acc = 0, bit = 0x80;
-  bool grey8 = (hdr.color_type == kColorGreyscale && hdr.bit_depth == 8);
-  bool rgb8 = (hdr.color_type == kColorRGB && hdr.bit_depth == 8);
-  bool pal4 = (hdr.color_type == kColorPalette && hdr.bit_depth == 4);
   for (int ox = 0; ox < out_w; ++ox) {
-    size_t sx = sx_fp >> 16;
-    sx_fp += x_step;
-    int16_t g;
-    if (grey8)
-      g = static_cast<int16_t>(src_row[sx]);
-    else if (rgb8)
-      g = static_cast<int16_t>(rgb_to_grey(src_row[sx * 3], src_row[sx * 3 + 1], src_row[sx * 3 + 2]));
-    else if (pal4) {
-      uint8_t n = (sx & 1) ? (src_row[sx >> 1] & 0x0F) : (src_row[sx >> 1] >> 4);
-      g = static_cast<int16_t>(palette_grey[n]);
-    } else
-      g = static_cast<int16_t>(pixel_to_grey(src_row, sx, hdr, palette_grey));
-
-    int16_t val = static_cast<int16_t>(g + err_cur[ox + 1]);
+    int16_t val = static_cast<int16_t>(grey[ox] + err_cur[ox + 1]);
     if (val < 0)
       val = 0;
     if (val > 255)
@@ -514,7 +547,6 @@ ImageError decode_png_from_entry(IZipFile& file, const ZipEntry& entry, uint16_t
     out_w = std::max(uint32_t(1), src_w * uint32_t(max_h) / src_h);
   }
   uint32_t x_step = (src_w << 16) / out_w;
-  uint32_t y_step = (src_h << 16) / out_h;
   uint32_t out_stride = (out_w + 7) / 8;
 
   // ---- Adam7 interlaced path ----
@@ -779,6 +811,34 @@ ImageError decode_png_from_entry(IZipFile& file, const ZipEntry& entry, uint16_t
   size_t row_total = 1 + scan_bytes;
   uint32_t src_y = 0, out_y = 0;
 
+  // Y-direction box-filter state: accum/accum_count sum grey_row values over
+  // every source row that maps into the current output row's window, so a
+  // downscaled output row is an area average, not a single sampled row.
+  // last_avg holds the most recently finalized average and is replayed for
+  // any output row an upscale skips over (nearest-duplicate, same as before).
+  auto grey_row = std::unique_ptr<uint16_t[]>(new (std::nothrow) uint16_t[out_w]);
+  auto accum = std::unique_ptr<uint32_t[]>(new (std::nothrow) uint32_t[out_w]());
+  auto last_avg = std::unique_ptr<uint16_t[]>(new (std::nothrow) uint16_t[out_w]());
+  if (!grey_row || !accum || !last_avg)
+    return ImageError::ReadError;
+  uint32_t accum_count = 0;
+
+  auto emit_output_row = [&](const uint16_t* grey_vals) {
+    if (sink) {
+      uint8_t temp_row[128];  // byte accumulator writes all bytes
+      dither_grey_row(grey_vals, static_cast<int>(out_w), err_cur.get(), err_nxt.get(), err_nxt2.get(), temp_row);
+      sink->emit_row(sink->ctx, static_cast<uint16_t>(out_y), temp_row, static_cast<uint16_t>(out_w));
+    } else {
+      uint8_t* out_row = out.data.data() + out_y * out_stride;
+      dither_grey_row(grey_vals, static_cast<int>(out_w), err_cur.get(), err_nxt.get(), err_nxt2.get(), out_row);
+    }
+    ++out_y;
+    // Rotate three error rows: cur←nxt, nxt←nxt2, nxt2←fresh
+    std::swap(err_cur, err_nxt);
+    std::swap(err_nxt, err_nxt2);
+    std::fill(err_nxt2.get(), err_nxt2.get() + out_w + 4, int16_t(0));
+  };
+
   // ---- IDAT streaming decompression + row processing ----
 #ifdef ESP_PLATFORM
   int64_t _t_idat = esp_timer_get_time();
@@ -854,27 +914,29 @@ ImageError decode_png_from_entry(IZipFile& file, const ZipEntry& entry, uint16_t
           std::memcpy(curr_row.get(), row_buf.get() + 1, scan_bytes);
           unfilter_row(filter, curr_row.get(), prev_row.get(), scan_bytes, bpp_filter);
 
-          // Emit all output rows that map to this source row (handles upscaling too).
-          while (out_y < out_h) {
-            uint32_t target_src_y = (out_y * y_step) >> 16;
-            if (src_y != target_src_y)
-              break;
-            if (sink) {
-              uint8_t temp_row[128];  // byte accumulator writes all bytes
-              dither_row_png(curr_row.get(), hdr, palette_grey, x_step, static_cast<int>(out_w), err_cur.get(),
-                             err_nxt.get(), err_nxt2.get(), temp_row);
-              sink->emit_row(sink->ctx, static_cast<uint16_t>(out_y), temp_row, static_cast<uint16_t>(out_w));
-            } else {
-              uint8_t* out_row = out.data.data() + out_y * out_stride;
-              dither_row_png(curr_row.get(), hdr, palette_grey, x_step, static_cast<int>(out_w), err_cur.get(),
-                             err_nxt.get(), err_nxt2.get(), out_row);
+          // X-box-average this source row, then fold it into the Y-direction
+          // accumulator for whichever output row it falls into. Downscaling
+          // assigns several consecutive source rows to the same output row
+          // (bucket stays put, accum_count grows); upscaling advances the
+          // bucket by more than one and the gap is back-filled below by
+          // replaying the last finalized average.
+          compute_grey_row_x_boxed(curr_row.get(), hdr, palette_grey, x_step, static_cast<int>(out_w),
+                                   grey_row.get());
+          uint32_t bucket = static_cast<uint32_t>((static_cast<uint64_t>(src_y) * out_h) / src_h);
+          if (bucket > out_y) {
+            if (accum_count > 0) {
+              for (uint32_t ox = 0; ox < out_w; ++ox)
+                last_avg[ox] = static_cast<uint16_t>(accum[ox] / accum_count);
+              emit_output_row(last_avg.get());
+              std::fill(accum.get(), accum.get() + out_w, uint32_t(0));
+              accum_count = 0;
             }
-            ++out_y;
-            // Rotate three error rows: cur←nxt, nxt←nxt2, nxt2←fresh
-            std::swap(err_cur, err_nxt);
-            std::swap(err_nxt, err_nxt2);
-            std::fill(err_nxt2.get(), err_nxt2.get() + out_w + 4, int16_t(0));
+            while (out_y < bucket && out_y < out_h)
+              emit_output_row(last_avg.get());
           }
+          for (uint32_t ox = 0; ox < out_w; ++ox)
+            accum[ox] += grey_row[ox];
+          ++accum_count;
 
           std::swap(prev_row, curr_row);
           std::fill(curr_row.get(), curr_row.get() + scan_bytes, uint8_t(0));
@@ -893,6 +955,16 @@ ImageError decode_png_from_entry(IZipFile& file, const ZipEntry& entry, uint16_t
     if (status == TINFL_STATUS_NEEDS_MORE_INPUT && !has_more && in_avail == 0)
       return ImageError::InvalidData;  // truncated IDAT
   }
+
+  // Flush the last bucket and back-fill any output rows still unemitted
+  // (upscale tail, or a source shorter than expected).
+  if (accum_count > 0) {
+    for (uint32_t ox = 0; ox < out_w; ++ox)
+      last_avg[ox] = static_cast<uint16_t>(accum[ox] / accum_count);
+    emit_output_row(last_avg.get());
+  }
+  while (out_y < out_h)
+    emit_output_row(last_avg.get());
 
   out.height = static_cast<uint16_t>(out_y);
 #ifdef ESP_PLATFORM

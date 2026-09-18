@@ -110,6 +110,13 @@ class ListMenuScreen : public IScreen {
   virtual bool is_separator(int index) const {
     return index >= 0 && index < static_cast<int>(separators_.size()) && separators_[index];
   }
+
+  // Whether an empty-label separator should draw as a thin divider line
+  // (true) or as plain vertical spacing (false, the default). Only consulted
+  // when get_item_label(index) is empty — a separator with header text
+  // always draws its centered label regardless of this.
+  virtual bool separator_has_line(int index) const { return false; }
+
   virtual int count() const {
     return static_cast<int>(labels_.size());
   }
@@ -183,6 +190,14 @@ class ListMenuScreen : public IScreen {
     force_redraw_ = true;
   }
 
+  // Call from an on_select/on_long_select handler that has painted the panel
+  // itself (a full-screen preview, say). Without it, update() would repaint the
+  // list over that output before the handler's content was ever seen.
+  // Applies to the current update() only.
+  void suppress_redraw() {
+    suppress_redraw_ = true;
+  }
+
   int buffer_width() const { return buf_ ? buf_->width() : 0; }
   DrawBuffer* buffer() const { return buf_; }
   IRuntime* runtime() const { return runtime_; }
@@ -227,6 +242,7 @@ class ListMenuScreen : public IScreen {
   bool align_left_ = false;
   bool on_start_set_selection_ = false;
   bool force_redraw_ = false;
+  bool suppress_redraw_ = false;
 
   DrawBuffer* buf_ = nullptr;
   IRuntime* runtime_ = nullptr;

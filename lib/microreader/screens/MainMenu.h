@@ -95,6 +95,7 @@ class MainMenu : public ListMenuScreen {
 
   std::string_view get_item_label(int index) const override;
   bool is_separator(int index) const override;
+  bool separator_has_line(int index) const override;
   int count() const override;
 
   void start(DrawBuffer& buf, IRuntime& runtime) override {

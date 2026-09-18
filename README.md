@@ -83,6 +83,12 @@ Recommended Source for nice pictures: https://diogo7dias.github.io/lector-xteink
 The first time an image is shown it is converted and cached; subsequent sleeps load the cache directly. The cache is cleared by **Settings → Clear Cache**.
 You can *convert all sleep images* in the menu so shutting down is faster every time.
 
+### Book cover
+
+**Settings → Sleep Image → Book Cover** shows the cover of the book you are reading (or the last one you opened) instead of a fixed image. The cover keeps its proportions and is never cropped, so a cover whose shape doesn't match the screen gets white bars rather than losing its title.
+
+Each book's cover is prepared once — at the end of its first conversion when this mode is already selected, otherwise on the first sleep after you switch to it — and stored alongside that book's other cache files, so every later sleep just loads it. Books with no usable cover fall back to the previously selected sleep image.
+
 ### Adding sleep images
 
 ```powershell
@@ -93,10 +99,15 @@ python tools/serial_cmd.py --port COM4 --upload-sleep "path/to/my_image.bmp"
 
 ### Selecting a sleep image
 
-Open **Settings → Sleep Image**:
+**Settings → Sleep Image** opens a list of everything available:
 
-- **Auto** — cycles through all images in `sleep/`, picking a different one each sleep.
-- **\<filename\>** — pins the device to that specific image.
+- **Auto (cycle)** — a different image from `sleep/` each time the device sleeps.
+- **Book Cover** — the cover of the book you are reading (see above).
+- **\<filename\>** — pins the device to that one image.
+
+The image in use is marked with a bullet and the cursor starts on it, so you never have to scroll back to where you already were. **Hold select** on any entry to see it full-screen exactly as a sleep would show it; any button returns to the list.
+
+Images are listed alphabetically, ignoring case — the same order **Auto** cycles through.
 
 ## Calibre Plugin
 

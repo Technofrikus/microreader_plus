@@ -288,6 +288,11 @@ void ListMenuScreen::draw_list_(DrawBuffer& buf, int W, int H, int header_h, int
         buf.draw_text_proportional((W - hw) / 2, y + baseline, hdr.data(), hdr.size(), ui_font_, false);
         y += line_h;
       } else {
+        if (separator_has_line(i)) {
+          const int div_w = std::min(80, W / 3);
+          const int div_x = (W - div_w) / 2;
+          buf.fill_rect(div_x, y + line_h / 4, div_w, 1, false);
+        }
         y += line_h / 2;
       }
       continue;
@@ -616,7 +621,11 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
     }
   }
 
-  if (moved || needs_draw || force_redraw_) {
+  if (suppress_redraw_) {
+    // A handler painted the panel itself this frame; leave its output alone.
+    suppress_redraw_ = false;
+    force_redraw_ = false;
+  } else if (moved || needs_draw || force_redraw_) {
     draw_all_(buf, runtime.battery_percentage());
     buf.refresh();
     force_redraw_ = false;

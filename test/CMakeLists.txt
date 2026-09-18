@@ -68,6 +68,8 @@ add_library(microreader_content STATIC
     ${LIB_DIR}/content/JpegDecoder.cpp
     ${LIB_DIR}/content/PngDecoder.cpp
     ${LIB_DIR}/content/BmpSleepConverter.cpp
+    ${LIB_DIR}/content/CoverSleep.cpp
+    ${LIB_DIR}/content/SleepImageList.cpp
     ${LIB_DIR}/content/Book.cpp
     ${LIB_DIR}/content/BookIndex.cpp
     ${LIB_DIR}/content/TextLayout.cpp
@@ -94,6 +96,7 @@ add_library(microreader_core STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/MainMenu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/ReaderScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/SettingsScreen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/SleepImageScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/ChapterSelectScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/DeleteConfirmScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/ReaderOptionsScreen.cpp
@@ -126,6 +129,8 @@ add_executable(unit_tests
     unit/NavigationTest.cpp
     unit/HyphenationTest.cpp
     unit/BmpSleepConverterTest.cpp
+    unit/CoverSleepTest.cpp
+    unit/SleepImageListTest.cpp
     unit/BookIndexTest.cpp
 )
 target_include_directories(unit_tests PRIVATE
@@ -163,6 +168,8 @@ add_executable(microreader_tests
     unit/NavigationTest.cpp
     unit/ApplicationFontTest.cpp
     unit/BmpSleepConverterTest.cpp
+    unit/CoverSleepTest.cpp
+    unit/SleepImageListTest.cpp
     integration/RealBookTest.cpp
     integration/BulkBookTest.cpp
     integration/HtmlExportTest.cpp

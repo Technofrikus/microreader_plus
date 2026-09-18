@@ -8,6 +8,8 @@
 #include "DiagnosticLog.h"
 #include "content/BookIndex.h"
 #include "content/BmpSleepConverter.h"
+#include "content/CoverSleep.h"
+#include "content/SleepImageList.h"
 
 #ifdef ESP_PLATFORM
 #include <dirent.h>
@@ -55,6 +57,7 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   chapter_select_.set_app(this);
   links_screen_.set_app(this);
   delete_confirm_.set_app(this);
+  sleep_image_screen_.set_app(this);
 #ifdef ESP_PLATFORM
   firmware_update_.set_app(this);
 #endif
@@ -189,6 +192,57 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
   return cached && buf.show_sleep_image(cache_path);
 }
 
+// Show the cover of the book being read (or the last one opened) as the sleep
+// screen. Normally this is a single sequential read of a cache built when the
+// book was first converted; books converted before this feature existed have
+// no cache, so it is built here instead — once, then never again.
+// Returns false if there is no book, no cover, or the build failed, leaving
+// the caller to fall back to an ordinary sleep image.
+bool Application::show_cover_sleep_(DrawBuffer& buf) {
+  if (!data_dir_)
+    return false;
+
+  std::string book = reader_.get_path();
+  if (book.empty())
+    book = menu_.current_book_path();
+  if (book.empty())
+    book = menu_.last_selected_book_path();
+  if (book.empty()) {
+    MR_LOGI("cover", "no book to take a cover from");
+    return false;
+  }
+
+  const std::string cache_dir = book_cache_dir_for(data_dir_, book.c_str());
+  const std::string cover_path =
+      cover_cache_path(cache_dir, buf.config().panel_width, buf.config().physical_height);
+
+  if (show_cover_sleep(cover_path.c_str(), buf))
+    return true;
+
+  uint32_t offset = 0;
+  if (!cover_offset_from_mrb((cache_dir + "/book.mrb").c_str(), offset))
+    return false;
+
+  buf.show_loading("Preparing cover...", 0);
+  if (!build_cover_cache(book.c_str(), offset, cover_path.c_str(), buf))
+    return false;
+
+  return show_cover_sleep(cover_path.c_str(), buf);
+}
+
+// Put one sleep image on the panel. Every way an image can be named lives
+// here, so the sleep sequence and the picker's preview can never drift into
+// showing different things for the same setting.
+bool Application::show_sleep_value_(const std::string& value, DrawBuffer& buf) {
+  if (value == kCoverSleepPath)
+    return show_cover_sleep_(buf);
+  if (value.rfind("embedded:", 0) == 0)
+    return buf.show_sleep_image_embedded(std::atoi(value.c_str() + 9));
+  if (value.rfind("bmp:", 0) == 0)
+    return show_bmp_sleep(value.c_str() + 4, data_dir_, buf);
+  return buf.show_sleep_image(value.c_str());
+}
+
 void Application::do_sleep_(DrawBuffer& buf) {
   // Step-by-step timing of the whole shutdown sequence. The perceived delay
   // (button press -> sleep image appears) spans everything below, and it is
@@ -214,15 +268,7 @@ void Application::do_sleep_(DrawBuffer& buf) {
   if (!sleep_image_path_.empty()) {
     buf.set_rotation(Rotation::Deg90);
     bool shown = false;
-    MR_TIME_STEP("sleep", "show_image", {
-      if (sleep_image_path_.rfind("embedded:", 0) == 0) {
-        shown = buf.show_sleep_image_embedded(std::atoi(sleep_image_path_.c_str() + 9));
-      } else if (sleep_image_path_.rfind("bmp:", 0) == 0) {
-        shown = show_bmp_sleep(sleep_image_path_.c_str() + 4, data_dir_, buf);
-      } else {
-        shown = buf.show_sleep_image(sleep_image_path_.c_str());
-      }
-    });
+    MR_TIME_STEP("sleep", "show_image", { shown = show_sleep_value_(sleep_image_path_, buf); });
     MR_LOGI("sleep", "show result: %d", (int)shown);
     if (!shown && !buf.show_sleep_image_embedded(0)) {
       // Both show attempts failed — display will just deep_sleep without image.
@@ -240,36 +286,16 @@ void Application::do_sleep_(DrawBuffer& buf) {
   }
 
   // Auto-cycle: build list. Custom SD images take priority over embedded ones.
+  // The list is the same one the picker shows, in the same order — the cycle
+  // index is persisted across reboots and would otherwise point somewhere else
+  // every time the filesystem handed the names back in a different order.
   const long long t_scan = mr_now_us();
   std::vector<std::string> images;
-#ifdef ESP_PLATFORM
-  DIR* d = opendir("/sdcard/sleep");
-  if (d) {
-    struct dirent* ent;
-    while ((ent = readdir(d)) != nullptr) {
-      if (ent->d_name[0] == '.')
-        continue;
-      const char* ext = std::strrchr(ent->d_name, '.');
-      if (!ext) continue;
-      if (std::strcmp(ext, ".mgr") == 0) {
-        images.push_back(std::string("/sdcard/sleep/") + ent->d_name);
-      } else if (std::strcmp(ext, ".bmp") == 0 && data_dir_) {
-        images.push_back(std::string("bmp:/sdcard/sleep/") + ent->d_name);
-      }
-    }
-    closedir(d);
+  for (const SleepImageEntry& entry : list_sleep_images()) {
+    if (entry.bmp && !data_dir_)
+      continue;  // a BMP needs a cache directory to be converted into
+    images.push_back(entry.value());
   }
-#else
-  try {
-    for (const auto& entry : fs::directory_iterator("sd/sleep")) {
-      const auto& p = entry.path();
-      if (p.extension() == ".mgr")
-        images.push_back(p.string());
-      else if (p.extension() == ".bmp" && data_dir_)
-        images.push_back("bmp:" + p.string());
-    }
-  } catch (...) {}
-#endif
   if (images.empty()) {
     images.push_back("embedded:0");
   }
@@ -291,15 +317,7 @@ void Application::do_sleep_(DrawBuffer& buf) {
 
   const std::string& path = images[idx];
   bool sleep_shown = false;
-  MR_TIME_STEP("sleep", "show_image", {
-    if (path.rfind("embedded:", 0) == 0) {
-      sleep_shown = buf.show_sleep_image_embedded(std::atoi(path.c_str() + 9));
-    } else if (path.rfind("bmp:", 0) == 0) {
-      sleep_shown = show_bmp_sleep(path.c_str() + 4, data_dir_, buf);
-    } else {
-      sleep_shown = buf.show_sleep_image(path.c_str());
-    }
-  });
+  MR_TIME_STEP("sleep", "show_image", { sleep_shown = show_sleep_value_(path, buf); });
 
   MR_LOGI("sleep", "show result: %d", (int)sleep_shown);
   if (!sleep_shown && !buf.show_sleep_image_embedded(0)) {
@@ -474,6 +492,8 @@ IScreen* microreader::Application::screen_for_(ScreenId id) {
       return &links_screen_;
     case ScreenId::DeleteConfirm:
       return &delete_confirm_;
+    case ScreenId::SleepImage:
+      return &sleep_image_screen_;
 #ifdef ESP_PLATFORM
     case ScreenId::FirmwareUpdate:
       return &firmware_update_;

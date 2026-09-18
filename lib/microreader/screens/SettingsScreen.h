@@ -68,8 +68,6 @@ class SettingsScreen final : public ListMenuScreen {
   DrawBuffer* buf_ = nullptr;
   std::vector<std::string> sd_fonts_;
   int font_sel_idx_ = 0;
-  std::vector<std::string> sleep_images_;
-  int sleep_image_sel_idx_ = 0;
   int toast_idx_ = -1;
   std::string toast_original_label_;
   int toast_frames_ = 0;

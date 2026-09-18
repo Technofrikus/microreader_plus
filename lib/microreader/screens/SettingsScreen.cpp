@@ -6,6 +6,7 @@
 
 #include "../Application.h"
 #include "../content/BmpSleepConverter.h"
+#include "../content/CoverSleep.h"
 #include "../content/BookIndex.h"
 #include "../display/DeviceConfig.h"
 #include "../version.h"
@@ -63,6 +64,8 @@ static std::string get_menu_font_label(int size) {
 static std::string get_sleep_image_label(const std::string& path) {
   if (path.empty())
     return "Sleep Image: Auto";
+  if (path == kCoverSleepPath)
+    return "Sleep Image: Book Cover";
   std::string label = "Sleep Image: ";
   if (path.rfind("embedded:", 0) == 0) {
     int idx = std::atoi(path.c_str() + 9);
@@ -136,58 +139,6 @@ void SettingsScreen::on_start() {
     }
   }
 
-  // Sleep image list: first entry is empty string = Auto-cycle.
-  // Custom SD images take priority — embedded ones are only shown when no
-  // custom images are present.
-  sleep_images_.clear();
-  sleep_images_.push_back("");  // Auto
-  sleep_image_sel_idx_ = 0;
-  std::vector<std::string> sd_sleep;
-#ifdef ESP_PLATFORM
-  {
-    DIR* sd = opendir("/sdcard/sleep");
-    if (sd) {
-      struct dirent* ent;
-      while ((ent = readdir(sd)) != nullptr) {
-        if (ent->d_name[0] == '.')
-          continue;
-        const char* ext = std::strrchr(ent->d_name, '.');
-        if (!ext) continue;
-        if (strcmp(ext, ".mgr") == 0)
-          sd_sleep.push_back(std::string("/sdcard/sleep/") + ent->d_name);
-        else if (strcmp(ext, ".bmp") == 0)
-          sd_sleep.push_back(std::string("bmp:/sdcard/sleep/") + ent->d_name);
-      }
-      closedir(sd);
-    }
-  }
-#else
-  try {
-    for (const auto& entry : fs::directory_iterator("sd/sleep")) {
-      const auto& p = entry.path();
-      if (p.extension() == ".mgr")
-        sd_sleep.push_back(p.string());
-      else if (p.extension() == ".bmp")
-        sd_sleep.push_back("bmp:" + p.string());
-    }
-  } catch (...) {}
-#endif
-  if (sd_sleep.empty()) {
-    sleep_images_.push_back("embedded:0");
-  } else {
-    for (auto& p : sd_sleep)
-      sleep_images_.push_back(std::move(p));
-  }
-  if (app_) {
-    const std::string& current = app_->sleep_image_path();
-    for (size_t i = 0; i < sleep_images_.size(); ++i) {
-      if (sleep_images_[i] == current) {
-        sleep_image_sel_idx_ = static_cast<int>(i);
-        break;
-      }
-    }
-  }
-
   // --- Appearance ---
   idx_rotate_display_ = count();
   add_item(get_rotate_display_label(app_ && app_->rotate_display()));
@@ -208,8 +159,10 @@ void SettingsScreen::on_start() {
   idx_font_ = count();
   add_item(get_font_label(sd_fonts_[font_sel_idx_]));
 
+  // One row, however many images are on the card: picking one happens in
+  // SleepImageScreen, not here.
   idx_sleep_image_ = count();
-  add_item(get_sleep_image_label(sleep_images_[sleep_image_sel_idx_]));
+  add_item(get_sleep_image_label(app_ ? app_->sleep_image_path() : std::string()));
 
   add_separator();
 
@@ -383,11 +336,8 @@ void SettingsScreen::on_select(int index) {
     return;
   }
   if (index == idx_sleep_image_) {
-    if (app_ && !sleep_images_.empty()) {
-      sleep_image_sel_idx_ = (sleep_image_sel_idx_ + 1) % static_cast<int>(sleep_images_.size());
-      app_->set_sleep_image_path(sleep_images_[sleep_image_sel_idx_]);
-      set_item_label(idx_sleep_image_, get_sleep_image_label(sleep_images_[sleep_image_sel_idx_]));
-    }
+    if (app_)
+      app_->push_screen(ScreenId::SleepImage);
     return;
   }
 #ifdef ESP_PLATFORM
@@ -540,15 +490,6 @@ void SettingsScreen::on_long_select(int index) {
       font_sel_idx_ = static_cast<int>((static_cast<size_t>(font_sel_idx_) + n - 1) % n);
       app_->set_custom_font_path(sd_fonts_[font_sel_idx_]);
       set_item_label(idx_font_, get_font_label(sd_fonts_[font_sel_idx_]));
-    }
-    return;
-  }
-  if (index == idx_sleep_image_) {
-    if (app_ && !sleep_images_.empty()) {
-      size_t n = sleep_images_.size();
-      sleep_image_sel_idx_ = static_cast<int>((static_cast<size_t>(sleep_image_sel_idx_) + n - 1) % n);
-      app_->set_sleep_image_path(sleep_images_[sleep_image_sel_idx_]);
-      set_item_label(idx_sleep_image_, get_sleep_image_label(sleep_images_[sleep_image_sel_idx_]));
     }
     return;
   }

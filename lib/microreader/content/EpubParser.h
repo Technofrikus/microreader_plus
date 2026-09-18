@@ -131,6 +131,13 @@ class Epub {
     return toc_;
   }
 
+  // ZIP entry index of the cover image declared in the OPF metadata
+  // (<meta name="cover" content="..."/> resolved against the manifest), or
+  // -1 when the book declares no cover. Only valid after a full open().
+  int cover_entry_index() const {
+    return cover_idx_;
+  }
+
   // Access the zip reader (for image extraction etc)
   const ZipReader& zip() const {
     return zip_;

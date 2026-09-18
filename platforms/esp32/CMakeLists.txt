@@ -14,6 +14,7 @@ set(lib_sources
     ${LIB}/screens/MainMenu.cpp
     ${LIB}/screens/ReaderScreen.cpp
     ${LIB}/screens/SettingsScreen.cpp
+    ${LIB}/screens/SleepImageScreen.cpp
     ${LIB}/screens/ChapterSelectScreen.cpp
     ${LIB}/screens/DeleteConfirmScreen.cpp
     ${LIB}/screens/LinksScreen.cpp
@@ -34,6 +35,8 @@ set(lib_sources
     ${LIB}/content/JpegDecoder.cpp
     ${LIB}/content/PngDecoder.cpp
     ${LIB}/content/BmpSleepConverter.cpp
+    ${LIB}/content/CoverSleep.cpp
+    ${LIB}/content/SleepImageList.cpp
     ${LIB}/firmware/FirmwareMeta.cpp
     ${LIB}/firmware/SdFirmwareFlasher.cpp
     ${LIB}/screens/FirmwareUpdateScreen.cpp)

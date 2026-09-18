@@ -277,6 +277,13 @@ bool MainMenu::is_separator(int index) const {
   return false;
 }
 
+bool MainMenu::separator_has_line(int index) const {
+  // MainMenu's blank separators (Recent-section divider, opened/unopened
+  // boundary) are always meant as visible dividers, unlike other screens'
+  // blank spacer-only separators.
+  return true;
+}
+
 std::string_view MainMenu::get_item_label(int index) const {
   for (const auto& s : separators_)
     if (s.visual_index == index) return s.label;
