@@ -842,19 +842,49 @@ static void idct(const int32_t block[64], uint8_t out[64]) {
 }
 
 // ---------------------------------------------------------------------------
-// Atkinson dithering (one MCU row → 1-bit output)
+// X-direction box-filter downscale (one decoded Y-plane row -> out_w samples)
+//
+// Point-sampling a single source column per output column aliases away thin
+// strokes (small cover-title text) when downscaling. Averaging every source
+// column that falls under an output column keeps them visible instead.
+// x_step is the same 16.16 fixed-point source-per-output ratio used before;
+// when it's < 65536 (upscaling) the window degenerates to a single sample,
+// matching the old nearest-neighbor behavior for that case.
+// ---------------------------------------------------------------------------
+
+static void compute_grey_row_x_boxed(const uint8_t* row, uint32_t x_step, int out_w, int src_w, uint16_t* out_grey) {
+  uint32_t sx_fp = 0;
+  for (int ox = 0; ox < out_w; ++ox) {
+    uint32_t sx0 = sx_fp >> 16;
+    sx_fp += x_step;
+    uint32_t sx1 = sx_fp >> 16;
+    if (sx1 <= sx0)
+      sx1 = sx0 + 1;
+    if (sx0 >= static_cast<uint32_t>(src_w))
+      sx0 = static_cast<uint32_t>(src_w - 1);
+    if (sx1 > static_cast<uint32_t>(src_w))
+      sx1 = static_cast<uint32_t>(src_w);
+
+    uint32_t sum = 0, cnt = 0;
+    for (uint32_t sx = sx0; sx < sx1; ++sx) {
+      sum += row[sx];
+      ++cnt;
+    }
+    out_grey[ox] = static_cast<uint16_t>(sum / cnt);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Atkinson dithering (one already-scaled grey row -> 1-bit output)
 // Distributes 6/8 of error to 6 neighbors; intentionally loses 1/4.
 // Requires 3 error rows: cur (this row), nxt (next), nxt2 (row+2).
 // ---------------------------------------------------------------------------
 
-static void dither_row(const uint8_t* row, uint32_t x_step, int out_w, int16_t* err_cur, int16_t* err_nxt,
-                       int16_t* err_nxt2, uint8_t* out_row) {
-  uint32_t sx_fp = 0;
+static void dither_grey_row(const uint16_t* grey, int out_w, int16_t* err_cur, int16_t* err_nxt, int16_t* err_nxt2,
+                            uint8_t* out_row) {
   uint8_t acc = 0, bit = 0x80;
   for (int ox = 0; ox < out_w; ++ox) {
-    int16_t g = static_cast<int16_t>(row[sx_fp >> 16]);
-    sx_fp += x_step;
-    int16_t val = static_cast<int16_t>(g + err_cur[ox + 1]);
+    int16_t val = static_cast<int16_t>(grey[ox] + err_cur[ox + 1]);
     if (val < 0)
       val = 0;
     if (val > 255)
@@ -917,7 +947,6 @@ static const char* decode_baseline(const JpegState& st, BitReader& r, uint16_t m
   }
 
   uint32_t x_step = (static_cast<uint32_t>(w) << 16) / static_cast<uint32_t>(out_w);
-  uint32_t y_step = (static_cast<uint32_t>(h) << 16) / static_cast<uint32_t>(out_h);
   int out_stride = (out_w + 7) / 8;
 
   // Non-interleaved scan (single component): MCU = 1 data unit (8×8 block).
@@ -959,6 +988,34 @@ static const char* decode_baseline(const JpegState& st, BitReader& r, uint16_t m
   uint32_t mcu_cnt = 0;
   uint32_t total_mcus = static_cast<uint32_t>(mcus_x) * static_cast<uint32_t>(mcus_y);
   int out_y = 0;
+
+  // Y-direction box-filter state: accum/accum_count sum grey_row values over
+  // every source row that maps into the current output row's window, so a
+  // downscaled output row is an area average, not a single sampled row.
+  // last_avg holds the most recently finalized average and is replayed for
+  // any output row an upscale skips over (nearest-duplicate, same as before).
+  auto grey_row = std::unique_ptr<uint16_t[]>(new (std::nothrow) uint16_t[out_w]);
+  auto accum = std::unique_ptr<uint32_t[]>(new (std::nothrow) uint32_t[out_w]());
+  auto last_avg = std::unique_ptr<uint16_t[]>(new (std::nothrow) uint16_t[out_w]());
+  if (!grey_row || !accum || !last_avg)
+    return "jpeg: OOM for box-filter buffers";
+  int accum_count = 0;
+
+  auto emit_output_row = [&](const uint16_t* grey_vals) {
+    if (sink) {
+      uint8_t temp_row[128];  // byte accumulator writes all bytes; no zero-init needed
+      dither_grey_row(grey_vals, out_w, err_cur.get(), err_nxt.get(), err_nxt2.get(), temp_row);
+      sink->emit_row(sink->ctx, static_cast<uint16_t>(out_y), temp_row, static_cast<uint16_t>(out_w));
+    } else {
+      uint8_t* out_row = out.data.data() + out_y * out_stride;
+      dither_grey_row(grey_vals, out_w, err_cur.get(), err_nxt.get(), err_nxt2.get(), out_row);
+    }
+    ++out_y;
+    // Rotate three error rows: cur←nxt, nxt←nxt2, nxt2←fresh
+    std::swap(err_cur, err_nxt);
+    std::swap(err_nxt, err_nxt2);
+    std::fill(err_nxt2.get(), err_nxt2.get() + out_w + 4, int16_t(0));
+  };
 
   for (int mcu_row = 0; mcu_row < mcus_y; ++mcu_row) {
     std::fill(y_row.get(), y_row.get() + row_w * mcu_h, uint8_t(128));
@@ -1012,32 +1069,45 @@ static const char* decode_baseline(const JpegState& st, BitReader& r, uint16_t m
       }
     }
 
-    // Dither this MCU row to 1-bit output
+    // Box-filter this MCU row's decoded pixels into the Y-direction
+    // accumulator, one output row per completed bucket. See the comment on
+    // grey_row/accum above: downscaling assigns several consecutive source
+    // rows to the same output row (accum_count grows); upscaling advances
+    // the bucket by more than one and the gap is back-filled by replaying
+    // the last finalized average.
     for (int py = 0; py < mcu_h; ++py) {
       int src_y = mcu_row * mcu_h + py;
-      if (src_y >= h || out_y >= out_h)
+      if (src_y >= h)
         break;
-      // Emit all output rows that map to this source row (handles upscaling too).
-      while (out_y < out_h) {
-        int target_src_y = static_cast<int>((static_cast<uint32_t>(out_y) * y_step) >> 16);
-        if (target_src_y != src_y)
-          break;
-        if (sink) {
-          uint8_t temp_row[128];  // byte accumulator writes all bytes; no zero-init needed
-          dither_row(y_row.get() + py * row_w, x_step, out_w, err_cur.get(), err_nxt.get(), err_nxt2.get(), temp_row);
-          sink->emit_row(sink->ctx, static_cast<uint16_t>(out_y), temp_row, static_cast<uint16_t>(out_w));
-        } else {
-          uint8_t* out_row = out.data.data() + out_y * out_stride;
-          dither_row(y_row.get() + py * row_w, x_step, out_w, err_cur.get(), err_nxt.get(), err_nxt2.get(), out_row);
+
+      compute_grey_row_x_boxed(y_row.get() + py * row_w, x_step, out_w, w, grey_row.get());
+      int bucket = static_cast<int>((static_cast<int64_t>(src_y) * out_h) / h);
+      if (bucket > out_y) {
+        if (accum_count > 0) {
+          for (int ox = 0; ox < out_w; ++ox)
+            last_avg[ox] = static_cast<uint16_t>(accum[ox] / accum_count);
+          emit_output_row(last_avg.get());
+          std::fill(accum.get(), accum.get() + out_w, uint32_t(0));
+          accum_count = 0;
         }
-        ++out_y;
-        // Rotate three error rows: cur←nxt, nxt←nxt2, nxt2←fresh
-        std::swap(err_cur, err_nxt);
-        std::swap(err_nxt, err_nxt2);
-        std::fill(err_nxt2.get(), err_nxt2.get() + out_w + 4, int16_t(0));
+        while (out_y < bucket && out_y < out_h)
+          emit_output_row(last_avg.get());
       }
+      for (int ox = 0; ox < out_w; ++ox)
+        accum[ox] += grey_row[ox];
+      ++accum_count;
     }
   }
+
+  // Flush the last bucket and back-fill any output rows still unemitted
+  // (upscale tail, or a source shorter than expected).
+  if (accum_count > 0) {
+    for (int ox = 0; ox < out_w; ++ox)
+      last_avg[ox] = static_cast<uint16_t>(accum[ox] / accum_count);
+    emit_output_row(last_avg.get());
+  }
+  while (out_y < out_h)
+    emit_output_row(last_avg.get());
 
   out.height = static_cast<uint16_t>(out_y);
   return nullptr;
