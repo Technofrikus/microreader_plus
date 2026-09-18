@@ -183,6 +183,14 @@ class ListMenuScreen : public IScreen {
     force_redraw_ = true;
   }
 
+  // Call from an on_select/on_long_select handler that has painted the panel
+  // itself (a full-screen preview, say). Without it, update() would repaint the
+  // list over that output before the handler's content was ever seen.
+  // Applies to the current update() only.
+  void suppress_redraw() {
+    suppress_redraw_ = true;
+  }
+
   int buffer_width() const { return buf_ ? buf_->width() : 0; }
   DrawBuffer* buffer() const { return buf_; }
   IRuntime* runtime() const { return runtime_; }
@@ -227,6 +235,7 @@ class ListMenuScreen : public IScreen {
   bool align_left_ = false;
   bool on_start_set_selection_ = false;
   bool force_redraw_ = false;
+  bool suppress_redraw_ = false;
 
   DrawBuffer* buf_ = nullptr;
   IRuntime* runtime_ = nullptr;

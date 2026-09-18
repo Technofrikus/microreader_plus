@@ -56,6 +56,7 @@ add_library(microreader_content STATIC
     ${CONTENT_DIR}/PngDecoder.cpp
     ${CONTENT_DIR}/BmpSleepConverter.cpp
     ${CONTENT_DIR}/CoverSleep.cpp
+    ${CONTENT_DIR}/SleepImageList.cpp
     ${CONTENT_DIR}/Book.cpp
     ${CONTENT_DIR}/BookIndex.cpp
     ${CONTENT_DIR}/TextLayout.cpp
@@ -81,6 +82,7 @@ add_library(microreader_core STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/screens/MainMenu.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/screens/ReaderScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/screens/SettingsScreen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/screens/SleepImageScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/screens/ChapterSelectScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/screens/DeleteConfirmScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../lib/microreader/screens/LinksScreen.cpp

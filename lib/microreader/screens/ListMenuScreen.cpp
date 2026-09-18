@@ -616,7 +616,11 @@ void ListMenuScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntim
     }
   }
 
-  if (moved || needs_draw || force_redraw_) {
+  if (suppress_redraw_) {
+    // A handler painted the panel itself this frame; leave its output alone.
+    suppress_redraw_ = false;
+    force_redraw_ = false;
+  } else if (moved || needs_draw || force_redraw_) {
     draw_all_(buf, runtime.battery_percentage());
     buf.refresh();
     force_redraw_ = false;

@@ -20,6 +20,7 @@
 #include "screens/ReaderOptionsScreen.h"
 #include "screens/ReaderScreen.h"
 #include "screens/SettingsScreen.h"
+#include "screens/SleepImageScreen.h"
 #include "screens/demo/BouncingBallDemo.h"
 #include "screens/demo/GrayscaleDemo.h"
 
@@ -43,6 +44,7 @@ enum class ScreenId : uint8_t {
   Links,
   DeleteConfirm,
   FirmwareUpdate,
+  SleepImage,
   BouncingBall,
   GrayscaleDemo,
 };
@@ -81,6 +83,11 @@ class Application {
   // Sleep screen showing the current (or last-read) book's cover.
   // Returns false when there is no usable cover, so the caller can fall back.
   bool show_cover_sleep_(DrawBuffer& buf);
+
+  // Put one sleep-image value on the panel, leaving it powered down. `value`
+  // uses the encoding of sleep_image_path_, except that auto-cycle has already
+  // been resolved to a concrete image by the caller.
+  bool show_sleep_value_(const std::string& value, DrawBuffer& buf);
 
   // Append a row to battery_log.csv for power-off drain diagnostics.
   // event is "BOOT" or "SLEEP". No-op if data_dir_ or runtime_ is unset.
@@ -160,6 +167,9 @@ class Application {
   DeleteConfirmScreen* delete_confirm() {
     return &delete_confirm_;
   }
+  SleepImageScreen* sleep_image_screen() {
+    return &sleep_image_screen_;
+  }
 
   ControlMode reader_controls() const {
     return reader_controls_;
@@ -222,6 +232,14 @@ class Application {
   void set_sleep_image_path(const std::string& path) {
     sleep_image_path_ = path;
     save_settings_();
+  }
+
+  // Show a sleep image without sleeping, so the picker can preview exactly
+  // what a sleep would put on the glass. Clobbers both display buffers and
+  // leaves the panel powered down — the caller must repaint with a full
+  // refresh. Returns false if nothing reached the panel.
+  bool preview_sleep_image(const std::string& value, DrawBuffer& buf) {
+    return show_sleep_value_(value, buf);
   }
 
   const std::string& installed_font_path() const {
@@ -320,6 +338,7 @@ class Application {
   ChapterSelectScreen chapter_select_;
   LinksScreen links_screen_;
   DeleteConfirmScreen delete_confirm_;
+  SleepImageScreen sleep_image_screen_;
 #ifdef ESP_PLATFORM
   FirmwareUpdateScreen firmware_update_;
 #endif

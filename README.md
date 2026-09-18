@@ -99,10 +99,15 @@ python tools/serial_cmd.py --port COM4 --upload-sleep "path/to/my_image.bmp"
 
 ### Selecting a sleep image
 
-Open **Settings → Sleep Image**:
+**Settings → Sleep Image** opens a list of everything available:
 
-- **Auto** — cycles through all images in `sleep/`, picking a different one each sleep.
-- **\<filename\>** — pins the device to that specific image.
+- **Auto (cycle)** — a different image from `sleep/` each time the device sleeps.
+- **Book Cover** — the cover of the book you are reading (see above).
+- **\<filename\>** — pins the device to that one image.
+
+The image in use is marked with a bullet and the cursor starts on it, so you never have to scroll back to where you already were. **Hold select** on any entry to see it full-screen exactly as a sleep would show it; any button returns to the list.
+
+Images are listed alphabetically, ignoring case — the same order **Auto** cycles through.
 
 ## Calibre Plugin
 
