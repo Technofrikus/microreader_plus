@@ -8,6 +8,7 @@
 #include "DiagnosticLog.h"
 #include "content/BookIndex.h"
 #include "content/BmpSleepConverter.h"
+#include "content/CoverSleep.h"
 
 #ifdef ESP_PLATFORM
 #include <dirent.h>
@@ -189,6 +190,44 @@ static bool show_bmp_sleep(const char* bmp_path, const char* data_dir, DrawBuffe
   return cached && buf.show_sleep_image(cache_path);
 }
 
+// Show the cover of the book being read (or the last one opened) as the sleep
+// screen. Normally this is a single sequential read of a cache built when the
+// book was first converted; books converted before this feature existed have
+// no cache, so it is built here instead — once, then never again.
+// Returns false if there is no book, no cover, or the build failed, leaving
+// the caller to fall back to an ordinary sleep image.
+bool Application::show_cover_sleep_(DrawBuffer& buf) {
+  if (!data_dir_)
+    return false;
+
+  std::string book = reader_.get_path();
+  if (book.empty())
+    book = menu_.current_book_path();
+  if (book.empty())
+    book = menu_.last_selected_book_path();
+  if (book.empty()) {
+    MR_LOGI("cover", "no book to take a cover from");
+    return false;
+  }
+
+  const std::string cache_dir = book_cache_dir_for(data_dir_, book.c_str());
+  const std::string cover_path =
+      cover_cache_path(cache_dir, buf.config().panel_width, buf.config().physical_height);
+
+  if (show_cover_sleep(cover_path.c_str(), buf))
+    return true;
+
+  uint32_t offset = 0;
+  if (!cover_offset_from_mrb((cache_dir + "/book.mrb").c_str(), offset))
+    return false;
+
+  buf.show_loading("Preparing cover...", 0);
+  if (!build_cover_cache(book.c_str(), offset, cover_path.c_str(), buf))
+    return false;
+
+  return show_cover_sleep(cover_path.c_str(), buf);
+}
+
 void Application::do_sleep_(DrawBuffer& buf) {
   // Step-by-step timing of the whole shutdown sequence. The perceived delay
   // (button press -> sleep image appears) spans everything below, and it is
@@ -215,7 +254,9 @@ void Application::do_sleep_(DrawBuffer& buf) {
     buf.set_rotation(Rotation::Deg90);
     bool shown = false;
     MR_TIME_STEP("sleep", "show_image", {
-      if (sleep_image_path_.rfind("embedded:", 0) == 0) {
+      if (sleep_image_path_ == kCoverSleepPath) {
+        shown = show_cover_sleep_(buf);
+      } else if (sleep_image_path_.rfind("embedded:", 0) == 0) {
         shown = buf.show_sleep_image_embedded(std::atoi(sleep_image_path_.c_str() + 9));
       } else if (sleep_image_path_.rfind("bmp:", 0) == 0) {
         shown = show_bmp_sleep(sleep_image_path_.c_str() + 4, data_dir_, buf);

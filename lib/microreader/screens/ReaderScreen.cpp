@@ -10,6 +10,7 @@
 #include "../Application.h"
 #include "../DiagnosticLog.h"
 #include "../HeapLog.h"
+#include "../content/CoverSleep.h"
 #include "../display/ui_font_small.h"
 #include "../display/ui_font_medium.h"
 #include "../display/ui_font_large.h"
@@ -40,25 +41,6 @@ uint32_t ReaderScreen::now_ms_() {
           std::chrono::steady_clock::now().time_since_epoch())
           .count());
 #endif
-}
-
-// ---------------------------------------------------------------------------
-// ReaderScreen — path helpers
-// ---------------------------------------------------------------------------
-
-std::string ReaderScreen::book_stem_() const {
-  const char* name = path_.c_str();
-  const char* sep = std::strrchr(name, '/');
-#ifdef _WIN32
-  const char* bsep = std::strrchr(name, '\\');
-  if (bsep && (!sep || bsep > sep))
-    sep = bsep;
-#endif
-  if (sep)
-    name = sep + 1;
-  const char* dot = std::strrchr(name, '.');
-  size_t len = dot ? static_cast<size_t>(dot - name) : std::strlen(name);
-  return std::string(name, len);
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +565,9 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   MR_DIAG("reader", "font_ready");
 
   // Build cache path: <data_dir>/cache/<stem>/book.mrb
-  book_cache_dir_ = data_dir_ + "/cache/" + book_stem_();
+  // Shared with Application's sleep-time cover lookup — if the two ever
+  // disagreed, the cover built here would never be found again.
+  book_cache_dir_ = book_cache_dir_for(data_dir_.c_str(), path_.c_str());
 #ifdef ESP_PLATFORM
   mkdir(book_cache_dir_.c_str(), 0775);
 #else
@@ -669,7 +653,36 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     long total_ms = (long)((esp_timer_get_time() - open_start) / 1000);
     ESP_LOGI("perf", "Conversion: %ldms  (open+convert=%ldms)", conv_ms, total_ms);
 #endif
+    // The EPUB's own cover declaration is only readable while the book is
+    // open. Note where the cover lives now; rendering it happens after the
+    // close, when the heap is at its freest for this whole open sequence.
+    const int cover_entry = book_.epub().cover_entry_index();
+    const uint32_t cover_offset =
+        (cover_entry >= 0 && static_cast<size_t>(cover_entry) < book_.epub().zip().entry_count())
+            ? book_.epub().zip().entry(static_cast<size_t>(cover_entry)).local_header_offset
+            : 0u;
+
     book_.close();
+
+    // Build the sleep-screen cover here rather than at sleep time: the work is
+    // the same either way, but here it lands inside a progress bar that is
+    // already running, and both display buffers are free and about to be reset
+    // anyway. Only when cover mode is actually selected — otherwise every book
+    // would pay for a feature it may never use. Failure is non-fatal: the book
+    // still opens and sleep falls back to the chosen image.
+    if (app_ && app_->sleep_image_path() == kCoverSleepPath) {
+      // Books that declare no cover fall back to the first image in document
+      // order, which the MRB just written records as image 0.
+      uint32_t offset = cover_offset;
+      if (offset == 0)
+        cover_offset_from_mrb(mrb_path_.c_str(), offset);
+      if (offset != 0) {
+        buf.show_loading("Preparing cover...", 0);
+        const std::string cover_path =
+            cover_cache_path(book_cache_dir_, buf.config().panel_width, buf.config().physical_height);
+        build_cover_cache(path_.c_str(), offset, cover_path.c_str(), buf);
+      }
+    }
 
     // Reset both display buffers to white after scratch use (conversion
     // corrupted them). render_page_ will fill the inactive buffer fresh.

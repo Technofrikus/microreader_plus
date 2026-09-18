@@ -83,6 +83,12 @@ Recommended Source for nice pictures: https://diogo7dias.github.io/lector-xteink
 The first time an image is shown it is converted and cached; subsequent sleeps load the cache directly. The cache is cleared by **Settings → Clear Cache**.
 You can *convert all sleep images* in the menu so shutting down is faster every time.
 
+### Book cover
+
+**Settings → Sleep Image → Book Cover** shows the cover of the book you are reading (or the last one you opened) instead of a fixed image. The cover keeps its proportions and is never cropped, so a cover whose shape doesn't match the screen gets white bars rather than losing its title.
+
+Each book's cover is prepared once — at the end of its first conversion when this mode is already selected, otherwise on the first sleep after you switch to it — and stored alongside that book's other cache files, so every later sleep just loads it. Books with no usable cover fall back to the previously selected sleep image.
+
 ### Adding sleep images
 
 ```powershell

@@ -78,6 +78,10 @@ class Application {
   // Common sleep sequence (save state, show sleep image, set running_=false)
   void do_sleep_(DrawBuffer& buf);
 
+  // Sleep screen showing the current (or last-read) book's cover.
+  // Returns false when there is no usable cover, so the caller can fall back.
+  bool show_cover_sleep_(DrawBuffer& buf);
+
   // Append a row to battery_log.csv for power-off drain diagnostics.
   // event is "BOOT" or "SLEEP". No-op if data_dir_ or runtime_ is unset.
   void log_battery_event_(const char* event);

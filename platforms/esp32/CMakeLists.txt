@@ -34,6 +34,7 @@ set(lib_sources
     ${LIB}/content/JpegDecoder.cpp
     ${LIB}/content/PngDecoder.cpp
     ${LIB}/content/BmpSleepConverter.cpp
+    ${LIB}/content/CoverSleep.cpp
     ${LIB}/firmware/FirmwareMeta.cpp
     ${LIB}/firmware/SdFirmwareFlasher.cpp
     ${LIB}/screens/FirmwareUpdateScreen.cpp)
