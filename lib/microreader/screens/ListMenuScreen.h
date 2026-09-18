@@ -110,6 +110,13 @@ class ListMenuScreen : public IScreen {
   virtual bool is_separator(int index) const {
     return index >= 0 && index < static_cast<int>(separators_.size()) && separators_[index];
   }
+
+  // Whether an empty-label separator should draw as a thin divider line
+  // (true) or as plain vertical spacing (false, the default). Only consulted
+  // when get_item_label(index) is empty — a separator with header text
+  // always draws its centered label regardless of this.
+  virtual bool separator_has_line(int index) const { return false; }
+
   virtual int count() const {
     return static_cast<int>(labels_.size());
   }
