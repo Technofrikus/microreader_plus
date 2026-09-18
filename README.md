@@ -6,6 +6,12 @@ Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended 
 
 | # | Change | Commit / PR |
 |---|--------|-------------|
+| 24 | Replaced the sleep-image cycle/back controls with a dedicated list screen supporting live full-screen preview | [b19b5c4](https://github.com/Technofrikus/microreader_plus/commit/b19b5c4) |
+| 23 | Improved sleep-image downscaling quality with box filtering instead of nearest-neighbor, keeping small cover text legible | [87e1a9d](https://github.com/Technofrikus/microreader_plus/commit/87e1a9d) |
+| 22 | Added a **Book Cover** sleep-image mode that shows the current book's cover as the sleep screen, built once per book and cached for instant loads | [a98140f](https://github.com/Technofrikus/microreader_plus/commit/a98140f) |
+| 21 | Show the current folder name in the "up one level" row while browsing library folders | [b8cea9d](https://github.com/Technofrikus/microreader_plus/commit/b8cea9d) |
+| 20 | Sped up EPUB conversion, font provisioning, sleep-image conversion, and book indexing with model-aware progress refresh cadence (X3 25% / X4 5%) | [8126ac6](https://github.com/Technofrikus/microreader_plus/commit/8126ac6), [4cda910](https://github.com/Technofrikus/microreader_plus/commit/4cda910) |
+| 19 | Added a bundled light-themed default sleep image for X3 and X4 | [83051e0](https://github.com/Technofrikus/microreader_plus/commit/83051e0) |
 | 18 | Added an **Estimated Time Read** option for a configurable reader status-bar slot | — |
 | 17 | Improved EPUB line breaking so punctuation-only runs remain with the preceding word | [bfdef4f](https://github.com/Technofrikus/microreader_plus/commit/bfdef4f) |
 | 16 | Added optional persistent SD-card diagnostic ring logs for boot, reader, input, display, and shutdown events | [513c284](https://github.com/Technofrikus/microreader_plus/commit/513c284) |
