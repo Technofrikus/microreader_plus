@@ -381,9 +381,27 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
     // NOTE: no format byte is written. The format is determined by the file
     // NAME (.1b.mgr = 1bpp, .mgr = 2bpp) so the user can see it directly.
 
-    // Do not keep both complete output planes in RAM. On the X3 each plane is
-    // 52,272 bytes, and two simultaneous heap allocations are too fragile on
-    // the fragmented ESP32-C3 heap. Write BW, then RED, in small blocks.
+    const size_t plane_bytes = (size_t)FINAL_STRIDE * final_out_h;
+
+    // Prefer the one-pass path. It reads every source row once and derives both
+    // panel planes at the same time. This is especially important for portrait
+    // BMPs: a rotated, tiled conversion must otherwise rescan the source once
+    // per tile and per plane, multiplying SD-card seeks by roughly 24–26x.
+    //
+    // The ESP32-C3 can occasionally lack two contiguous plane-sized blocks
+    // after heap fragmentation. Keep the bounded-memory streaming path below
+    // as a fallback for that case instead of making sleep image conversion
+    // fail.
+    uint8_t* bw_plane  = (uint8_t*)std::malloc(plane_bytes ? plane_bytes : 1);
+    uint8_t* red_plane = (uint8_t*)std::malloc(plane_bytes ? plane_bytes : 1);
+    const bool have_fast_buffers = bw_plane && red_plane;
+    if (!have_fast_buffers) {
+        std::free(bw_plane);
+        std::free(red_plane);
+        bw_plane = nullptr;
+        red_plane = nullptr;
+    }
+
     constexpr size_t kTileBytes = 4096;
     uint8_t tile[kTileBytes];
     bool ok = true;
@@ -391,7 +409,9 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
     const int rows_per_tile = std::max(1, (int)(kTileBytes / (size_t)FINAL_STRIDE));
     const int tiles_per_plane = (final_out_h + rows_per_tile - 1) / rows_per_tile;
     const int work_per_plane = portrait ? final_out_w * tiles_per_plane : final_out_h;
-    const int total_work = work_per_plane * 2;
+    const int total_work = have_fast_buffers
+        ? (portrait ? final_out_w : final_out_h)
+        : work_per_plane * 2;
     int completed_work = 0;
     // Callers choose a panel-appropriate cadence. Clamp invalid values so
     // this core converter remains safe for non-device callers as well.
@@ -406,6 +426,58 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
             next_progress += progress_step;
         }
     };
+
+    if (have_fast_buffers) {
+        std::memset(bw_plane, 0, plane_bytes);
+        std::memset(red_plane, 0, plane_bytes);
+        if (!portrait) {
+            for (int out_y = 0; out_y < final_out_h && ok; ++out_y) {
+                const int src_y = crop_y + out_y * crop_h / final_out_h;
+                const int src_file_y = top_down ? src_y : ((int)height - 1 - src_y);
+                const long row_pos = (long)data_offset + (long)src_file_y * src_stride;
+                if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
+                    std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) {
+                    ok = false;
+                    break;
+                }
+                for (int out_x = 0; out_x < final_out_w; ++out_x) {
+                    const int sx = crop_x + out_x * crop_w / final_out_w;
+                    const PlaneBits pb = quantize_planes(
+                        decode_pixel(row_buf, sx, bpp, palette, is_rgb565), out_x, out_y);
+                    const size_t offset = (size_t)out_y * FINAL_STRIDE + out_x / 8;
+                    const uint8_t bit = (uint8_t)(0x80 >> (out_x & 7));
+                    if (pb.bw) bw_plane[offset] |= bit;
+                    if (pb.red) red_plane[offset] |= bit;
+                }
+                ++completed_work;
+                report_progress();
+            }
+        } else {
+            for (int out_x = 0; out_x < final_out_w && ok; ++out_x) {
+                const int src_y = crop_y + out_x * crop_h / final_out_w;
+                const int src_file_y = top_down ? src_y : ((int)height - 1 - src_y);
+                const long row_pos = (long)data_offset + (long)src_file_y * src_stride;
+                if (std::fseek(f, row_pos, SEEK_SET) != 0 ||
+                    std::fread(row_buf, 1, (size_t)src_stride, f) != (size_t)src_stride) {
+                    ok = false;
+                    break;
+                }
+                for (int out_y = 0; out_y < final_out_h; ++out_y) {
+                    const int sx = crop_x + (crop_w - 1 - out_y * crop_w / final_out_h);
+                    const PlaneBits pb = quantize_planes(
+                        decode_pixel(row_buf, sx, bpp, palette, is_rgb565), out_x, out_y);
+                    const size_t offset = (size_t)out_y * FINAL_STRIDE + out_x / 8;
+                    const uint8_t bit = (uint8_t)(0x80 >> (out_x & 7));
+                    if (pb.bw) bw_plane[offset] |= bit;
+                    if (pb.red) red_plane[offset] |= bit;
+                }
+                ++completed_work;
+                report_progress();
+            }
+        }
+        if (ok && std::fwrite(bw_plane, 1, plane_bytes, out) != plane_bytes) ok = false;
+        if (ok && std::fwrite(red_plane, 1, plane_bytes, out) != plane_bytes) ok = false;
+    }
 
     auto write_plane = [&](bool red) {
         if (!portrait) {
@@ -472,10 +544,14 @@ bool convert_bmp_to_mgr2_1bit(const char* bmp_path, const char* mgr_out_path,
         }
     };
 
-    write_plane(/*red=*/false);
-    if (ok)
-        write_plane(/*red=*/true);
+    if (!have_fast_buffers) {
+        write_plane(/*red=*/false);
+        if (ok)
+            write_plane(/*red=*/true);
+    }
 
+    std::free(bw_plane);
+    std::free(red_plane);
     std::free(row_buf);
     std::fclose(f);
     std::fclose(out);
