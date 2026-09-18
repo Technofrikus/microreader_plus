@@ -7,8 +7,11 @@
 #include <fstream>
 #include <string>
 
+#include "ScreenshotDisplay.h"
+#include "TestBooks.h"
 #include "microreader/Application.h"
 #include "microreader/content/BookIndex.h"
+#include "microreader/display/DrawBuffer.h"
 #include "microreader/screens/MainMenu.h"
 
 namespace fs = std::filesystem;
@@ -288,6 +291,58 @@ TEST_F(FolderBrowsingTest, MainMenu_ReturnFromFolder_StaysInFolder) {
   EXPECT_STREQ(menu.current_dir(), (root_dir_ / "Fiction").string().c_str());
   EXPECT_EQ(menu.count(), 2);
   EXPECT_EQ(menu.selected_index(), 1);
+
+  BookIndex::instance().clear_entries();
+}
+
+// Regression test: a book copied straight onto the SD card (not via the
+// serial upload pipeline, e.g. dropped into a folder with a card reader)
+// has no BookIndex entry yet. Application::record_book_opened() must index
+// it on the fly, or set_last_opened() silently no-ops and the book can
+// never appear in the Recent section no matter how many times it's opened.
+TEST_F(FolderBrowsingTest, RecordBookOpened_IndexesPreviouslyUnindexedBook) {
+  std::string smoke = test_books::get_smoke_books().empty() ? std::string{} : test_books::get_smoke_books().front();
+  if (smoke.empty()) GTEST_SKIP() << "No test EPUB available";
+
+  fs::path book_path = root_dir_ / "unindexed.epub";
+  fs::copy_file(smoke, book_path);
+
+  BookIndex::instance().clear_entries();
+  ASSERT_EQ(BookIndex::instance().find_entry(book_path.string()), nullptr);
+
+  Application app;
+  app.set_data_dir(data_dir_str_.c_str());
+
+  ScreenshotDisplay display;
+  DrawBuffer buf(display, DeviceConfig::x4());
+
+  // This mirrors what MainMenu::on_select() now does: index-then-record.
+  app.record_book_opened(book_path.string(), &buf);
+
+  const BookIndexEntry* entry = BookIndex::instance().find_entry(book_path.string());
+  ASSERT_NE(entry, nullptr);
+  EXPECT_GT(entry->last_open_order, 0u);
+  std::string title = entry->title.to_string(BookIndex::instance().pool());
+  EXPECT_FALSE(title.empty());
+
+  // Persisted to disk, not just held in memory.
+  BookIndex::instance().clear_entries();
+  std::string index_path = (data_dir_ / "book_index.dat").string();
+  ASSERT_TRUE(BookIndex::instance().load(index_path));
+  entry = BookIndex::instance().find_entry(book_path.string());
+  ASSERT_NE(entry, nullptr);
+  EXPECT_GT(entry->last_open_order, 0u);
+
+  // ...and it now shows up in the root Recent section.
+  MainMenu menu;
+  menu.set_app(&app);
+  menu.set_books_dir(root_dir_.string().c_str());
+  menu.set_align_left(true);
+  menu.set_initial_selection(book_path.string().c_str());
+  menu.test_on_start();
+
+  ASSERT_GT(menu.count(), 0);
+  EXPECT_EQ(menu.get_item_label(0), title);
 
   BookIndex::instance().clear_entries();
 }

@@ -561,11 +561,20 @@ void microreader::Application::save_settings_() {
 
   std::fclose(f);
 }
-void microreader::Application::record_book_opened(const std::string& path) {
-  BookIndex::instance().set_last_opened(path, ++open_counter_);
+void microreader::Application::record_book_opened(const std::string& path, DrawBuffer* buf) {
   if (data_dir_) {
     std::string index_path = std::string(data_dir_) + "/book_index.dat";
+    // Books copied straight onto the SD card (outside the serial upload
+    // pipeline) never go through index_file(), so they have no BookIndex
+    // entry yet. set_last_opened() below only updates an existing entry, so
+    // index it now — otherwise the open is silently dropped and the book can
+    // never appear in the Recent section.
+    if (buf && !BookIndex::instance().find_entry(path))
+      BookIndex::instance().index_file(path, index_path, *buf);
+    BookIndex::instance().set_last_opened(path, ++open_counter_);
     BookIndex::instance().save(index_path);
+  } else {
+    BookIndex::instance().set_last_opened(path, ++open_counter_);
   }
   save_settings_();
 }

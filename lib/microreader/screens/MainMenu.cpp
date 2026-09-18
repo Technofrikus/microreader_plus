@@ -154,7 +154,7 @@ void MainMenu::on_select(int index) {
     // should restore the cursor to recents on return, not navigate into its
     // parent folder.
     opened_from_recents_ = real < recent_count_;
-    app_->record_book_opened(e.path);
+    app_->record_book_opened(e.path, buf_);
     app_->reader()->set_path(e.path.c_str());
     app_->push_screen(ScreenId::Reader);
   }

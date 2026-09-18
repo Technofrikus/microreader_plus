@@ -237,8 +237,12 @@ class Application {
   }
 
   // Called by MainMenu when the user opens a book: updates the open-order
-  // counter in the index and persists both the index and settings.
-  void record_book_opened(const std::string& path);
+  // counter in the index and persists both the index and settings. `buf`
+  // (when available) is used to index the book on the fly (extracting
+  // title/author) if it was added to the SD card outside the upload
+  // pipeline and isn't in the index yet — otherwise set_last_opened() would
+  // silently no-op and the book could never appear in the Recent section.
+  void record_book_opened(const std::string& path, DrawBuffer* buf = nullptr);
 
   // Navigate to a screen: push on top of the current screen (current stays on stack).
   // Or replace the current screen (pop it first, then push the new one).
