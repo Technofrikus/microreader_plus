@@ -99,6 +99,9 @@ static std::string get_font_label(const std::string& font_path) {
 void SettingsScreen::on_start() {
   title_ = "Settings";
   subtitle_ = MICROREADER_VERSION;
+#if MICROREADER_DIRTY
+  subtitle_ += "-dirty";
+#endif
 
   sd_fonts_.clear();
   sd_fonts_.push_back("Cartisse");

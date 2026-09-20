@@ -32,18 +32,12 @@ pio run -e esp32c3-release
 The GitHub Release workflow must also pass these flags when building the
 firmware.
 
-### 3. (Optional) Bump the version
+### 3. Tag and push
 
-Edit `version.txt` if you want a new base version (otherwise it keeps the current value):
-
-```bash
-echo "2.1.0" > version.txt
-git add version.txt
-git commit -m "bump version to 2.1.0"
-git push
-```
-
-### 4. Tag and push
+The tag **is** the version. There is no version file to bump: `tools/generate_version.py`
+takes the base version from the latest `v*` tag and appends the commit count as the
+build number. The Settings screen shows `<tag without v>.<build>` (e.g. `2.1.0.512`),
+with `-dirty` appended if the firmware was built from uncommitted changes.
 
 ```bash
 git tag v2.1.0
@@ -51,12 +45,14 @@ git push origin v2.1.0
 ```
 
 The tag **must start with `v`** — that's what triggers the `Release` workflow.
+Commits made after a release keep showing the old tag as base version
+(`2.1.0.513`, …) until the next tag is created.
 
-### 5. Watch it run
+### 4. Watch it run
 
 Go to **Actions** tab → look for the `Release` workflow. It takes ~3–4 minutes.
 
-### 6. Find the release
+### 5. Find the release
 
 Go to **Releases** page (right sidebar on the repo home, or `https://github.com/yourname/microreader-plus/releases`).
 

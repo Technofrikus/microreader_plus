@@ -57,9 +57,7 @@ lib/microreader/version.h
 /resources/fonts/bookerly
 /resources/images
 /resources/sd fonts/ttf
-/version.txt
 /firmware.bin
-/version.txt
 /sd/.sleep
 /test/build_verify
-lib/microreader/version.h
+/sdkconfig.esp32c3-*
