@@ -627,6 +627,7 @@ void SettingsScreen::start_convert_() {
   convert_dsts_.clear();
   convert_idx_ = 0;
   convert_ok_ = 0;
+  convert_last_bucket_ = -1;
 
   const char* sleep_dir;
 #ifdef ESP_PLATFORM
@@ -723,12 +724,20 @@ void SettingsScreen::tick_convert_(const ButtonState& buttons) {
     return;
   }
 
-  // Show loading box BEFORE the conversion so it appears immediately
-  int pct = (convert_idx_ * 100) / static_cast<int>(convert_srcs_.size());
-  buf_->show_loading("Converting sleep images...", pct);
+  // Show loading box BEFORE the conversion so it appears immediately. Redraw
+  // only when progress crosses a step boundary, so the number of panel
+  // refreshes per run is fixed however many images there are. X3 partial
+  // refreshes block on the panel, so they get a coarser step.
+  const DeviceConfig& cfg = buf_->config();
+  const int step = cfg.model == DeviceModel::X3 ? 25 : 5;
+  const int pct = (convert_idx_ * 100) / static_cast<int>(convert_srcs_.size());
+  const int bucket = pct / step;
+  if (bucket > convert_last_bucket_) {
+    convert_last_bucket_ = bucket;
+    buf_->show_loading("Converting sleep images...", bucket * step);
+  }
 
   // Convert one image per tick
-  const DeviceConfig& cfg = buf_->config();
   if (convert_bmp_to_mgr2_1bit(convert_srcs_[convert_idx_].c_str(),
                            convert_dsts_[convert_idx_].c_str(),
                            cfg.physical_width, cfg.physical_height))

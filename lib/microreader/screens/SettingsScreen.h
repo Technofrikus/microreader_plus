@@ -93,6 +93,7 @@ class SettingsScreen final : public ListMenuScreen {
   std::vector<std::string> convert_dsts_;
   int convert_idx_ = 0;
   int convert_ok_ = 0;
+  int convert_last_bucket_ = -1;  // last progress step drawn; see tick_convert_()
 
   void start_convert_();
   void tick_convert_(const ButtonState& buttons);
