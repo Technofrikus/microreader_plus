@@ -95,7 +95,7 @@ static volatile bool g_font_uploaded = false;
 // and the main loop dequeues before processing (so the slot is free quickly).
 // If a second op arrives while the slot is still occupied, it is dropped with
 // a warning — the file on SD is unchanged, only the index entry is missed;
-// recoverable via "Rebuild Book Index" in Settings.
+// recoverable via "(Re)Build Book Index" in Settings.
 //
 // Memory ordering: producer writes path_a/path_b THEN sets g_index_op (commit).
 // Consumer reads g_index_op, copies paths to locals, THEN clears g_index_op.

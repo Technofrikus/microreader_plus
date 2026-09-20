@@ -63,6 +63,18 @@ class Application {
     settings_.set_data_dir(dir);
   }
 
+  // The input source the main loop polls. Set by run_loop_iteration() so a
+  // screen doing long blocking work can check for a button press mid-way
+  // instead of only between ticks.
+  void set_input_source(IInputSource* input) {
+    input_ = input;
+  }
+  // Presses accumulated since the last poll (which this consumes). Empty when
+  // no input source has been set.
+  ButtonState poll_input() {
+    return input_ ? input_->poll_buttons() : ButtonState{};
+  }
+
   // Path to data directory for settings/state persistence
   const char* data_dir_ = nullptr;
 
@@ -312,6 +324,7 @@ class Application {
   bool started_ = false;
   bool running_ = true;
 
+  IInputSource* input_ = nullptr;
   IRuntime* runtime_ = nullptr;       // cached in start() for log_battery_event_()
   uint32_t boot_count_ = 0;           // incremented each boot, persisted to dedicated file
 

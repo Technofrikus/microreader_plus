@@ -2,12 +2,16 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "../Application.h"
 #include "../content/BmpSleepConverter.h"
 #include "../content/CoverSleep.h"
+#include "../content/Book.h"
 #include "../content/BookIndex.h"
+#include "../content/mrb/MrbConverter.h"
+#include "../content/mrb/MrbReader.h"
 #include "../display/DeviceConfig.h"
 #include "../version.h"
 
@@ -183,10 +187,13 @@ void SettingsScreen::on_start() {
     add_item("Clear Cache");
 
     idx_rebuild_index_ = count();
-    add_item("Rebuild Book Index");
+    add_item("(Re)Build Book Index");
+
+    idx_convert_books_ = count();
+    add_item("Convert All Books");
 
     idx_convert_sleep_ = count();
-    add_item("Rebuild Sleep Images");
+    add_item("Convert Sleep Images");
   }
 
 #ifdef ESP_PLATFORM
@@ -267,6 +274,10 @@ void SettingsScreen::on_select(int index) {
       buf_->reset_after_scratch(true);
       app_->pop_screen();  // go back to main menu
     }
+    return;
+  }
+  if (index == idx_convert_books_) {
+    start_convert_books_();
     return;
   }
   if (index == idx_convert_sleep_) {
@@ -734,6 +745,190 @@ void SettingsScreen::tick_convert_(const ButtonState& buttons) {
     std::snprintf(label_buf, sizeof(label_buf), "Converted %d image(s)", convert_ok_);
     set_item_label(idx_convert_sleep_, label_buf);
     restart();
+  }
+}
+
+void SettingsScreen::show_toast_(int item_idx, const char* text) {
+  toast_original_label_ = get_item_label(item_idx);
+  toast_idx_ = item_idx;
+  toast_frames_ = 15;
+  set_item_label(item_idx, text);
+}
+
+static bool file_exists(const std::string& path) {
+  if (std::FILE* f = std::fopen(path.c_str(), "rb")) {
+    std::fclose(f);
+    return true;
+  }
+  return false;
+}
+
+void SettingsScreen::start_convert_books_() {
+  convert_books_idx_ = 0;
+  convert_books_ok_ = 0;
+  convert_books_failed_ = 0;
+  convert_books_last_bucket_ = -1;
+  convert_books_cancelled_ = false;
+  convert_books_pos_ = 0;
+  convert_books_index_path_ = std::string(data_dir_) + "/book_index.dat";
+  convert_books_total_ = BookIndex::count_paths(convert_books_index_path_);
+  if (convert_books_total_ == 0) {
+    show_toast_(idx_convert_books_, "No books found");
+    restart();
+    return;
+  }
+
+  // Give the controller a valid reference frame before the conversion takes
+  // over the framebuffers as scratch space.
+  buf_->sync_bw_ram();
+  // Converting a book needs large contiguous heap blocks (a stylesheet is
+  // extracted whole); on an X3 the driver's full-frame upload buffer sits in
+  // the middle of the heap and takes ~52KB of exactly that. It is reallocated
+  // on the next full-frame upload, once the run is over.
+  buf_->release_display_memory();
+  convert_phase_ = ConvertPhase::Books;
+}
+
+void SettingsScreen::finish_convert_books_(const char* summary) {
+  convert_phase_ = ConvertPhase::Idle;
+  // Conversion (and the cover build) used both framebuffers as scratch.
+  buf_->reset_after_scratch(true);
+  show_toast_(idx_convert_books_, summary);
+  restart();
+}
+
+bool SettingsScreen::poll_cancel_convert_books_() {
+  if (!convert_books_cancelled_ && app_ && app_->poll_input().is_pressed(Button::Button0))
+    convert_books_cancelled_ = true;
+  return convert_books_cancelled_;
+}
+
+void SettingsScreen::report_convert_books_(int overall_pct) {
+  // X3 partial refreshes block on the panel, so they get a coarser step.
+  const int step = buf_->config().model == DeviceModel::X3 ? 10 : 5;
+  const int bucket = overall_pct / step;
+  if (bucket <= convert_books_last_bucket_)
+    return;
+  convert_books_last_bucket_ = bucket;
+  buf_->show_loading("Converting all books...", bucket * step);
+}
+
+SettingsScreen::BookResult SettingsScreen::convert_one_book_(const std::string& path, const std::string& cache_dir,
+                                                             const std::string& mrb_path,
+                                                             const std::string& cover_path, bool need_mrb,
+                                                             bool need_cover,
+                                                             const std::function<void(int, int)>& progress) {
+#ifdef ESP_PLATFORM
+  mkdir(cache_dir.c_str(), 0775);
+#else
+  std::filesystem::create_directories(cache_dir);
+#endif
+
+  bool mrb_ok = !need_mrb;
+  uint32_t cover_offset = 0;
+  {
+    // Heap rather than stack: Book holds the whole parsed EPUB structure.
+    auto book = std::make_unique<Book>();
+    if (book->open(path.c_str(), buf_->scratch_buf1(), buf_->scratch_buf2()) == EpubError::Ok &&
+        book->chapter_count() > 0) {
+      if (need_mrb)
+        mrb_ok = convert_epub_to_mrb_streaming(*book, mrb_path.c_str(), buf_->scratch_buf1(), buf_->scratch_buf2(),
+                                               progress, [this] { return poll_cancel_convert_books_(); });
+      // The declared cover is only readable while the book is open.
+      const int cover_entry = book->epub().cover_entry_index();
+      if (mrb_ok && cover_entry >= 0 && static_cast<size_t>(cover_entry) < book->epub().zip().entry_count())
+        cover_offset = book->epub().zip().entry(static_cast<size_t>(cover_entry)).local_header_offset;
+    }
+  }
+
+  if (!mrb_ok) {
+    std::remove(mrb_path.c_str());  // don't leave a half-written MRB behind
+    return convert_books_cancelled_ ? BookResult::NothingToDo : BookResult::Failed;
+  }
+
+  // Unlike ReaderScreen, build the cover whatever the sleep-image setting is:
+  // the point of a batch run is that nothing is left to do later. Failure is
+  // non-fatal — the book itself is already converted.
+  bool cover_built = false;
+  if (need_cover && !poll_cancel_convert_books_()) {
+    // Books that declare no cover fall back to the first image in document order.
+    if (cover_offset == 0)
+      cover_offset_from_mrb(mrb_path.c_str(), cover_offset);
+    if (cover_offset != 0)
+      cover_built = build_cover_cache(path.c_str(), cover_offset, cover_path.c_str(), *buf_);
+  }
+  return (need_mrb || cover_built) ? BookResult::Converted : BookResult::NothingToDo;
+}
+
+void SettingsScreen::tick_convert_books_(const ButtonState& buttons) {
+  char label_buf[48];
+
+  if (buttons.is_pressed(Button::Button0) || convert_books_cancelled_) {
+    std::snprintf(label_buf, sizeof(label_buf), "Cancelled (%d done)", convert_books_ok_);
+    finish_convert_books_(label_buf);
+    return;
+  }
+
+  const int total = convert_books_total_;
+
+  // Skip books that already have both a valid MRB and a cover cache. Opening an
+  // MRB only reads its header and chapter table, so this is cheap enough to do
+  // in a tight loop without touching the display.
+  std::string path, cache_dir, mrb_path, cover_path;
+  bool need_mrb = false, need_cover = false;
+  int book_idx = 0;
+  while (convert_books_idx_ < total) {
+    if (!BookIndex::read_path(convert_books_index_path_, convert_books_pos_, path)) {
+      convert_books_idx_ = total;  // index ended early; nothing more to do
+      break;
+    }
+    book_idx = convert_books_idx_++;
+    cache_dir = book_cache_dir_for(data_dir_, path.c_str());
+    mrb_path = cache_dir + "/book.mrb";
+    cover_path = cover_cache_path(cache_dir, buf_->config().panel_width, buf_->config().physical_height);
+    {
+      MrbReader probe;
+      need_mrb = !probe.open(mrb_path.c_str());
+    }
+    need_cover = !file_exists(cover_path);
+    if (need_mrb || need_cover)
+      break;
+  }
+
+  if (!(need_mrb || need_cover)) {
+    if (convert_books_failed_ > 0)
+      std::snprintf(label_buf, sizeof(label_buf), "Converted %d, %d failed", convert_books_ok_, convert_books_failed_);
+    else if (convert_books_ok_ > 0)
+      std::snprintf(label_buf, sizeof(label_buf), "Converted %d book(s)", convert_books_ok_);
+    else
+      std::snprintf(label_buf, sizeof(label_buf), "All books converted");
+    finish_convert_books_(label_buf);
+    return;
+  }
+
+  // One bar for the whole run: finished books plus this book's chapter progress.
+  report_convert_books_(book_idx * 100 / total);
+  const auto progress = [this, book_idx, total](int done, int chapters) {
+    const int book_pct = chapters > 0 ? done * 100 / chapters : 0;
+    report_convert_books_((book_idx * 100 + book_pct) / total);
+  };
+
+  switch (convert_one_book_(path, cache_dir, mrb_path, cover_path, need_mrb, need_cover, progress)) {
+    case BookResult::Converted:
+      ++convert_books_ok_;
+      break;
+    case BookResult::Failed:
+      ++convert_books_failed_;
+      break;
+    case BookResult::NothingToDo:
+      break;
+  }
+
+  // Back was pressed during the conversion: stop now rather than on the next
+  // tick, so the loading bar doesn't sit there looking like the press was lost.
+  if (convert_books_cancelled_) {
+    std::snprintf(label_buf, sizeof(label_buf), "Cancelled (%d done)", convert_books_ok_);
+    finish_convert_books_(label_buf);
   }
 }
 

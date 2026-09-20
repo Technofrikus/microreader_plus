@@ -3,6 +3,7 @@
 namespace microreader {
 
 void run_loop_iteration(Application& app, DrawBuffer& buf, IInputSource& input, IRuntime& runtime) {
+  app.set_input_source(&input);
   const ButtonState buttons = input.poll_buttons();
   if (runtime.step_mode() && !runtime.consume_step()) {
     runtime.wait_next_frame();

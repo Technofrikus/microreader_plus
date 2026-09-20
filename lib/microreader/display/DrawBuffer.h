@@ -63,6 +63,13 @@ class IDisplay {
 
   virtual void deep_sleep() {}
 
+  // Give back any heap the driver keeps for speeding up full-plane uploads
+  // (the X3 holds a ~52KB mirror buffer once it has drawn a full frame). It is
+  // re-created on demand, so callers use this to buy headroom for a stretch of
+  // memory-hungry work — e.g. EPUB conversion, which needs large contiguous
+  // blocks. Default: nothing to release.
+  virtual void release_scratch_memory() {}
+
   virtual void set_rotation(Rotation r) {
     (void)r;
   }
@@ -379,6 +386,10 @@ class DrawBuffer {
   void sync_bw_ram() {
     if (active_valid_)
       display_.write_ram_bw(active_());
+  }
+
+  void release_display_memory() {
+    display_.release_scratch_memory();
   }
 
   void show_grayscale_image(const uint8_t* lsb, const uint8_t* msb, uint16_t w, uint16_t h) {

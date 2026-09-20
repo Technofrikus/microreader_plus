@@ -620,6 +620,13 @@ class EInkDisplay : public microreader::IDisplay {
     refreshDisplay(EPD_FAST_REFRESH);
   }
 
+  void release_scratch_memory() override {
+    if (x3_mirror_buf_) {
+      heap_caps_free(x3_mirror_buf_);
+      x3_mirror_buf_ = nullptr;
+    }
+  }
+
   void write_ram_bw(const uint8_t* data) override {
     wakeIfNeeded();
     waitWhileBusy();

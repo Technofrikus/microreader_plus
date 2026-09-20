@@ -93,6 +93,46 @@ bool BookIndex::load(const std::string& index_file) {
   return true;
 }
 
+// Path of one index line ("path|title|author[|order]"). False when the line is
+// malformed, i.e. has fewer than two separators — the same test load() applies.
+static bool index_line_path(const char* line, std::string& path) {
+  const char* sep1 = std::strchr(line, '|');
+  if (!sep1 || !std::strchr(sep1 + 1, '|'))
+    return false;
+  path.assign(line, static_cast<size_t>(sep1 - line));
+  return true;
+}
+
+int BookIndex::count_paths(const std::string& index_file) {
+  FILE* f = std::fopen(index_file.c_str(), "rb");
+  if (!f)
+    return 0;
+  int n = 0;
+  std::string path;
+  char line[1024];
+  while (n < MAX_BOOKS && std::fgets(line, sizeof(line), f)) {
+    if (index_line_path(line, path))
+      ++n;
+  }
+  std::fclose(f);
+  return n;
+}
+
+bool BookIndex::read_path(const std::string& index_file, long& offset, std::string& path) {
+  FILE* f = std::fopen(index_file.c_str(), "rb");
+  if (!f)
+    return false;
+  bool found = false;
+  if (std::fseek(f, offset, SEEK_SET) == 0) {
+    char line[1024];
+    while (!found && std::fgets(line, sizeof(line), f))
+      found = index_line_path(line, path);
+    offset = std::ftell(f);
+  }
+  std::fclose(f);
+  return found;
+}
+
 bool BookIndex::save(const std::string& index_file) const {
   FILE* f = std::fopen(index_file.c_str(), "wb");
   if (!f)

@@ -6,6 +6,7 @@ Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended 
 
 | # | Change | Commit / PR |
 |---|--------|-------------|
+| 21 | Added a **Convert All Books** menu entry that converts every book in the library (text and sleep-screen cover) in one run, with a single overall progress bar and cancel | — |
 | 20 | List of available sleep images with preview function | [b19b5c4](https://github.com/Technofrikus/microreader_plus/commit/b19b5c4) |
 | 19 | Added a **Book Cover** sleep-image mode that shows the current book's cover as the sleep screen, built once per book and cached for instant loads | [a98140f](https://github.com/Technofrikus/microreader_plus/commit/a98140f) |
 | 18 | Added an **Estimated Time Read** option for a configurable reader status-bar slot | — |
@@ -22,7 +23,7 @@ Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended 
 | 6 | Added folder-based book organization with long-press UP to navigate folders | [b9cdbcc](https://github.com/CidVonHighwind/microreader-plus/commit/b9cdbcc) |
 | 5 | Added **ETA estimation in the reader screen** (chapter and book), including adaptive reading-speed estimation | [2505b52](https://github.com/CidVonHighwind/microreader-plus/commit/2505b52) |
 | 4 | Added device-native resolution with cover-fit (scale + crop) for sleep BMPs | [6590639](https://github.com/CidVonHighwind/microreader-plus/commit/6590639) |
-| 3 | Added 'Rebuild Sleep Images' menu entry with progress bar and cancel (sleep images are converted all at once, making shutdown faster) | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
+| 3 | Added 'Convert Sleep Images' menu entry with progress bar and cancel (sleep images are converted all at once, making shutdown faster) | [c180d13](https://github.com/CidVonHighwind/microreader-plus/commit/c180d13) |
 | 2 | Added 2bpp bitmap support (for the awesome images from the lector wallpaper gallery) | [7129706](https://github.com/CidVonHighwind/microreader-plus/commit/7129706) |
 | 1 | Removed the "sleeping..." text drawn on the sleep screen in `DrawBuffer::show_mgr2_sleep_()` | — |
 

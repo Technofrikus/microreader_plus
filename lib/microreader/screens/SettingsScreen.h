@@ -1,5 +1,9 @@
 #pragma once
 
+#include <functional>
+#include <string>
+#include <vector>
+
 #include "../Input.h"
 #include "../display/DrawBuffer.h"
 #include "ListMenuScreen.h"
@@ -33,6 +37,10 @@ class SettingsScreen final : public ListMenuScreen {
       tick_convert_(buttons);
       return;
     }
+    if (convert_phase_ == ConvertPhase::Books) {
+      tick_convert_books_(buttons);
+      return;
+    }
     ListMenuScreen::update(buttons, buf, runtime);
   }
 
@@ -64,6 +72,7 @@ class SettingsScreen final : public ListMenuScreen {
   int idx_font_ = -1;
   int idx_sleep_image_ = -1;
   int idx_convert_sleep_ = -1;
+  int idx_convert_books_ = -1;
   int idx_sd_firmware_ = -1;
   DrawBuffer* buf_ = nullptr;
   std::vector<std::string> sd_fonts_;
@@ -77,8 +86,8 @@ class SettingsScreen final : public ListMenuScreen {
   void switch_ota_partition_();
 #endif
 
-  // Batch BMP→MGR2 conversion state
-  enum class ConvertPhase { Idle, Active };
+  // Batch conversion state. Active = BMP→MGR2 sleep images, Books = EPUB→MRB.
+  enum class ConvertPhase { Idle, Active, Books };
   ConvertPhase convert_phase_ = ConvertPhase::Idle;
   std::vector<std::string> convert_srcs_;
   std::vector<std::string> convert_dsts_;
@@ -87,6 +96,38 @@ class SettingsScreen final : public ListMenuScreen {
 
   void start_convert_();
   void tick_convert_(const ButtonState& buttons);
+
+  // Batch conversion of every book in the index: EPUB→MRB, plus the sleep-screen
+  // cover cache. The index is streamed from book_index.dat one path at a time
+  // and never loaded: it costs tens of KB of heap, and converting a book needs
+  // large contiguous blocks (CSS, decompression) that the reader only has
+  // because MainMenu::stop() frees the index first.
+  int convert_books_idx_ = 0;    // books consumed from the index so far
+  int convert_books_total_ = 0;  // books in the index
+  long convert_books_pos_ = 0;   // byte offset of the next index line
+  std::string convert_books_index_path_;
+  int convert_books_ok_ = 0;
+  int convert_books_failed_ = 0;
+  int convert_books_last_bucket_ = -1;  // last progress step drawn; see report_convert_books_()
+  bool convert_books_cancelled_ = false;
+
+  enum class BookResult { Failed, Converted, NothingToDo };
+
+  void start_convert_books_();
+  void tick_convert_books_(const ButtonState& buttons);
+  void finish_convert_books_(const char* summary);
+  // True once Back has been pressed. Polls the input source directly, so it
+  // can be called from inside a conversion that is blocking the main loop.
+  bool poll_cancel_convert_books_();
+  // Redraw the bar only when overall progress crosses a step boundary, so the
+  // number of panel refreshes per run is fixed no matter how many books or
+  // chapters there are.
+  void report_convert_books_(int overall_pct);
+  // Do whichever of the MRB / cover cache the book is missing.
+  BookResult convert_one_book_(const std::string& path, const std::string& cache_dir, const std::string& mrb_path,
+                               const std::string& cover_path, bool need_mrb, bool need_cover,
+                               const std::function<void(int done, int total)>& progress);
+  void show_toast_(int item_idx, const char* text);
 };
 
 }  // namespace microreader

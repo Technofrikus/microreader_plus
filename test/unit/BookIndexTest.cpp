@@ -462,3 +462,48 @@ TEST_F(BookIndexTest, ConcurrentOps_SequenceConsistent) {
   EXPECT_EQ(find_by_path("/sdcard/books/seed1.epub"), nullptr);
   EXPECT_EQ(find_by_path("/sdcard/books/seed2.epub"), nullptr);
 }
+
+// ---------------------------------------------------------------------------
+// Streaming reads (count_paths / read_path): walk the index without loading it,
+// so batch conversion doesn't hold tens of KB of index in RAM.
+// ---------------------------------------------------------------------------
+
+TEST_F(BookIndexTest, StreamingReadMatchesLoad) {
+  write_file(index_path_,
+             "/sdcard/books/a.epub|A|Au|3\n"
+             "garbage line without separators\n"
+             "/sdcard/books/sub/b b.epub|B|Bu\r\n"
+             "/sdcard/books/one|separator.epub\n"  // one '|' only: malformed
+             "/sdcard/books/c.epub|C||0\n");
+
+  EXPECT_EQ(BookIndex::count_paths(index_path_), 3);
+
+  std::vector<std::string> streamed;
+  long offset = 0;
+  std::string path;
+  while (BookIndex::read_path(index_path_, offset, path))
+    streamed.push_back(path);
+
+  ASSERT_TRUE(BookIndex::instance().load(index_path_));
+  const auto& entries = BookIndex::instance().entries();
+  ASSERT_EQ(streamed.size(), entries.size());
+  for (size_t i = 0; i < streamed.size(); ++i)
+    EXPECT_EQ(streamed[i], entries[i].path.to_string(BookIndex::instance().pool()));
+}
+
+TEST_F(BookIndexTest, StreamingReadMissingFile) {
+  const std::string missing = (temp_dir_ / "no_such.dat").string();
+  EXPECT_EQ(BookIndex::count_paths(missing), 0);
+  long offset = 0;
+  std::string path;
+  EXPECT_FALSE(BookIndex::read_path(missing, offset, path));
+}
+
+TEST_F(BookIndexTest, StreamingReadDoesNotLoadIndex) {
+  write_file(index_path_, "/sdcard/books/a.epub|A|Au|0\n");
+  BookIndex::instance().clear_entries();
+  long offset = 0;
+  std::string path;
+  ASSERT_TRUE(BookIndex::read_path(index_path_, offset, path));
+  EXPECT_TRUE(BookIndex::instance().entries().empty());
+}

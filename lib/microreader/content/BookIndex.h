@@ -28,6 +28,18 @@ class BookIndex {
   static bool is_book_path(const char* path);
 
   bool load(const std::string& index_file);
+
+  // Walk the paths of an index file without loading it. The loaded index costs
+  // tens of KB of heap (path + title + author for up to MAX_BOOKS books), which
+  // callers doing memory-hungry work over the whole library cannot spare.
+  // Same skipping rules as load(): malformed lines are ignored, and at most
+  // MAX_BOOKS entries count.
+  //
+  // count_paths(): how many entries load() would keep.
+  // read_path(): the entry at byte `offset` into `path`; advances `offset` past
+  // it (start at 0). Returns false at the end of the file.
+  static int count_paths(const std::string& index_file);
+  static bool read_path(const std::string& index_file, long& offset, std::string& path);
   bool save(const std::string& index_file) const;
 
   // Recursively scan root_dir for EPUBs and rebuild the index.
