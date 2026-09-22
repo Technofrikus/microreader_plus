@@ -21,6 +21,7 @@
 #include "screens/ReaderScreen.h"
 #include "screens/SettingsScreen.h"
 #include "screens/SleepImageScreen.h"
+#include "screens/BluetoothScreen.h"
 #include "screens/demo/BouncingBallDemo.h"
 #include "screens/demo/GrayscaleDemo.h"
 
@@ -45,6 +46,7 @@ enum class ScreenId : uint8_t {
   DeleteConfirm,
   FirmwareUpdate,
   SleepImage,
+  Bluetooth,
   BouncingBall,
   GrayscaleDemo,
 };
@@ -181,6 +183,14 @@ class Application {
   }
   SleepImageScreen* sleep_image_screen() {
     return &sleep_image_screen_;
+  }
+
+  // Bluetooth HID remote; nullptr on platforms without one.
+  void set_bluetooth(IBluetooth* bt) {
+    bluetooth_ = bt;
+  }
+  IBluetooth* bluetooth() const {
+    return bluetooth_;
   }
 
   ControlMode reader_controls() const {
@@ -352,6 +362,8 @@ class Application {
   LinksScreen links_screen_;
   DeleteConfirmScreen delete_confirm_;
   SleepImageScreen sleep_image_screen_;
+  BluetoothScreen bluetooth_screen_;
+  IBluetooth* bluetooth_ = nullptr;
 #ifdef ESP_PLATFORM
   FirmwareUpdateScreen firmware_update_;
 #endif

@@ -85,6 +85,14 @@ static std::string get_sleep_image_label(const std::string& path) {
   return label;
 }
 
+static std::string get_bluetooth_label(const IBluetooth& bt) {
+  if (!bt.enabled())
+    return "Bluetooth: Off";
+  if (bt.state() == IBluetooth::State::Connected)
+    return std::string("Bluetooth: ") + bt.remote_name();
+  return "Bluetooth: On";
+}
+
 static std::string get_font_label(const std::string& font_path) {
   std::string label = "Font: ";
   if (font_path == "Bookerly" || font_path == "Alegreya" || font_path == "Cartisse") {
@@ -179,6 +187,12 @@ void SettingsScreen::on_start() {
 
   idx_menu_controls_ = count();
   add_item(get_menu_controls_label(app_->menu_controls()));
+
+  idx_bluetooth_ = -1;
+  if (app_->bluetooth()) {
+    idx_bluetooth_ = count();
+    add_item(get_bluetooth_label(*app_->bluetooth()));
+  }
 
   add_separator();
 
@@ -352,6 +366,10 @@ void SettingsScreen::on_select(int index) {
   if (index == idx_sleep_image_) {
     if (app_)
       app_->push_screen(ScreenId::SleepImage);
+    return;
+  }
+  if (index == idx_bluetooth_) {
+    app_->push_screen(ScreenId::Bluetooth);
     return;
   }
 #ifdef ESP_PLATFORM

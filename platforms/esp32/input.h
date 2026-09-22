@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_timer.h"
+#include "ble_hid.h"
 #include "freertos/FreeRTOS.h"
 #include "microreader/Input.h"
 
@@ -90,6 +91,16 @@ class Esp32InputSource final : public microreader::IInputSource {
       g_serial_buttons = 0;
     }
     portEXIT_CRITICAL(&lock_);
+
+    // Presses from a Bluetooth remote. Edge-only: they never set `current`,
+    // so hold gestures (long-press rotate, folder up) stay on the device keys.
+    uint8_t remote[microreader::ButtonState::kMaxPressHistory];
+    const int n = ble_hid::take_presses(remote, sizeof(remote));
+    for (int i = 0; i < n; ++i) {
+      result.pressed_latch |= static_cast<uint8_t>(1u << remote[i]);
+      if (result.press_history_count < microreader::ButtonState::kMaxPressHistory)
+        result.press_history[result.press_history_count++] = remote[i];
+    }
     return result;
   }
 

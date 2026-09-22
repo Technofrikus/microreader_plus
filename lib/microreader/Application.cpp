@@ -58,6 +58,7 @@ void Application::start(DrawBuffer& buf, IRuntime& runtime) {
   links_screen_.set_app(this);
   delete_confirm_.set_app(this);
   sleep_image_screen_.set_app(this);
+  bluetooth_screen_.set_app(this);
 #ifdef ESP_PLATFORM
   firmware_update_.set_app(this);
 #endif
@@ -494,6 +495,8 @@ IScreen* microreader::Application::screen_for_(ScreenId id) {
       return &delete_confirm_;
     case ScreenId::SleepImage:
       return &sleep_image_screen_;
+    case ScreenId::Bluetooth:
+      return &bluetooth_screen_;
 #ifdef ESP_PLATFORM
     case ScreenId::FirmwareUpdate:
       return &firmware_update_;

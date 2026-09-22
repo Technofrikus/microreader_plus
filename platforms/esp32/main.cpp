@@ -1,6 +1,7 @@
 #include <cstdio>
 
 #include "asset_blob.h"
+#include "ble_hid.h"
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
 #include "epd.h"
@@ -220,6 +221,16 @@ extern "C" void app_main(void) {
   } else {
     MR_LOGI("app", "SD card not available");
   }
+
+#ifndef QEMU_BUILD
+  // Bluetooth remote: started before the font/app allocations so NimBLE's
+  // ~40 KB sits low in the heap instead of splitting the largest block.
+  ble_hid::boot();
+  app.set_bluetooth(&ble_hid::instance());
+  ESP_LOGI("mem", "after ble boot: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
+           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+#endif
+
   serial_start();
 
   ESP_LOGI("mem", "after serial_start: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
@@ -440,6 +451,8 @@ extern "C" void app_main(void) {
   MR_DIAG("sleep", "main_loop_end");
 
 #ifndef QEMU_BUILD
+  ble_hid::shutdown();
+
   // Unmount SD card and release CS pin to minimise sleep current.
   sd_deinit();
 

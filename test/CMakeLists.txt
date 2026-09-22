@@ -97,6 +97,7 @@ add_library(microreader_core STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/ReaderScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/SettingsScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/SleepImageScreen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/BluetoothScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/ChapterSelectScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/DeleteConfirmScreen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../lib/microreader/screens/ReaderOptionsScreen.cpp
@@ -131,6 +132,7 @@ add_executable(unit_tests
     unit/BmpSleepConverterTest.cpp
     unit/CoverSleepTest.cpp
     unit/SleepImageListTest.cpp
+    unit/HidReportTest.cpp
     unit/BookIndexTest.cpp
 )
 target_include_directories(unit_tests PRIVATE

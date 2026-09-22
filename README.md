@@ -6,6 +6,7 @@ Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended 
 
 | # | Change | Commit / PR |
 |---|--------|-------------|
+| 22 | Added **Bluetooth LE remote support**: pair a BLE keyboard or page turner and turn pages with it (Settings → Bluetooth) | — |
 | 21 | Added a **Convert All Books** menu entry that converts every book in the library (text and sleep-screen cover) in one run, with a single overall progress bar and cancel | — |
 | 20 | List of available sleep images with preview function | [b19b5c4](https://github.com/Technofrikus/microreader_plus/commit/b19b5c4) |
 | 19 | Added a **Book Cover** sleep-image mode that shows the current book's cover as the sleep screen, built once per book and cached for instant loads | [a98140f](https://github.com/Technofrikus/microreader_plus/commit/a98140f) |
@@ -52,6 +53,27 @@ Minimal EPUB reader tuned for speed for **Xteink X4 and X3**. **Not recommended 
 - Native 1-bit/two-plane sleep-image uploads with optimized X3 transfers
 - SPI at 20 MHz on X3 and X4
 - Automatic EPD cleanup before restart to prevent controller corruption
+
+### Bluetooth remote (page turner / keyboard)
+
+Turn pages with a Bluetooth LE keyboard, page turner or media remote. Off by default.
+
+**Pairing:** Settings → **Bluetooth** → switch it **On** → **Pair New Remote** → put the remote into pairing mode → select it in the list. The reader remembers one remote and reconnects to it on its own after a restart or wake-up.
+
+| Key on the remote | Action |
+|---|---|
+| Right, Down, Space, Page Down, Volume Up, Next Track | Next page / move down |
+| Left, Up, Backspace, Page Up, Volume Down, Previous Track | Previous page / move up |
+| Enter, Play/Pause | Select |
+| Esc | Back |
+
+Keys work in the reader and in all menus, and follow the **Reader Controls** inversion setting. Hold gestures (long-press to rotate, folder up) stay on the device buttons.
+
+Limitations:
+- **Bluetooth LE only.** The ESP32-C3 has no Bluetooth Classic radio, so Classic-only keyboards and remotes cannot work.
+- The remote **cannot wake the reader** from sleep; press Power. After waking, reconnecting takes a few seconds, so the first key press may be missed.
+- Remotes that present themselves as a mouse are not supported yet.
+- While Bluetooth is on, about 40 KB less memory is free (about 13 KB is always reserved, even when it's off). Large books still convert fine in testing.
 
 <img width="488" height="695" alt="Screenshot_2026-06-15-08-56-09-48_99c04817c0de5652397fc8b56c3b3817" src="https://github.com/user-attachments/assets/3b57a53e-4c3d-48b5-b600-4c290dddcf38" />
 
