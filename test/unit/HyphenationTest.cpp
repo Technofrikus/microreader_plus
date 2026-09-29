@@ -1,5 +1,10 @@
 ﻿#include <gtest/gtest.h>
 
+#include <cctype>
+#include <cstring>
+#include <string>
+#include <vector>
+
 #include "microreader/content/Font.h"
 #include "microreader/content/hyphenation/Hyphenation.h"
 
@@ -230,4 +235,94 @@ TEST(FindHyphenBreak, TrailingAngleQuoteNotSuffix) {
   // After the fix: no valid break point should be returned (word is too short
   // once punctuation is stripped: "hat" = 3 chars < 6 minimum for Liang).
   EXPECT_EQ(r, 0u) << "Should not split 'hat' â€” it's only 3 chars after stripping trailing punctuation";
+}
+
+// ---------------------------------------------------------------------------
+// Typographic punctuation must never count as letters for leftmin/rightmin.
+// Helper: sweep every available width and collect every split that is ever
+// returned, so a test can assert that a bad split is NEVER produced.
+// ---------------------------------------------------------------------------
+
+static std::vector<std::string> all_splits(const char* word, HyphenationLang lang) {
+  std::vector<std::string> out;
+  const size_t len = std::strlen(word);
+  for (uint16_t avail = 8; avail <= 8 * 64; avail += 4) {
+    bool has_hyphen = false;
+    const size_t r = find_hyphen_break(font8, word, len, FontStyle::Regular, 100, lang, avail, has_hyphen);
+    if (r == 0)
+      continue;
+    std::string s = std::string(word, r) + (has_hyphen ? "" : "-") + "|" + std::string(word + r);
+    if (out.empty() || out.back() != s)
+      out.push_back(s);
+  }
+  return out;
+}
+
+static bool contains(const std::vector<std::string>& v, const std::string& s) {
+  for (const auto& e : v)
+    if (e == s)
+      return true;
+  return false;
+}
+
+// The bug from the device: "ethics.”" was split as "ethic-" / "s.”" because
+// the closing curly quote was counted as a letter.
+TEST(FindHyphenBreak, ClosingCurlyQuoteNotCountedAsLetter) {
+  const auto splits = all_splits("ethics.\xe2\x80\x9d", HyphenationLang::English);
+  EXPECT_FALSE(contains(splits, "ethic-|s.\xe2\x80\x9d"));
+  EXPECT_TRUE(splits.empty());
+}
+
+TEST(FindHyphenBreak, TrailingDashNotCountedAsLetter) {
+  EXPECT_TRUE(all_splits("ethics\xe2\x80\x94", HyphenationLang::English).empty());  // em dash
+  EXPECT_TRUE(all_splits("ethics\xe2\x80\x93", HyphenationLang::English).empty());  // en dash
+  EXPECT_TRUE(all_splits("ethic-s", HyphenationLang::English).empty());             // lone letter after '-'
+}
+
+TEST(FindHyphenBreak, GermanQuotesNotCountedAsLetters) {
+  // „Abendessen → never "„A-|bendessen" (leading quote is not a letter).
+  const auto lead = all_splits("\xe2\x80\x9e" "Abendessen", HyphenationLang::German);
+  EXPECT_FALSE(contains(lead, "\xe2\x80\x9e" "A-|bendessen"));
+  EXPECT_TRUE(contains(lead, "\xe2\x80\x9e" "Abend-|essen"));
+
+  // gehabt.“ → never "gehab-|t.“".
+  const auto trail = all_splits("gehabt.\xe2\x80\x9c", HyphenationLang::German);
+  EXPECT_FALSE(contains(trail, "gehab-|t.\xe2\x80\x9c"));
+  EXPECT_TRUE(contains(trail, "ge-|habt.\xe2\x80\x9c"));
+
+  // Abendessens“, → never "Abendessen-|s“,".
+  EXPECT_FALSE(contains(all_splits("Abendessens\xe2\x80\x9c,", HyphenationLang::German), "Abendessen-|s\xe2\x80\x9c,"));
+}
+
+TEST(FindHyphenBreak, ApostropheSplitsWord) {
+  // shouldn’t → never "should-|n’t".
+  EXPECT_TRUE(all_splits("shouldn\xe2\x80\x99t", HyphenationLang::English).empty());
+}
+
+// English keeps at least 3 letters on the new line (TeX righthyphenmin=3);
+// German allows 2 (Duden).
+TEST(FindHyphenBreak, EnglishRightMinIsThree) {
+  const auto splits = all_splits("democracy", HyphenationLang::English);
+  EXPECT_FALSE(contains(splits, "democra-|cy"));
+  EXPECT_TRUE(contains(splits, "democ-|racy"));
+}
+
+TEST(FindHyphenBreak, GermanRightMinIsTwo) {
+  EXPECT_TRUE(contains(all_splits("Stra\xc3\x9f" "e", HyphenationLang::German), "Stra-|\xc3\x9f" "e"));
+}
+
+// Em dash between two words is an explicit break opportunity (no extra hyphen).
+TEST(FindHyphenBreak, BreakAfterEmDash) {
+  const char* word = "ethics\xe2\x80\x94" "and";
+  bool has_hyphen = false;
+  // "ethics—" = 7 code points = 56px
+  size_t r = find_hyphen_break(font8, word, std::strlen(word), FontStyle::Regular, 100, HyphenationLang::English, 60,
+                               has_hyphen);
+  EXPECT_EQ(r, 9u);
+  EXPECT_TRUE(has_hyphen);
+}
+
+// A dash with nothing but punctuation after it is not a break opportunity.
+TEST(FindHyphenBreak, NoBreakBeforePunctuationOnlySuffix) {
+  EXPECT_TRUE(all_splits("well-\xe2\x80\x9d", HyphenationLang::English).empty());
 }
