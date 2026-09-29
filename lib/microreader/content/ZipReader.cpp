@@ -131,7 +131,54 @@ static ZipError find_end_central_dir(IZipFile& file, EndCentralDir& eocd) {
 // ZipReader
 // ---------------------------------------------------------------------------
 
-ZipError ZipReader::open(IZipFile& file) {
+// Calls fn(const CentralDirEntry&, const char* name) for every central
+// directory record. `buf` either already holds the whole directory (`loaded`)
+// or is used as a sliding window: records are parsed as whole ones are in the
+// buffer, and the unfinished tail is moved to the front before the next read.
+template <typename Fn>
+static ZipError scan_central_dir(IZipFile& file, int64_t cd_start, uint32_t cd_size, uint16_t total_entries,
+                                 uint8_t* buf, size_t buf_size, bool loaded, Fn&& fn) {
+  size_t have = loaded ? cd_size : 0;  // bytes in buf
+  size_t pos = 0;                      // parse position in buf
+  uint32_t file_pos = loaded ? cd_size : 0;
+  if (!loaded)
+    file.seek(cd_start, SEEK_SET);
+
+  for (uint16_t i = 0; i < total_entries; ++i) {
+    CentralDirEntry cde;
+    size_t rec_len = 0;
+    for (;;) {
+      if (have - pos >= sizeof(cde)) {
+        memcpy(&cde, buf + pos, sizeof(cde));
+        if (cde.signature != kCentralDirEntrySig)
+          return ZipError::InvalidSignature;
+        rec_len = sizeof(cde) + cde.filename_len + cde.extra_len + cde.comment_len;
+        if (have - pos >= rec_len)
+          break;
+        if (rec_len > buf_size)
+          return ZipError::InvalidData;  // a single record larger than the window
+      }
+      // Need more data: slide the unparsed tail to the front and refill.
+      if (file_pos >= cd_size)
+        return ZipError::InvalidData;
+      if (pos > 0) {
+        memmove(buf, buf + pos, have - pos);
+        have -= pos;
+        pos = 0;
+      }
+      const size_t want = std::min<size_t>(buf_size - have, cd_size - file_pos);
+      if (want == 0 || file.read(buf + have, want) != want)
+        return ZipError::ReadError;
+      have += want;
+      file_pos += static_cast<uint32_t>(want);
+    }
+    fn(cde, reinterpret_cast<const char*>(buf + pos + sizeof(cde)));
+    pos += rec_len;
+  }
+  return ZipError::Ok;
+}
+
+ZipError ZipReader::open(IZipFile& file, uint8_t* work_buf, size_t work_buf_size, NameFilter filter) {
   entries_.clear();
   name_blob_.clear();
 
@@ -143,66 +190,75 @@ ZipError ZipReader::open(IZipFile& file) {
   if (eocd.total_entries == 0)
     return ZipError::InvalidData;
 
-  entries_.reserve(eocd.total_entries);
-
-  // Bulk-read the entire central directory into memory (one I/O operation)
-  // then parse from the buffer.  This replaces the previous two-pass approach
-  // that did ~2×N individual reads/seeks — catastrophically slow over SPI/SD.
   const uint32_t cd_size = eocd.central_dir_size;
   const int64_t cd_start = eocd.central_dir_offset;
-  file.seek(cd_start, SEEK_SET);
 
-  if (!heap_can_alloc(cd_size))
-    return ZipError::OutOfMemory;
-  std::vector<uint8_t> cd_buf(cd_size);
-  uint8_t* cd_ptr = cd_buf.data();
-  if (file.read(cd_ptr, cd_size) != cd_size)
-    return ZipError::ReadError;
-
-  // First pass over in-memory buffer: count total name bytes.
-  size_t total_name_bytes = 0;
-  {
-    size_t pos = 0;
-    for (uint16_t i = 0; i < eocd.total_entries; ++i) {
-      if (pos + sizeof(CentralDirEntry) > cd_size)
-        return ZipError::InvalidData;
-      CentralDirEntry cde;
-      memcpy(&cde, cd_ptr + pos, sizeof(cde));
-      if (cde.signature != kCentralDirEntrySig)
-        return ZipError::InvalidSignature;
-      total_name_bytes += cde.filename_len;
-      pos += sizeof(cde) + cde.filename_len + cde.extra_len + cde.comment_len;
-    }
+  // The directory is read into work_buf: whole (one read) when it fits, else in
+  // windows of work_buf's size (read twice, once per pass). Without a work
+  // buffer it goes to the heap in one read, as before.
+  std::vector<uint8_t> cd_heap;
+  uint8_t* cd_buf = work_buf;
+  size_t cd_buf_size = work_buf_size;
+  bool loaded = false;
+  if (!work_buf || work_buf_size == 0) {
+    if (!heap_can_alloc(cd_size))
+      return ZipError::OutOfMemory;
+    cd_heap.resize(cd_size);
+    cd_buf = cd_heap.data();
+    cd_buf_size = cd_size;
+  }
+  if (cd_size <= cd_buf_size) {
+    file.seek(cd_start, SEEK_SET);
+    if (file.read(cd_buf, cd_size) != cd_size)
+      return ZipError::ReadError;
+    loaded = true;
   }
 
-  if (!heap_can_alloc(total_name_bytes))
+  // First pass: count the kept entries and their name bytes.
+  size_t kept = 0;
+  size_t total_name_bytes = 0;
+  err = scan_central_dir(file, cd_start, cd_size, eocd.total_entries, cd_buf, cd_buf_size, loaded,
+                         [&](const CentralDirEntry& cde, const char* name) {
+                           if (filter && !filter(std::string_view(name, cde.filename_len)))
+                             return;
+                           ++kept;
+                           total_name_bytes += cde.filename_len;
+                         });
+  if (err != ZipError::Ok)
+    return err;
+
+  // Growing the table reallocates it; check first, since a failed allocation
+  // aborts the firmware (a reused ZipReader keeps its old capacity).
+  if (kept > entries_.capacity()) {
+    if (!heap_can_alloc(kept * sizeof(ZipEntry)))
+      return ZipError::OutOfMemory;
+    entries_.reserve(kept);
+  }
+  if (total_name_bytes > name_blob_.capacity() && !heap_can_alloc(total_name_bytes))
     return ZipError::OutOfMemory;
   name_blob_.resize(total_name_bytes);
 
-  // Second pass: build entries, copy names into contiguous blob.
-  size_t pos = 0;
+  // Second pass: build entries, copy names into the contiguous blob.
   size_t blob_offset = 0;
-  for (uint16_t i = 0; i < eocd.total_entries; ++i) {
-    CentralDirEntry cde;
-    memcpy(&cde, cd_ptr + pos, sizeof(cde));
-    pos += sizeof(cde);
-
-    // Copy filename into blob.
-    memcpy(name_blob_.data() + blob_offset, cd_ptr + pos, cde.filename_len);
-    pos += cde.filename_len + cde.extra_len + cde.comment_len;
-
-    ZipEntry entry;
-    entry.name = std::string_view(name_blob_.data() + blob_offset, cde.filename_len);
-    entry.uncompressed_size = cde.uncompressed_size;
-    entry.compressed_size = cde.compressed_size;
-    entry.local_header_offset = cde.local_header_offset;
-    entry.compression = cde.compression;
-    entries_.push_back(entry);
-
-    blob_offset += cde.filename_len;
+  err = scan_central_dir(file, cd_start, cd_size, eocd.total_entries, cd_buf, cd_buf_size, loaded,
+                         [&](const CentralDirEntry& cde, const char* name) {
+                           if (filter && !filter(std::string_view(name, cde.filename_len)))
+                             return;
+                           memcpy(name_blob_.data() + blob_offset, name, cde.filename_len);
+                           ZipEntry entry;
+                           entry.name = std::string_view(name_blob_.data() + blob_offset, cde.filename_len);
+                           entry.uncompressed_size = cde.uncompressed_size;
+                           entry.compressed_size = cde.compressed_size;
+                           entry.local_header_offset = cde.local_header_offset;
+                           entry.compression = cde.compression;
+                           entries_.push_back(entry);
+                           blob_offset += cde.filename_len;
+                         });
+  if (err != ZipError::Ok) {
+    entries_.clear();
+    name_blob_.clear();
   }
-
-  return ZipError::Ok;
+  return err;
 }
 
 const ZipEntry* ZipReader::find(const char* name) const {

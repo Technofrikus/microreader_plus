@@ -5,6 +5,14 @@
 namespace microreader {
 
 EpubError Book::open(const char* path, uint8_t* work_buf, uint8_t* xml_buf, bool parse_css_ncx) {
+  return open_impl(path, work_buf, xml_buf, parse_css_ncx ? OpenMode::Full : OpenMode::NoCssNcx);
+}
+
+EpubError Book::open_metadata(const char* path, uint8_t* work_buf, uint8_t* xml_buf) {
+  return open_impl(path, work_buf, xml_buf, OpenMode::Metadata);
+}
+
+EpubError Book::open_impl(const char* path, uint8_t* work_buf, uint8_t* xml_buf, OpenMode mode) {
   close();  // release previous resources
   if (!file_.open(path))
     return EpubError::ZipError;
@@ -27,7 +35,9 @@ EpubError Book::open(const char* path, uint8_t* work_buf, uint8_t* xml_buf, bool
     xml_buf = owned_xml.get();
   }
 
-  return epub_.open(file_, work_buf, xml_buf, parse_css_ncx);
+  if (mode == OpenMode::Metadata)
+    return epub_.open_metadata(file_, work_buf, xml_buf);
+  return epub_.open(file_, work_buf, xml_buf, mode == OpenMode::Full);
 }
 
 bool Book::open_zip_only(const char* path) {
@@ -54,8 +64,9 @@ EpubError Book::load_chapter(size_t index, Chapter& out) {
 }
 
 EpubError Book::load_chapter_streaming(size_t index, ParagraphSink sink, void* sink_ctx, uint8_t* work_buf,
-                                       uint8_t* xml_buf, IdSink id_sink, void* id_sink_ctx) {
-  return epub_.parse_chapter_streaming(file_, index, sink, sink_ctx, work_buf, xml_buf, id_sink, id_sink_ctx);
+                                       uint8_t* xml_buf, IdSink id_sink, void* id_sink_ctx, size_t xml_buf_size) {
+  return epub_.parse_chapter_streaming(file_, index, sink, sink_ctx, work_buf, xml_buf, id_sink, id_sink_ctx,
+                                       xml_buf_size);
 }
 
 ImageError Book::decode_image(uint16_t entry_index, DecodedImage& out, uint16_t max_w, uint16_t max_h,

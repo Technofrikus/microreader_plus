@@ -32,11 +32,23 @@ class CssCache {
   // work_buf/work_buf_size: caller-provided decompression buffer (from the
   // application's framebuffer). Required on cache miss; if null and there
   // is a cache miss the stylesheet is silently skipped rather than crashing.
+  //
+  // text_buf/text_buf_size: optional caller-provided buffer (another idle
+  // framebuffer) that receives the raw CSS text, so a large stylesheet doesn't
+  // need one big heap block. Files that don't fit fall back to the heap.
+  //
+  // On ESP32 the parsed size is measured first; if the heap is short, cached
+  // stylesheets of earlier chapters are released to make room. Only if that is
+  // not enough is the sheet loaded partially (rules up to the heap floor) — or,
+  // for text too large for text_buf with no heap block for it, skipped (not
+  // retried for the rest of the book). The conversion never aborts.
   const CssStylesheet* get_or_load(IZipFile& file, const ZipReader& zip,
                                    const std::string& path, const CssConfig& config,
                                    uint32_t protect_gen = 0,
                                    uint8_t* work_buf = nullptr,
-                                   size_t work_buf_size = 0);
+                                   size_t work_buf_size = 0,
+                                   uint8_t* text_buf = nullptr,
+                                   size_t text_buf_size = 0);
 
   void clear();
 
@@ -54,10 +66,17 @@ class CssCache {
 
   Entry entries_[kMaxEntries];
   size_t count_ = 0;
+  // FNV-1a hashes of stylesheets skipped for lack of memory.
+  static constexpr size_t kMaxSkipped = 8;
+  uint32_t skipped_[kMaxSkipped] = {};
+  size_t skipped_count_ = 0;
   size_t total_bytes_ = 0;
   uint32_t gen_ = 0;
 
   static bool low_memory();
+  // Releases the least recently used stylesheet not loaded for the current
+  // chapter (last_used_gen <= protect_gen). False if there is none.
+  bool evict_for_memory(uint32_t protect_gen);
   // Returns the index of the best LRU candidate with last_used_gen <= protect_gen
   // (or any entry when protect_gen == 0). Returns kMaxEntries if none found.
   size_t find_evict_slot(uint32_t protect_gen) const;
@@ -102,6 +121,12 @@ class Epub {
   // Sufficient for image decode operations.
   EpubError open_zip_only(IZipFile& file);
 
+  // Reads only the metadata (title, author, language, cover id) — for the book
+  // index. Keeps just container.xml and the OPF in the ZIP table and stops
+  // reading the OPF after <metadata>, so it needs almost no heap whatever the
+  // book's size. Spine, TOC and CSS stay empty.
+  EpubError open_metadata(IZipFile& file, uint8_t* work_buf, uint8_t* xml_buf);
+
   // Release all parsed data (ZIP entries, spine, stylesheet, TOC, metadata).
   void close();
 
@@ -115,8 +140,11 @@ class Epub {
 
   // Stream-parse a chapter: paragraphs are emitted one at a time via sink.
   // Uses ~37KB working memory instead of extracting the full XHTML.
+  // xml_buf_size: size of xml_buf (0 = the 16 KB minimum). Between the head scan
+  // and the body parse xml_buf is idle, and stylesheets that fit are read into it.
   EpubError parse_chapter_streaming(IZipFile& file, size_t index, ParagraphSink sink, void* sink_ctx, uint8_t* work_buf,
-                                    uint8_t* xml_buf, IdSink id_sink = nullptr, void* id_sink_ctx = nullptr) const;
+                                    uint8_t* xml_buf, IdSink id_sink = nullptr, void* id_sink_ctx = nullptr,
+                                    size_t xml_buf_size = 0) const;
 
   // Access metadata.
   const EpubMetadata& metadata() const {
@@ -173,7 +201,7 @@ class Epub {
   EpubError parse_container(IZipFile& file, std::string& rootfile_path, uint8_t* work_buf, size_t work_buf_size,
                             uint8_t* xml_buf, size_t xml_buf_size);
   EpubError parse_opf(IZipFile& file, const std::string& opf_path, uint8_t* work_buf, uint8_t* xml_buf,
-                      bool parse_css_ncx);
+                      bool parse_css_ncx, bool metadata_only = false);
 };
 
 // Parse XHTML body into paragraphs (used by Epub::parse_chapter, also

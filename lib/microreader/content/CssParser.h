@@ -4,6 +4,7 @@
 #include <deque>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "ContentModel.h"
@@ -344,22 +345,57 @@ class CssStylesheet {
     return rules_.size();
   }
 
-  // Internal selector type (public for inline matching in .cpp)
-  struct Selector {
-    std::string element;
-    std::string id;
-    std::vector<std::string> classes;
+  // ESP32: free heap a sheet must leave behind. Below it a sheet stops taking
+  // rules — the conversion that loads it still needs room, and an allocation
+  // failure aborts the firmware.
+  static constexpr size_t kMinFreeHeap = 16 * 1024;
 
-    static bool try_parse(const char* s, size_t len, Selector& out);
-    bool matches(const char* element, const char* id, const std::vector<std::string>& classes) const;
-    uint32_t specificity() const;
+  // Heap that extend_from_mut_sheet() will take for this text: the exact name
+  // pool plus the rule storage. Strips comments in place (as extend does), so
+  // `length` is updated and the text can be handed straight to it afterwards.
+  size_t heap_needed(char* css, size_t& length) const;
+
+  // Bytes held by the selector name pool (for memory diagnostics/tests).
+  size_t name_bytes() const {
+    return names_.size();
+  }
+
+  // True when a sheet stopped early because the heap ran low (ESP32 only):
+  // the rules parsed up to that point are kept, the rest are dropped.
+  bool truncated() const {
+    return truncated_;
+  }
+
+  // A simple selector (element, #id, .classes), stored compactly: its names
+  // live in the stylesheet's shared pool as [element][id] followed by one
+  // [len:u8][class] record per class. Complex selectors (descendant, child,
+  // pseudo, attribute) are not supported and never stored.
+  struct Selector {
+    uint32_t names = 0;  // offset into names_
+    uint8_t element_len = 0;
+    uint8_t id_len = 0;
+    uint8_t class_count = 0;
+
+    uint32_t specificity() const {
+      return (static_cast<uint32_t>(id_len != 0) << 16) | (static_cast<uint32_t>(class_count) << 8) |
+             static_cast<uint32_t>(element_len != 0);
+    }
   };
 
  private:
-  CssConfig config_;
-  std::deque<std::pair<Selector, CssRule>> rules_;
+  struct Rule {
+    Selector selector;
+    CssRule rule;
+  };
 
-  static std::string filter_comments(const char* css, size_t length);
+  CssConfig config_;
+  // deque, not vector: grows in small fixed chunks, so a large sheet never
+  // needs one big contiguous block or a copy of all rules on growth.
+  std::deque<Rule> rules_;
+  std::string names_;
+  bool truncated_ = false;
+
+  bool matches(const Selector& sel, std::string_view element, std::string_view id, std::string_view cls) const;
 };
 
 }  // namespace microreader

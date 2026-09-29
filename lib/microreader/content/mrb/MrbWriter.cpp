@@ -281,6 +281,11 @@ void MrbWriter::add_anchor(uint16_t chapter_idx, uint16_t para_index, const char
 
 bool MrbWriter::finish(const EpubMetadata& meta, const TableOfContents& toc,
                        const std::vector<std::string>& spine_files) {
+  return finish(meta, toc, spine_files.size(), [&spine_files](size_t i) { return std::string_view(spine_files[i]); });
+}
+
+bool MrbWriter::finish(const EpubMetadata& meta, const TableOfContents& toc, size_t spine_count,
+                       const std::function<std::string_view(size_t)>& spine_file) {
   if (!bw_.is_open())
     return false;
 
@@ -349,12 +354,11 @@ bool MrbWriter::finish(const EpubMetadata& meta, const TableOfContents& toc,
   // --- Write spine file table ---
   // Allows runtime resolution of href filenames → chapter indices.
   {
-    uint16_t spine_count = static_cast<uint16_t>(spine_files.size());
     uint8_t sc_buf[2];
-    mrb_write_u16(sc_buf, spine_count);
+    mrb_write_u16(sc_buf, static_cast<uint16_t>(spine_count));
     write_bytes(sc_buf, 2);
-    for (const auto& name : spine_files)
-      write_string(name);
+    for (size_t i = 0; i < spine_count; ++i)
+      write_string(spine_file(i));
   }
 
   // --- Write anchor table ---
@@ -506,7 +510,7 @@ bool MrbWriter::write_bytes(const void* data, size_t size) {
   return bw_.write(data, size);
 }
 
-bool MrbWriter::write_string(const std::string& s) {
+bool MrbWriter::write_string(std::string_view s) {
   uint8_t len_buf[2];
   mrb_write_u16(len_buf, static_cast<uint16_t>(s.size()));
   if (!write_bytes(len_buf, 2))

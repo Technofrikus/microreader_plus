@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdio>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "../ContentModel.h"
@@ -62,6 +64,13 @@ class MrbWriter {
   bool open(const char* path);
   void close();
 
+  // Pre-size the chapter table. Call once with the spine size before the first
+  // chapter: the table then never has to grow (and be copied) mid-conversion,
+  // when the heap is at its lowest.
+  void reserve_chapters(size_t count) {
+    chapters_.reserve(count);
+  }
+
   // Call before writing paragraphs for a new chapter.
   void begin_chapter();
 
@@ -96,6 +105,11 @@ class MrbWriter {
   // spine_files: base filenames of each spine item (index = chapter index).
   bool finish(const EpubMetadata& meta, const TableOfContents& toc, const std::vector<std::string>& spine_files = {});
 
+  // Same, but the spine file names are fetched one at a time, so no list of
+  // names has to be allocated at the end of a conversion.
+  bool finish(const EpubMetadata& meta, const TableOfContents& toc, size_t spine_count,
+              const std::function<std::string_view(size_t)>& spine_file);
+
  private:
   BufferedFileWriter bw_;
   uint32_t paragraph_count_ = 0;
@@ -125,7 +139,7 @@ class MrbWriter {
   bool write_bytes(const void* data, size_t size);
 
   // Write a length-prefixed UTF-8 string (uint16 length + bytes).
-  bool write_string(const std::string& s);
+  bool write_string(std::string_view s);
 };
 
 }  // namespace microreader

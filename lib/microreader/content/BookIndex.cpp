@@ -201,7 +201,7 @@ bool BookIndex::index_file(const std::string& path, const std::string& index_pat
   // Open and extract metadata
   Book book;
   book.close();
-  if (book.open(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2(), false) != EpubError::Ok) {
+  if (book.open_metadata(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2()) != EpubError::Ok) {
     buf.reset_after_scratch(true);
     return false;
   }
@@ -250,6 +250,10 @@ void BookIndex::build_index(const std::string& root_dir, DrawBuffer& buf) {
 
   entries_.clear();
   pool_.reset();
+  // Opening every book needs contiguous heap; on an X3 the display driver's
+  // ~52 KB full-frame upload buffer sits in the middle of it. It is reallocated
+  // on the next full-frame upload (same as Settings → Convert All Books).
+  buf.release_display_memory();
   buf.show_loading("Scanning...", 0);
   // Process epub files as we find them to avoid storing all paths in memory.
   int done = 0;
@@ -281,7 +285,7 @@ void BookIndex::build_index(const std::string& root_dir, DrawBuffer& buf) {
       return;
     show_index_progress();
     book.close();
-    if (book.open(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2(), false) == EpubError::Ok) {
+    if (book.open_metadata(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2()) == EpubError::Ok) {
       auto meta = book.metadata();
       const std::string author = meta.author.value_or("");
       add_entry(path, meta.title, author);

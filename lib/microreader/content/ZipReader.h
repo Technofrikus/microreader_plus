@@ -63,9 +63,15 @@ class ZipReader {
   ZipReader() = default;
 
   // Parse the central directory. Populates entries().
-  // Optional work_buf (≥ central-directory size, typically ≤ 48 KB) avoids a
-  // heap allocation for the bulk CD read — useful when heap is fragmented.
-  ZipError open(IZipFile& file);
+  // Optional work_buf: when the central directory fits, it is read there
+  // instead of into a heap block (up to tens of KB for large EPUBs) — useful
+  // when the heap is fragmented. Returns OutOfMemory instead of aborting when
+  // the entry table can't be allocated.
+  //
+  // Optional filter: only entries whose name it accepts are kept (e.g. just the
+  // files needed to read a book's metadata), so the entry table stays tiny.
+  using NameFilter = bool (*)(std::string_view name);
+  ZipError open(IZipFile& file, uint8_t* work_buf = nullptr, size_t work_buf_size = 0, NameFilter filter = nullptr);
 
   // Number of entries in the archive.
   size_t entry_count() const {

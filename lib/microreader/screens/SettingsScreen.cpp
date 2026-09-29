@@ -860,7 +860,8 @@ SettingsScreen::BookResult SettingsScreen::convert_one_book_(const std::string& 
         book->chapter_count() > 0) {
       if (need_mrb)
         mrb_ok = convert_epub_to_mrb_streaming(*book, mrb_path.c_str(), buf_->scratch_buf1(), buf_->scratch_buf2(),
-                                               progress, [this] { return poll_cancel_convert_books_(); });
+                                               progress, [this] { return poll_cancel_convert_books_(); },
+                                               DrawBuffer::kBufSize);
       // The declared cover is only readable while the book is open.
       const int cover_entry = book->epub().cover_entry_index();
       if (mrb_ok && cover_entry >= 0 && static_cast<size_t>(cover_entry) < book->epub().zip().entry_count())

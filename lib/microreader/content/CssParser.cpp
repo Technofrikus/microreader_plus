@@ -5,6 +5,11 @@
 #include <cstdlib>
 #include <cstring>
 
+#ifdef ESP_PLATFORM
+#include "esp_heap_caps.h"
+#include "esp_system.h"
+#endif
+
 namespace microreader {
 
 // ---------------------------------------------------------------------------
@@ -469,146 +474,83 @@ CssRule CssRule::operator+(const CssRule& rhs) const {
 }
 
 // ---------------------------------------------------------------------------
-// CssStylesheet::Selector
+// CssStylesheet
 // ---------------------------------------------------------------------------
 
-bool CssStylesheet::Selector::try_parse(const char* s, size_t len, Selector& out) {
+namespace {
+
+constexpr size_t kMaxSelectorClasses = 8;
+
+// A parsed simple selector, as views into the sheet text (no allocation).
+struct SelectorView {
+  std::string_view element;
+  std::string_view id;
+  std::string_view classes[kMaxSelectorClasses];
+  uint8_t class_count = 0;
+
+  size_t name_bytes() const {
+    size_t n = element.size() + id.size();
+    for (uint8_t i = 0; i < class_count; ++i)
+      n += 1 + classes[i].size();
+    return n;
+  }
+};
+
+// Parses a compound selector such as "p", ".cls", "p.a.b", "div#id.cls".
+// Returns false for empty or complex selectors (spaces, >, +, ~, :, [) and for
+// ones that don't fit the compact form (names over 255 bytes, too many classes).
+bool parse_selector(const char* s, size_t len, SelectorView& out) {
   out = {};
-  // Trim
   while (len > 0 && std::isspace(static_cast<unsigned char>(s[0]))) {
     ++s;
     --len;
   }
   while (len > 0 && std::isspace(static_cast<unsigned char>(s[len - 1])))
     --len;
-
   if (len == 0)
     return false;
 
-  // Reject complex selectors (contain spaces, >, +, ~, :, [)
   for (size_t i = 0; i < len; ++i) {
     char c = s[i];
     if (std::isspace(static_cast<unsigned char>(c)) || c == '>' || c == '+' || c == '~' || c == ':' || c == '[')
       return false;
   }
 
-  // Parse compound selector: element.class#id etc
   char kind = 'e';
-  std::string current;
-
-  for (size_t i = 0; i < len; ++i) {
-    char c = s[i];
-    if (c == '.' || c == '#') {
-      if (!current.empty()) {
-        if (kind == 'e')
-          out.element = std::move(current);
-        else if (kind == '.')
-          out.classes.push_back(std::move(current));
-        else if (kind == '#')
-          out.id = std::move(current);
-      }
-      current.clear();
-      kind = c;
-    } else {
-      current += c;
-    }
-  }
-  if (!current.empty()) {
-    if (kind == 'e')
-      out.element = std::move(current);
-    else if (kind == '.')
-      out.classes.push_back(std::move(current));
-    else if (kind == '#')
-      out.id = std::move(current);
-  }
-
-  return !out.element.empty() || !out.id.empty() || !out.classes.empty();
-}
-
-bool CssStylesheet::Selector::matches(const char* element, const char* id,
-                                      const std::vector<std::string>& classes) const {
-  if (!this->element.empty() && (element == nullptr || this->element != element))
-    return false;
-  if (!this->id.empty()) {
-    if (id == nullptr || this->id != id)
-      return false;
-  }
-  for (const auto& cls : this->classes) {
-    bool found = false;
-    for (const auto& c : classes) {
-      if (c == cls) {
-        found = true;
-        break;
+  size_t seg = 0;
+  for (size_t i = 0; i <= len; ++i) {
+    if (i < len && s[i] != '.' && s[i] != '#')
+      continue;
+    std::string_view name(s + seg, i - seg);
+    if (!name.empty()) {
+      if (name.size() > 255)
+        return false;
+      if (kind == 'e') {
+        out.element = name;
+      } else if (kind == '#') {
+        out.id = name;
+      } else {
+        if (out.class_count == kMaxSelectorClasses)
+          return false;
+        out.classes[out.class_count++] = name;
       }
     }
-    if (!found)
-      return false;
+    if (i < len)
+      kind = s[i];
+    seg = i + 1;
   }
-  return true;
+  return !out.element.empty() || !out.id.empty() || out.class_count != 0;
 }
 
-uint32_t CssStylesheet::Selector::specificity() const {
-  uint32_t ids = id.empty() ? 0 : 1;
-  uint32_t cls = static_cast<uint32_t>(classes.size());
-  uint32_t elems = element.empty() ? 0 : 1;
-  return (ids << 16) | (cls << 8) | elems;
-}
-
-// ---------------------------------------------------------------------------
-// CssStylesheet
-// ---------------------------------------------------------------------------
-
-std::string CssStylesheet::filter_comments(const char* css, size_t length) {
-  std::string result;
-  result.reserve(length);
-  size_t i = 0;
-  while (i < length) {
-    if (i + 1 < length && css[i] == '/' && css[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < length) {
-        if (css[i] == '*' && css[i + 1] == '/') {
-          i += 2;
-          break;
-        }
-        ++i;
-      }
-    } else {
-      result += css[i];
-      ++i;
-    }
-  }
-  return result;
-}
-
-void CssStylesheet::extend_from_sheet(const char* css, size_t length) {
-  std::string sheet_copy(css, length);
-  extend_from_mut_sheet(sheet_copy.data(), sheet_copy.size());
-}
-
-void CssStylesheet::extend_from_mut_sheet(char* css, size_t length) {
-  size_t rd = 0, wr = 0;
-  while (rd < length) {
-    if (rd + 1 < length && css[rd] == '/' && css[rd + 1] == '*') {
-      rd += 2;
-      while (rd + 1 < length) {
-        if (css[rd] == '*' && css[rd + 1] == '/') {
-          rd += 2;
-          break;
-        }
-        ++rd;
-      }
-    } else {
-      css[wr++] = css[rd++];
-    }
-  }
-
-  std::string_view sheet(css, wr);
-
+// Calls fn(const SelectorView&, const CssRule&) for every supported selector of
+// every rule with at least one property we use. Comments must already be removed.
+template <typename Fn>
+void for_each_rule(std::string_view sheet, const CssConfig& config, Fn&& fn) {
   size_t pos = 0;
   while (pos < sheet.size()) {
     // Find next '{' or '@'
-    size_t brace = std::string::npos;
-    size_t at = std::string::npos;
+    size_t brace = std::string_view::npos;
+    size_t at = std::string_view::npos;
     for (size_t i = pos; i < sheet.size(); ++i) {
       if (sheet[i] == '{' || sheet[i] == '@') {
         if (sheet[i] == '@')
@@ -620,13 +562,13 @@ void CssStylesheet::extend_from_mut_sheet(char* css, size_t length) {
     }
 
     // Handle at-rules
-    if (at != std::string::npos && (brace == std::string::npos || at < brace)) {
+    if (at != std::string_view::npos && (brace == std::string_view::npos || at < brace)) {
       // Skip @-rule: find ';' or '{...}'
       size_t semi = sheet.find(';', at);
       size_t ob = sheet.find('{', at);
-      if (semi != std::string::npos && (ob == std::string::npos || semi < ob)) {
+      if (semi != std::string_view::npos && (ob == std::string_view::npos || semi < ob)) {
         pos = semi + 1;
-      } else if (ob != std::string::npos) {
+      } else if (ob != std::string_view::npos) {
         // Find matching '}'
         int depth = 1;
         size_t j = ob + 1;
@@ -644,7 +586,7 @@ void CssStylesheet::extend_from_mut_sheet(char* css, size_t length) {
       continue;
     }
 
-    if (brace == std::string::npos)
+    if (brace == std::string_view::npos)
       break;
 
     // Find closing '}'
@@ -661,24 +603,22 @@ void CssStylesheet::extend_from_mut_sheet(char* css, size_t length) {
       break;
     --end_pos;  // point at '}'
 
-    std::string declarations(sheet.substr(brace + 1, end_pos - brace - 1));
+    std::string_view declarations = sheet.substr(brace + 1, end_pos - brace - 1);
 
     // Skip nested blocks
-    if (declarations.find('{') == std::string::npos) {
-      CssRule rule = CssRule::parse(declarations.c_str(), declarations.size(), config_);
+    if (declarations.find('{') == std::string_view::npos) {
+      CssRule rule = CssRule::parse(declarations.data(), declarations.size(), config);
       if (rule.has_any()) {
-        std::string selectors(sheet.substr(pos, brace - pos));
+        std::string_view selectors = sheet.substr(pos, brace - pos);
         // Split by comma
         size_t sp = 0;
         while (sp < selectors.size()) {
           size_t comma = selectors.find(',', sp);
-          if (comma == std::string::npos)
+          if (comma == std::string_view::npos)
             comma = selectors.size();
-
-          Selector sel;
-          if (Selector::try_parse(selectors.c_str() + sp, comma - sp, sel)) {
-            rules_.emplace_back(std::move(sel), rule);
-          }
+          SelectorView sel;
+          if (parse_selector(selectors.data() + sp, comma - sp, sel) && !fn(sel, rule))
+            return;
           sp = comma + 1;
         }
       }
@@ -688,74 +628,133 @@ void CssStylesheet::extend_from_mut_sheet(char* css, size_t length) {
   }
 }
 
-// Check if a whitespace-separated class string contains a specific class.
-static bool class_list_contains(const char* cls, const std::string& target) {
-  if (!cls || target.empty())
-    return false;
-  size_t tlen = target.size();
-  const char* p = cls;
-  while (*p) {
-    while (*p && std::isspace(static_cast<unsigned char>(*p)))
+bool heap_too_low(size_t need) {
+#ifdef ESP_PLATFORM
+  return esp_get_free_heap_size() < CssStylesheet::kMinFreeHeap + need;
+#else
+  (void)need;
+  return false;
+#endif
+}
+
+// Does the whitespace-separated class list contain `target`?
+bool class_list_contains(std::string_view cls, std::string_view target) {
+  size_t p = 0;
+  while (p < cls.size()) {
+    while (p < cls.size() && std::isspace(static_cast<unsigned char>(cls[p])))
       ++p;
-    const char* start = p;
-    while (*p && !std::isspace(static_cast<unsigned char>(*p)))
+    size_t start = p;
+    while (p < cls.size() && !std::isspace(static_cast<unsigned char>(cls[p])))
       ++p;
-    size_t len = static_cast<size_t>(p - start);
-    if (len == tlen && std::memcmp(start, target.c_str(), len) == 0)
+    if (cls.substr(start, p - start) == target)
       return true;
   }
   return false;
 }
 
-// Match a selector against element/id/class without allocating vectors.
-static bool selector_matches_raw(const CssStylesheet::Selector& sel, const char* element, const char* id,
-                                 const char* cls) {
-  if (!sel.element.empty() && (element == nullptr || sel.element != element))
-    return false;
-  if (!sel.id.empty()) {
-    if (id == nullptr || sel.id != id)
-      return false;
-  }
-  for (const auto& c : sel.classes) {
-    if (!class_list_contains(cls, c))
-      return false;
-  }
-  return true;
+}  // namespace
+
+void CssStylesheet::extend_from_sheet(const char* css, size_t length) {
+  std::string sheet_copy(css, length);
+  extend_from_mut_sheet(sheet_copy.data(), sheet_copy.size());
 }
 
-// Length-based class list check: does whitespace-separated cls contain target?
-static bool class_list_contains_n(const char* cls, size_t cls_len, const std::string& target) {
-  if (!cls || cls_len == 0 || target.empty())
-    return false;
-  size_t tlen = target.size();
-  const char* end = cls + cls_len;
-  const char* p = cls;
-  while (p < end) {
-    while (p < end && std::isspace(static_cast<unsigned char>(*p)))
-      ++p;
-    const char* start = p;
-    while (p < end && !std::isspace(static_cast<unsigned char>(*p)))
-      ++p;
-    size_t len = static_cast<size_t>(p - start);
-    if (len == tlen && std::memcmp(start, target.c_str(), len) == 0)
-      return true;
+// Removes /* comments */ in place; returns the new length. Idempotent.
+static size_t strip_comments(char* css, size_t length) {
+  size_t rd = 0, wr = 0;
+  while (rd < length) {
+    if (rd + 1 < length && css[rd] == '/' && css[rd + 1] == '*') {
+      rd += 2;
+      while (rd + 1 < length) {
+        if (css[rd] == '*' && css[rd + 1] == '/') {
+          rd += 2;
+          break;
+        }
+        ++rd;
+      }
+    } else {
+      css[wr++] = css[rd++];
+    }
   }
-  return false;
+  return wr;
 }
 
-static bool selector_matches_n(const CssStylesheet::Selector& sel, const char* element, size_t element_len,
-                               const char* id, size_t id_len, const char* cls, size_t cls_len) {
-  if (!sel.element.empty()) {
-    if (element_len != sel.element.size() || std::memcmp(element, sel.element.c_str(), element_len) != 0)
-      return false;
+// Pass 1 of a sheet: the exact name-pool bytes and the number of stored selectors.
+static void count_sheet(std::string_view sheet, const CssConfig& config, size_t& name_bytes, size_t& selectors) {
+  name_bytes = 0;
+  selectors = 0;
+  for_each_rule(sheet, config, [&](const SelectorView& sel, const CssRule&) {
+    name_bytes += sel.name_bytes();
+    ++selectors;
+    return true;
+  });
+}
+
+size_t CssStylesheet::heap_needed(char* css, size_t& length) const {
+  length = strip_comments(css, length);
+  size_t name_bytes = 0, selectors = 0;
+  count_sheet(std::string_view(css, length), config_, name_bytes, selectors);
+  // std::deque stores rules in 512-byte nodes (plus allocator overhead) and
+  // keeps a small node map.
+  constexpr size_t kNode = 512;
+  const size_t per_node = sizeof(Rule) < kNode ? kNode / sizeof(Rule) : 1;
+  const size_t nodes = (selectors + per_node - 1) / per_node + 1;
+  return name_bytes + nodes * (kNode + 16) + 64;
+}
+
+void CssStylesheet::extend_from_mut_sheet(char* css, size_t length) {
+  const std::string_view sheet(css, strip_comments(css, length));
+
+  // Pass 1: size the name pool exactly, so it is one allocation of the final
+  // size instead of a doubling string (and never 1.5x its size mid-copy).
+  size_t name_bytes = 0;
+  size_t selector_count = 0;
+  count_sheet(sheet, config_, name_bytes, selector_count);
+  if (selector_count == 0)
+    return;
+  if (heap_too_low(name_bytes)) {
+    truncated_ = true;
+    return;
   }
-  if (!sel.id.empty()) {
-    if (id_len != sel.id.size() || std::memcmp(id, sel.id.c_str(), id_len) != 0)
+  names_.reserve(names_.size() + name_bytes);
+
+  // Pass 2: store the rules. Stops early (keeping what it has) if the heap runs
+  // low, rather than letting a later allocation abort.
+  for_each_rule(sheet, config_, [&](const SelectorView& sel, const CssRule& rule) {
+    if (heap_too_low(sizeof(Rule))) {
+      truncated_ = true;
       return false;
-  }
-  for (const auto& c : sel.classes) {
-    if (!class_list_contains_n(cls, cls_len, c))
+    }
+    Selector compact;
+    compact.names = static_cast<uint32_t>(names_.size());
+    compact.element_len = static_cast<uint8_t>(sel.element.size());
+    compact.id_len = static_cast<uint8_t>(sel.id.size());
+    compact.class_count = sel.class_count;
+    names_.append(sel.element);
+    names_.append(sel.id);
+    for (uint8_t i = 0; i < sel.class_count; ++i) {
+      names_.push_back(static_cast<char>(sel.classes[i].size()));
+      names_.append(sel.classes[i]);
+    }
+    rules_.push_back(Rule{compact, rule});
+    return true;
+  });
+}
+
+bool CssStylesheet::matches(const Selector& sel, std::string_view element, std::string_view id,
+                            std::string_view cls) const {
+  const char* p = names_.data() + sel.names;
+  if (sel.element_len != 0 && element != std::string_view(p, sel.element_len))
+    return false;
+  p += sel.element_len;
+  if (sel.id_len != 0 && id != std::string_view(p, sel.id_len))
+    return false;
+  p += sel.id_len;
+  for (uint8_t i = 0; i < sel.class_count; ++i) {
+    const size_t len = static_cast<uint8_t>(*p++);
+    if (!class_list_contains(cls, std::string_view(p, len)))
       return false;
+    p += len;
   }
   return true;
 }
@@ -778,6 +777,10 @@ CssRule CssStylesheet::get(const char* element, size_t element_len, const char* 
                            size_t cls_len) const {
   if (rules_.empty())
     return {};
+  const std::string_view element_sv(element ? element : "", element ? element_len : 0);
+  const std::string_view id_sv(id ? id : "", id ? id_len : 0);
+  const std::string_view cls_sv(cls ? cls : "", cls ? cls_len : 0);
+
   struct Match {
     uint32_t specificity;
     size_t index;
@@ -789,8 +792,8 @@ CssRule CssStylesheet::get(const char* element, size_t element_len, const char* 
   std::vector<Match> heap_matches;
 
   for (size_t i = 0; i < rules_.size(); ++i) {
-    if (selector_matches_n(rules_[i].first, element, element_len, id, id_len, cls, cls_len)) {
-      Match m{rules_[i].first.specificity(), i, &rules_[i].second};
+    if (matches(rules_[i].selector, element_sv, id_sv, cls_sv)) {
+      Match m{rules_[i].selector.specificity(), i, &rules_[i].rule};
       if (!used_heap && match_count < 8) {
         inline_buf[match_count++] = m;
       } else {

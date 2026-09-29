@@ -139,7 +139,8 @@ bool write_split_paragraph(MrbWriter& writer, Paragraph& para) {
 }  // namespace
 
 bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t* work_buf, uint8_t* xml_buf,
-                                   std::function<void(int, int)> progress_cb, std::function<bool()> cancel_cb) {
+                                   std::function<void(int, int)> progress_cb, std::function<bool()> cancel_cb,
+                                   size_t xml_buf_size) {
   MrbWriter writer;
   if (!writer.open(output_path)) {
 #ifdef ESP_PLATFORM
@@ -161,6 +162,7 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
   if (!xml_buf) {
     owned_xml = std::make_unique<uint8_t[]>(kXmlBufSize);
     xml_buf = owned_xml.get();
+    xml_buf_size = kXmlBufSize;
   }
 
   std::vector<ImageMapping> image_map;
@@ -266,6 +268,7 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
     }
   };
 
+  writer.reserve_chapters(book.chapter_count());
   for (size_t ci = 0; ci < book.chapter_count(); ++ci) {
     writer.begin_chapter();
 
@@ -275,7 +278,7 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
 
     ctx.current_zip_file_idx = static_cast<uint16_t>(book.epub().spine()[ci].file_idx);
     ctx.current_chapter_idx = static_cast<uint16_t>(ci);
-    book.load_chapter_streaming(ci, sink, &ctx, work_buf, xml_buf, id_sink, &ctx);
+    book.load_chapter_streaming(ci, sink, &ctx, work_buf, xml_buf, id_sink, &ctx, xml_buf_size);
     if (ctx.error) {
 #ifdef ESP_PLATFORM
       ESP_LOGE("mrb", "ctx.error after ch %u", (unsigned)ci);
@@ -321,18 +324,17 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
     }
   }
 
-  // Build spine filename table: base filename of each spine item for href resolution at runtime.
-  std::vector<std::string> spine_files;
-  spine_files.reserve(spine.size());
-  for (const auto& si : spine) {
-    std::string_view entry_name = zip.entry(si.file_idx).name;
+  // Spine filename table: base filename of each spine item for href resolution at
+  // runtime. Written straight from the ZIP's name blob — at this point the heap is
+  // at its lowest, and a list of copies (one block + a string per item) ran out of
+  // memory on a 363-chapter book with Bluetooth on.
+  const auto spine_file = [&zip, &spine](size_t i) {
+    std::string_view entry_name = zip.entry(spine[i].file_idx).name;
     auto slash_pos = entry_name.rfind('/');
-    std::string basename =
-        (slash_pos != std::string_view::npos) ? std::string(entry_name.substr(slash_pos + 1)) : std::string(entry_name);
-    spine_files.push_back(std::move(basename));
-  }
+    return slash_pos != std::string_view::npos ? entry_name.substr(slash_pos + 1) : entry_name;
+  };
 
-  bool ok = writer.finish(book.metadata(), toc_work, spine_files);
+  bool ok = writer.finish(book.metadata(), toc_work, spine.size(), spine_file);
   writer.close();  // explicit close so fclose() happens before we return
 
 #ifdef ESP_PLATFORM

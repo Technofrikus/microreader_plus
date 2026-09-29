@@ -72,6 +72,42 @@ TEST_F(ZipReaderTest, FindByName) {
   EXPECT_EQ(missing, nullptr);
 }
 
+// The central directory read through a caller buffer — whole, or in small
+// windows — must give exactly the entries of the heap read.
+TEST(ZipReaderWorkBuf, SameEntriesAsHeapReadForAnyBufferSize) {
+  for (const char* name : {"basic.epub", "multi_chapter.epub", "nested_dirs.epub", "large_chapter.epub"}) {
+    StdioZipFile file;
+    ASSERT_TRUE(file.open(fixture(name).c_str())) << name;
+    ZipReader heap_reader;
+    ASSERT_EQ(heap_reader.open(file), ZipError::Ok) << name;
+
+    for (size_t buf_size : {size_t(96), size_t(200), size_t(1024), size_t(64 * 1024)}) {
+      std::vector<uint8_t> buf(buf_size);
+      ZipReader reader;
+      ASSERT_EQ(reader.open(file, buf.data(), buf.size()), ZipError::Ok) << name << " buf=" << buf_size;
+      ASSERT_EQ(reader.entry_count(), heap_reader.entry_count()) << name << " buf=" << buf_size;
+      for (size_t i = 0; i < reader.entry_count(); ++i) {
+        EXPECT_EQ(reader.entry(i).name, heap_reader.entry(i).name);
+        EXPECT_EQ(reader.entry(i).local_header_offset, heap_reader.entry(i).local_header_offset);
+        EXPECT_EQ(reader.entry(i).uncompressed_size, heap_reader.entry(i).uncompressed_size);
+      }
+    }
+  }
+}
+
+TEST(ZipReaderWorkBuf, FilterKeepsOnlyAcceptedEntries) {
+  StdioZipFile file;
+  ASSERT_TRUE(file.open(fixture("multi_chapter.epub").c_str()));
+  std::vector<uint8_t> buf(128);  // forces windowed reading
+  ZipReader reader;
+  ASSERT_EQ(reader.open(file, buf.data(), buf.size(),
+                        [](std::string_view n) { return n == "META-INF/container.xml"; }),
+            ZipError::Ok);
+  ASSERT_EQ(reader.entry_count(), 1u);
+  EXPECT_EQ(reader.entry(0).name, "META-INF/container.xml");
+  EXPECT_EQ(reader.find("mimetype"), nullptr);
+}
+
 TEST_F(ZipReaderTest, StoredEpubAllStored) {
   open_fixture("stored.epub");
   // All entries (except maybe mimetype which is always stored) should be stored

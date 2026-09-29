@@ -642,7 +642,8 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
                                            return;
                                          last_progress_bucket = bucket;
                                          buf.show_loading("Converting...", bucket * progress_step);
-                                       })) {
+                                       },
+                                       nullptr, DrawBuffer::kBufSize)) {
       MR_LOGI("reader", "mrb conversion failed");
       MR_DIAG("reader", "conversion_failed");
       open_ok_ = false;

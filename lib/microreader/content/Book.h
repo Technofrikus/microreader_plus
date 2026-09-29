@@ -34,6 +34,10 @@ class Book {
   // Uses ~15-20KB less RAM than full open().
   bool open_zip_only(const char* path);
 
+  // Opens just enough to read metadata() (see Epub::open_metadata) — for the
+  // book index. Uses almost no heap.
+  EpubError open_metadata(const char* path, uint8_t* work_buf = nullptr, uint8_t* xml_buf = nullptr);
+
   // Release all resources (file handle, parsed EPUB data).
   void close();
 
@@ -61,7 +65,8 @@ class Book {
   // Stream-parse a chapter: paragraphs emitted via callback, ~37KB working memory.
   // id_sink (optional): called for each element with id="" in the XHTML source.
   EpubError load_chapter_streaming(size_t index, ParagraphSink sink, void* sink_ctx, uint8_t* work_buf,
-                                   uint8_t* xml_buf, IdSink id_sink = nullptr, void* id_sink_ctx = nullptr);
+                                   uint8_t* xml_buf, IdSink id_sink = nullptr, void* id_sink_ctx = nullptr,
+                                   size_t xml_buf_size = 0);
 
   // Extract and decode an image from the EPUB (by zip entry index).
   // Returns the 1-bit dithered bitmap. The caller owns the memory.
@@ -94,6 +99,9 @@ class Book {
   }
 
  private:
+  enum class OpenMode { Full, NoCssNcx, Metadata };
+  EpubError open_impl(const char* path, uint8_t* work_buf, uint8_t* xml_buf, OpenMode mode);
+
   StdioZipFile file_;
   Epub epub_;
   bool file_open_ = false;

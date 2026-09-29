@@ -57,6 +57,26 @@ TEST_F(EpubTest, BasicMetadata) {
   EXPECT_EQ(epub.metadata().title, "Basic Test");
 }
 
+// open_metadata() (book index) must read the same metadata as a full open,
+// while keeping only container.xml + the OPF in the ZIP table.
+TEST(EpubOpenMetadata, SameMetadataAsFullOpen) {
+  std::vector<uint8_t> work(ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 1024);
+  std::vector<uint8_t> xml(4096);
+  for (const char* name : {"basic.epub", "multi_chapter.epub", "nested_dirs.epub", "multilingual.epub"}) {
+    StdioZipFile full_file, meta_file;
+    ASSERT_TRUE(full_file.open(fixture(name).c_str())) << name;
+    ASSERT_TRUE(meta_file.open(fixture(name).c_str())) << name;
+    Epub full, meta;
+    ASSERT_EQ(full.open(full_file, work.data(), xml.data()), EpubError::Ok) << name;
+    ASSERT_EQ(meta.open_metadata(meta_file, work.data(), xml.data()), EpubError::Ok) << name;
+    EXPECT_EQ(meta.metadata().title, full.metadata().title) << name;
+    EXPECT_EQ(meta.metadata().author, full.metadata().author) << name;
+    EXPECT_EQ(meta.metadata().language, full.metadata().language) << name;
+    EXPECT_LE(meta.zip().entry_count(), 2u) << name;
+    EXPECT_EQ(meta.chapter_count(), 0u) << name;
+  }
+}
+
 TEST_F(EpubTest, BasicSpine) {
   open_fixture("basic.epub");
   EXPECT_GE(epub.chapter_count(), 1u);
