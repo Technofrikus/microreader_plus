@@ -7,6 +7,11 @@ CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
 # Enable FAT Long File Name support (needed for .epub filenames)
 CONFIG_FATFS_LFN_HEAP=y
 
+# One fixed codepage instead of "dynamic" (which links ~480 KB of CJK tables).
+# With long filenames + UTF-8 API the codepage only affects legacy 8.3 short
+# names; long names (any language) are stored as Unicode and need no table.
+CONFIG_FATFS_CODEPAGE_437=y
+
 # Build a per-file cluster-link map so fseek() stays in RAM instead of
 # re-traversing the FAT chain on every random access. ~29% faster conversion.
 CONFIG_FATFS_USE_FASTSEEK=y
@@ -85,3 +90,15 @@ CONFIG_BT_CTRL_SCAN_DUPL_CACHE_SIZE=20
 # Trade-off: the link may hiccup during internal-flash erase (font/OTA).
 CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y
 
+
+# --- Boot speed ---
+# Skip the bootloader's SHA-256 check of the app image when waking from deep
+# sleep (~500 ms for the ~3 MB image). A cold power-on still verifies it.
+# Bootloader option: only reaches devices flashed over USB / web flasher.
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
+
+# --- Crash diagnostics ---
+# Save a core dump to the "coredump" partition on a panic (flash only, no RAM
+# at runtime). Read it back with esptool + `idf.py coredump-info` / espcoredump.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y

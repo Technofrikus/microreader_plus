@@ -1,3 +1,5 @@
+#include <sys/stat.h>
+
 #include <cstdio>
 
 #include "asset_blob.h"
@@ -67,6 +69,19 @@ static microreader::DeviceConfig load_device_config() {
              : microreader::DeviceConfig::x4();
 }
 
+static bool dir_exists(const char* path) {
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+// Creates `path` unless it already exists. Returns whether it exists afterwards.
+static bool ensure_dir(const char* path) {
+  if (dir_exists(path))
+    return true;
+  mkdir(path, 0775);
+  return dir_exists(path);
+}
+
 static void verify_ota() {
   const esp_partition_t* running = esp_ota_get_running_partition();
   esp_ota_img_states_t ota_state;
@@ -124,6 +139,9 @@ static void verify_wakeup_press() {
   // Short press — go back to sleep; wake again on power button press.
   ESP_LOGI("pwr", "Short press on wakeup (held %lu ms) — returning to sleep", (unsigned long)held_ms);
   esp_sleep_enable_gpio_wakeup_on_hp_periph_powerdown(1ULL << kPowerPin, ESP_GPIO_WAKEUP_GPIO_LOW);
+  // No ROM boot banner on the next wake (~0.4 KB at 115200 baud on UART0).
+  // A cold power-on still prints it.
+  esp_deep_sleep_disable_rom_logging();
   esp_deep_sleep_start();
 #endif
 }
@@ -191,21 +209,18 @@ extern "C" void app_main(void) {
     ESP_LOGI("mem", "after sd_init: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
              (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
-    // Ensure books directory exists.
-    mkdir("/sdcard/books", 0775);
-
-    // Data directory for converted books, settings, reading state.
-    mkdir("/sdcard/.microreader", 0775);
-    mkdir("/sdcard/.microreader/cache", 0775);
-    mkdir("/sdcard/.microreader/data", 0775);
+    // Books directory, and the data directory for converted books, settings
+    // and reading state. Created only when missing: a lookup of an existing
+    // directory is cheaper than mkdir() failing on it.
+    const bool have_books = ensure_dir("/sdcard/books");
+    if (!dir_exists("/sdcard/.microreader/cache") || !dir_exists("/sdcard/.microreader/data")) {
+      ensure_dir("/sdcard/.microreader");
+      ensure_dir("/sdcard/.microreader/cache");
+      ensure_dir("/sdcard/.microreader/data");
+    }
 
     // Register the books directory for the selection screen.
-    struct stat st;
-    if (stat("/sdcard/books", &st) == 0 && S_ISDIR(st.st_mode)) {
-      app.set_books_dir("/sdcard/books");
-    } else {
-      app.set_books_dir("/sdcard");
-    }
+    app.set_books_dir(have_books ? "/sdcard/books" : "/sdcard");
     app.set_data_dir("/sdcard/.microreader");
 #if MR_DIAGNOSTIC_LOG
     MR_DIAG_INIT("/sdcard/.microreader");
@@ -223,12 +238,8 @@ extern "C" void app_main(void) {
   }
 
 #ifndef QEMU_BUILD
-  // Bluetooth remote: started before the font/app allocations so NimBLE's
-  // ~40 KB sits low in the heap instead of splitting the largest block.
-  ble_hid::boot();
+  // The stack itself is started after the first frame (see below).
   app.set_bluetooth(&ble_hid::instance());
-  ESP_LOGI("mem", "after ble boot: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
-           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 #endif
 
   serial_start();
@@ -254,6 +265,15 @@ extern "C" void app_main(void) {
 
   ESP_LOGI("mem", "after app.start: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
            (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+
+#ifndef QEMU_BUILD
+  // Bluetooth remote: its ~190 ms start-up (controller + PHY init) runs after
+  // the first frame is on the glass, so it no longer delays the visible boot.
+  // The X3 blocks during a refresh, so it cannot overlap the refresh itself.
+  ble_hid::boot();
+  ESP_LOGI("mem", "after ble boot: free=%lu largest=%lu", (unsigned long)esp_get_free_heap_size(),
+           (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+#endif
 
   // Discard the power-button press that woke us from deep sleep.
   input.clear_button(microreader::Button::Power);
@@ -458,6 +478,9 @@ extern "C" void app_main(void) {
 
   // Enter deep sleep; wake on power button press (active LOW, GPIO 3).
   esp_sleep_enable_gpio_wakeup_on_hp_periph_powerdown(1ULL << kPowerPin, ESP_GPIO_WAKEUP_GPIO_LOW);
+  // No ROM boot banner on the next wake (~0.4 KB at 115200 baud on UART0).
+  // A cold power-on still prints it.
+  esp_deep_sleep_disable_rom_logging();
   esp_deep_sleep_start();
 #endif  // QEMU_BUILD
 }

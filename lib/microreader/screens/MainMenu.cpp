@@ -19,6 +19,20 @@ namespace fs = std::filesystem;
 
 namespace microreader {
 
+#ifdef ESP_PLATFORM
+// File type of a directory entry. ESP-IDF's FAT readdir() fills d_type, so no
+// stat() is needed: on FAT each stat() searches the directory again, which made
+// listing a folder quadratic in its size. Falls back to stat() for DT_UNKNOWN.
+static unsigned char entry_type(const struct dirent* ent, const std::string& fullpath) {
+  if (ent->d_type != DT_UNKNOWN)
+    return ent->d_type;
+  struct stat st;
+  if (stat(fullpath.c_str(), &st) != 0)
+    return DT_UNKNOWN;
+  return S_ISDIR(st.st_mode) ? DT_DIR : (S_ISREG(st.st_mode) ? DT_REG : DT_UNKNOWN);
+}
+#endif
+
 // Returns a view into `path` pointing at the bare filename without extension.
 static std::string_view filename_sv(const std::string& path) {
   const char* name = path.c_str();
@@ -310,19 +324,17 @@ bool MainMenu::directory_has_epubs_(const std::string& dir_path) const {
     while ((ent = readdir(dir)) != nullptr) {
       if (ent->d_name[0] == '.') continue;
       std::string fullpath = dir_path + "/" + ent->d_name;
-      struct stat st;
-      if (stat(fullpath.c_str(), &st) == 0) {
-        if (S_ISDIR(st.st_mode)) {
-          if (directory_has_epubs_(fullpath)) {
-            closedir(dir);
-            return true;
-          }
-        } else if (S_ISREG(st.st_mode)) {
-          size_t len = std::strlen(ent->d_name);
-          if (len > 5 && strcasecmp(ent->d_name + len - 5, ".epub") == 0) {
-            closedir(dir);
-            return true;
-          }
+      const unsigned char type = entry_type(ent, fullpath);
+      if (type == DT_DIR) {
+        if (directory_has_epubs_(fullpath)) {
+          closedir(dir);
+          return true;
+        }
+      } else if (type == DT_REG) {
+        size_t len = std::strlen(ent->d_name);
+        if (len > 5 && strcasecmp(ent->d_name + len - 5, ".epub") == 0) {
+          closedir(dir);
+          return true;
         }
       }
     }
@@ -449,18 +461,15 @@ void MainMenu::populate_list_() {
     struct dirent* ent;
     while ((ent = readdir(dir)) != nullptr) {
       if (ent->d_name[0] == '.') continue;
-      std::string fullpath = current_dir_ + "/" + ent->d_name;
-      struct stat st;
-      if (stat(fullpath.c_str(), &st) == 0) {
-        if (S_ISDIR(st.st_mode)) {
-          subdirs.push_back(ent->d_name);
-        } else if (S_ISREG(st.st_mode)) {
-          size_t len = std::strlen(ent->d_name);
-          if (len > 5) {
-            const char* ext = ent->d_name + len - 5;
-            if (strcasecmp(ext, ".epub") == 0) {
-              epubs.push_back(ent->d_name);
-            }
+      const unsigned char type = entry_type(ent, current_dir_ + "/" + ent->d_name);
+      if (type == DT_DIR) {
+        subdirs.push_back(ent->d_name);
+      } else if (type == DT_REG) {
+        size_t len = std::strlen(ent->d_name);
+        if (len > 5) {
+          const char* ext = ent->d_name + len - 5;
+          if (strcasecmp(ext, ".epub") == 0) {
+            epubs.push_back(ent->d_name);
           }
         }
       }

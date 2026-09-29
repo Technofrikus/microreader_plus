@@ -410,6 +410,8 @@ class EInkDisplay : public microreader::IDisplay {
   }
 
   bool isScreenOn = false;
+  // X3: POWER_ON was sent by begin() and its BUSY phase may still be running.
+  bool x3_power_on_pending_ = false;
   bool inDeepSleep_ = false;
   bool in_grayscale_mode_ = false;
   bool custom_lut_active_ = false;
@@ -512,6 +514,11 @@ class EInkDisplay : public microreader::IDisplay {
     resetDisplay();
     if (config_.model == microreader::DeviceModel::X3) {
       x3Init_();
+      // Start the panel's ~130 ms power-up now, so it runs while the SD card,
+      // font and book load instead of delaying the first refresh. The next
+      // command waits for it to finish (see x3FinishPowerOn_()).
+      sendCommand(CMD_X3_POWER_ON);
+      x3_power_on_pending_ = true;
     } else {
       // The application always follows begin() with a full-frame refresh that
       // writes both controller RAM planes before activating the panel.  Clearing
@@ -959,6 +966,8 @@ class EInkDisplay : public microreader::IDisplay {
   }
 
   void sendCommand(uint8_t command) {
+    if (x3_power_on_pending_)
+      x3FinishPowerOn_();
     gpio_set_level(EPD_DC, 0);
     gpio_set_level(EPD_CS, 0);
     spi_transaction_t t{};
@@ -1520,7 +1529,17 @@ class EInkDisplay : public microreader::IDisplay {
     x3_loaded_luts_ = set;
   }
 
+  // Completes the early POWER_ON sent by begin(). Normally already done.
+  void x3FinishPowerOn_() {
+    x3_power_on_pending_ = false;
+    if (gpio_get_level(EPD_BUSY) == 0)
+      x3WaitBusy_(" X3_CMD04 (early)");
+    isScreenOn = true;
+  }
+
   void x3PowerOn_() {
+    if (x3_power_on_pending_)
+      x3FinishPowerOn_();
     if (isScreenOn) return;
     sendCommand(CMD_X3_POWER_ON);
     vTaskDelay(pdMS_TO_TICKS(2));

@@ -1370,13 +1370,13 @@ def _write_cpp_header(path, data, name):
         f.write("#include <cstdint>\n\n")
         f.write(f"// Auto-generated from {name}\n")
         f.write(f"// Size: {len(data)} bytes\n\n")
-        f.write(f"alignas(4) static constexpr uint8_t {var_name}[] = {{\n")
+        f.write(f"alignas(4) inline constexpr uint8_t {var_name}[] = {{\n")
         for i in range(0, len(data), 16):
             chunk = data[i : i + 16]
             hex_str = ", ".join(f"0x{b:02X}" for b in chunk)
             f.write(f"    {hex_str},\n")
         f.write("};\n")
-        f.write(f"static constexpr size_t {var_name}_size = sizeof({var_name});\n")
+        f.write(f"inline constexpr size_t {var_name}_size = sizeof({var_name});\n")
 
 
 if __name__ == "__main__":
