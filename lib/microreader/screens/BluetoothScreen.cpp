@@ -23,6 +23,10 @@ const char* state_label(IBluetooth::State s) {
       return "Connected";
     case IBluetooth::State::Pairing:
       return "Searching for remotes...";
+    case IBluetooth::State::Standby:
+      return "Remote not found - press a button to retry";
+    case IBluetooth::State::RestartNeeded:
+      return "Low memory - starts after restart";
   }
   return "";
 }
@@ -54,6 +58,8 @@ void BluetoothScreen::on_start() {
     return;
   }
   subtitle2_.clear();
+  if (state == IBluetooth::State::RestartNeeded)
+    return;  // stack not running: nothing below would work
 
   add_separator();
   if (bt->has_remote()) {
@@ -84,7 +90,13 @@ void BluetoothScreen::on_select(int index) {
     return;
   if (index == idx_toggle_) {
     bt->set_enabled(!bt->enabled());
-  } else if (index == idx_forget_) {
+    restart();
+    request_redraw();
+    return;
+  }
+  // The rest run on the Bluetooth task: redraw as soon as the resulting
+  // state change lands instead of repainting the stale list now.
+  if (index == idx_forget_) {
     bt->forget_remote();
   } else if (index == idx_pair_) {
     if (bt->state() == IBluetooth::State::Pairing)
@@ -96,8 +108,7 @@ void BluetoothScreen::on_select(int index) {
   } else {
     return;
   }
-  restart();
-  request_redraw();
+  since_rebuild_ms_ = kMinRebuildMs;
 }
 
 void BluetoothScreen::on_back() {

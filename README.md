@@ -67,12 +67,25 @@ Turn pages with a Bluetooth LE keyboard, page turner or media remote. Off by def
 | Enter, Play/Pause | Select |
 | Esc | Back |
 
+**Clicker remotes** (the small "TikTok" page turners, e.g. TP-1 and LY-03) work too. They pretend to swipe on a touchscreen:
+
+| Clicker | Action |
+|---|---|
+| Down (swipe up) | Next page / move down |
+| Up (swipe down) | Previous page / move up |
+| Center / tap button | Select |
+| Long press Down / Up | Select / Back |
+| Double click | Ignored |
+
+Clickers wait briefly after each press to rule out a double click, so a page turns about a second after pressing.
+
 Keys work in the reader and in all menus, and follow the **Reader Controls** inversion setting. Hold gestures (long-press to rotate, folder up) stay on the device buttons.
 
 Limitations:
 - **Bluetooth LE only.** The ESP32-C3 has no Bluetooth Classic radio, so Classic-only keyboards and remotes cannot work.
 - The remote **cannot wake the reader** from sleep; press Power. After waking, reconnecting takes a few seconds, so the first key press may be missed.
-- Remotes that present themselves as a mouse are not supported yet.
+- To save battery, the reader stops looking for a remote that is switched off or out of range after about 3 minutes. Press any button on the reader to make it search again.
+- Remotes that move a mouse pointer are not supported.
 - While Bluetooth is on, about 40 KB less memory is free (about 13 KB is always reserved, even when it's off). Large books still convert fine in testing.
 
 <img width="488" height="695" alt="Screenshot_2026-06-15-08-56-09-48_99c04817c0de5652397fc8b56c3b3817" src="https://github.com/user-attachments/assets/3b57a53e-4c3d-48b5-b600-4c290dddcf38" />

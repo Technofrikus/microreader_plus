@@ -14,7 +14,9 @@ struct BluetoothDevice {
 // desktop build passes nullptr and the Settings row is hidden.
 //
 // All methods are called from the UI task. Implementations run the radio on
-// their own task and must make these calls cheap and non-blocking.
+// their own task and must make these calls cheap and non-blocking; commands
+// such as pairing take effect asynchronously and show up through state() and
+// revision().
 class IBluetooth {
  public:
   enum class State : uint8_t {
@@ -24,6 +26,8 @@ class IBluetooth {
     Connecting,  // link being established / secured / discovered
     Connected,   // remote is sending key presses
     Pairing,     // scanning for new remotes (pairing list is live)
+    Standby,     // gave up looking for the remote; resumes on user activity
+    RestartNeeded,  // enabled, but the stack couldn't start (low memory)
   };
 
   virtual ~IBluetooth() = default;
@@ -44,6 +48,10 @@ class IBluetooth {
   virtual int pairing_devices(BluetoothDevice* out, int max) const = 0;
   // Pair with entry `index` of the last pairing_devices() result.
   virtual void pair(int index) = 0;
+
+  // Called on every local button press. Resumes the search for the bonded
+  // remote if it had timed out (Standby); otherwise does nothing.
+  virtual void on_user_activity() = 0;
 
   // Bumped whenever state, remote name or the pairing list changes, so a
   // screen can redraw only when something visible actually changed.

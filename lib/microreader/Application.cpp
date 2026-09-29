@@ -431,6 +431,8 @@ void Application::update(const ButtonState& buttons, uint32_t dt_ms, DrawBuffer&
   // Inactivity / auto-sleep tracking
   if (buttons_.current != 0 || buttons_.pressed_latch != 0) {
     inactivity_ms_ = 0;
+    if (bluetooth_ && buttons_.pressed_latch != 0)
+      bluetooth_->on_user_activity();
   } else {
     inactivity_ms_ += dt_ms;
     if (inactivity_ms_ >= kSleepTimeoutMs) {
