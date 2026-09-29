@@ -30,6 +30,7 @@ const char* TAG = "ble_hid";
 constexpr const char* kNvsNamespace = "microreader";
 constexpr const char* kNvsEnabled = "ble_on";
 constexpr const char* kNvsName = "ble_name";
+constexpr const char* kNvsHandles = "ble_hdl";
 
 constexpr uint16_t kUuidHidService = 0x1812;
 constexpr uint16_t kUuidReport = 0x2A4D;
@@ -49,13 +50,14 @@ constexpr int32_t kSlowReconnectMs = 150000;
 constexpr int32_t kPairScanMs = 60000;
 constexpr int32_t kPairConnectMs = 10000;
 
-// Connection interval floors (1.25 ms units). Setup runs fast so service
-// discovery is quick; once ready the link idles slowly. The reader is the
+// Connection interval floors (1.25 ms units). Setup runs fast so encryption
+// and service discovery take few wall-clock ms; once ready the link idles
+// slowly. Setup lasts well under a second, so its radio cost is negligible. The reader is the
 // central, so it wakes every interval whatever the peripheral latency is: the
 // interval is what its radio budget depends on. A page refresh takes several
 // hundred ms, so up to 200 ms of added key latency isn't noticeable.
-constexpr uint16_t kSetupItvlMin = 24;   // 30 ms
-constexpr uint16_t kSetupItvlMax = 40;   // 50 ms
+constexpr uint16_t kSetupItvlMin = 6;    // 7.5 ms
+constexpr uint16_t kSetupItvlMax = 12;   // 15 ms
 constexpr uint16_t kIdleItvlMin = 120;   // 150 ms
 constexpr uint16_t kIdleItvlMax = 160;   // 200 ms
 constexpr uint16_t kMaxItvl = 400;       // 500 ms: cap on what a remote may ask for
@@ -81,7 +83,18 @@ struct Report {
   uint16_t end_handle;  // last handle of this characteristic's descriptors
   uint16_t cccd_handle;
   uint16_t uuid;
+  bool subscribed;
   microreader::hid::ReportDecoder decoder;
+};
+
+// The bonded remote's subscribed report handles, saved after the first full
+// setup. A bonded HID server keeps its CCCD state across connections, so on
+// reconnect the reader skips discovery and the subscription writes entirely
+// and accepts key presses as soon as the link is encrypted.
+struct HandleCache {
+  ble_addr_t peer;
+  uint8_t count;
+  uint16_t handles[kMaxReports];
 };
 
 enum class Reconnect : uint8_t { None, Fast, Slow };
@@ -187,6 +200,10 @@ class Esp32Bluetooth final : public IBluetooth {
       size_t len = sizeof(name_);
       if (nvs_get_str(nvs, kNvsName, name_, &len) != ESP_OK)
         name_[0] = '\0';
+      len = sizeof(cache_);
+      if (nvs_get_blob(nvs, kNvsHandles, &cache_, &len) != ESP_OK || len != sizeof(cache_) ||
+          cache_.count > kMaxReports)
+        cache_.count = 0;
       nvs_close(nvs);
       enabled_ = on != 0;
     }
@@ -280,6 +297,7 @@ class Esp32Bluetooth final : public IBluetooth {
     if (conn_ != BLE_HS_CONN_HANDLE_NONE)
       ble_gap_terminate(conn_, BLE_ERR_REM_USER_CONN_TERM);
     ble_store_clear();
+    clear_cache_();
     set_name_("");
     if (state_.load() != State::Pairing)
       set_state_(State::NotPaired);
@@ -418,6 +436,7 @@ class Esp32Bluetooth final : public IBluetooth {
       case BLE_GAP_EVENT_CONNECT:
         if (ev->connect.status == 0) {
           s.conn_ = ev->connect.conn_handle;
+          s.connected_us_ = esp_timer_get_time();
           s.report_count_ = 0;
           s.reconnect_phase_ = Reconnect::None;
           s.set_state_(State::Connecting);
@@ -462,6 +481,7 @@ class Esp32Bluetooth final : public IBluetooth {
         ble_gap_conn_desc desc;
         if (ble_gap_conn_find(ev->repeat_pairing.conn_handle, &desc) == 0)
           ble_store_util_delete_peer(&desc.peer_id_addr);
+        s.clear_cache_();
         return BLE_GAP_REPEAT_PAIRING_RETRY;
       }
 
@@ -556,6 +576,15 @@ class Esp32Bluetooth final : public IBluetooth {
       peer_ = desc.peer_id_addr;
       has_bond_ = true;
       set_name_(pending_name_);
+      clear_cache_();  // a fresh bond: its subscriptions don't exist yet
+    }
+    if (cache_.count && ble_addr_cmp(&cache_.peer, &desc.peer_id_addr) == 0) {
+      report_count_ = cache_.count;
+      for (int i = 0; i < report_count_; ++i)
+        reports_[i] = Report{cache_.handles[i], 0, 0, kUuidReport, true, {}};
+      subscribed_ = report_count_;
+      on_ready_(true);
+      return;
     }
     discover_();
   }
@@ -595,7 +624,7 @@ class Esp32Bluetooth final : public IBluetooth {
         return 0;
       const uint16_t uuid = ble_uuid_u16(&chr->uuid.u);
       if ((uuid == kUuidReport || uuid == kUuidBootKeyboardInput) && s.report_count_ < kMaxReports)
-        s.reports_[s.report_count_++] = Report{chr->val_handle, 0, 0, uuid, {}};
+        s.reports_[s.report_count_++] = Report{chr->val_handle, 0, 0, uuid, false, {}};
     } else if (err->status == BLE_HS_EDONE && s.report_count_) {
       if (s.reports_[s.report_count_ - 1].end_handle == 0)
         s.reports_[s.report_count_ - 1].end_handle = s.svc_end_;
@@ -651,19 +680,22 @@ class Esp32Bluetooth final : public IBluetooth {
                            reinterpret_cast<void*>(static_cast<intptr_t>(i)));
       return;
     }
-    on_ready_();
+    on_ready_(false);
   }
 
   static int on_subscribed_(uint16_t, const ble_gatt_error* err, ble_gatt_attr*, void* arg) {
-    if (err->status == 0)
+    const int i = static_cast<int>(reinterpret_cast<intptr_t>(arg));
+    if (err->status == 0) {
       ++self().subscribed_;
-    else
+      self().reports_[i].subscribed = true;
+    } else {
       ESP_LOGW(TAG, "subscribe failed: %d", err->status);
-    self().subscribe_from_(static_cast<int>(reinterpret_cast<intptr_t>(arg)) + 1);
+    }
+    self().subscribe_from_(i + 1);
     return 0;
   }
 
-  void on_ready_() {
+  void on_ready_(bool cached) {
     char name[sizeof(name_)];
     portENTER_CRITICAL(&lock_);
     std::memcpy(name, name_, sizeof(name));
@@ -673,12 +705,15 @@ class Esp32Bluetooth final : public IBluetooth {
       swap |= std::strcmp(name, n) == 0;
     for (int i = 0; i < report_count_; ++i)
       reports_[i].decoder.set_swap_mouse_buttons(swap);
-    ESP_LOGI(TAG, "remote ready: '%s', %d of %d reports subscribed%s", name, subscribed_, report_count_,
-             swap ? ", long presses swapped" : "");
+    ESP_LOGI(TAG, "remote ready in %d ms%s: '%s', %d of %d reports subscribed%s",
+             static_cast<int>((esp_timer_get_time() - connected_us_) / 1000), cached ? " (cached handles)" : "",
+             name, subscribed_, report_count_, swap ? ", long presses swapped" : "");
     if (subscribed_ == 0) {
       fail_setup_("nothing to subscribe", 0);
       return;
     }
+    if (!cached)
+      save_cache_();
     // Relax the link now that setup is done: the remote can still answer on
     // any event, so a key press arrives within one interval (≤200 ms).
     ble_gap_upd_params p{};
@@ -701,8 +736,15 @@ class Esp32Bluetooth final : public IBluetooth {
     for (int i = 0; i < report_count_; ++i)
       if (reports_[i].val_handle == handle)
         r = &reports_[i];
-    if (!r)
+    if (!r) {
+      // Notifications on a handle the cache doesn't know: the remote's GATT
+      // layout changed (firmware update). Discover it again next time.
+      if (cache_.count && state_.load() == State::Connected) {
+        ESP_LOGW(TAG, "notify on unknown handle 0x%04x, dropping handle cache", handle);
+        clear_cache_();
+      }
       return;
+    }
 
     uint8_t data[16];
     const uint16_t len = OS_MBUF_PKTLEN(om) < sizeof(data) ? OS_MBUF_PKTLEN(om) : sizeof(data);
@@ -767,6 +809,35 @@ class Esp32Bluetooth final : public IBluetooth {
     bump_();
   }
 
+  void save_cache_() {
+    HandleCache c{};
+    c.peer = peer_;
+    for (int i = 0; i < report_count_; ++i)
+      if (reports_[i].subscribed)
+        c.handles[c.count++] = reports_[i].val_handle;
+    if (c.count == cache_.count && std::memcmp(&c, &cache_, sizeof(c)) == 0)
+      return;
+    cache_ = c;
+    nvs_handle_t nvs;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_set_blob(nvs, kNvsHandles, &cache_, sizeof(cache_));
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+  }
+
+  void clear_cache_() {
+    if (!cache_.count)
+      return;
+    cache_ = HandleCache{};
+    nvs_handle_t nvs;
+    if (nvs_open(kNvsNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
+      nvs_erase_key(nvs, kNvsHandles);
+      nvs_commit(nvs);
+      nvs_close(nvs);
+    }
+  }
+
   void save_enabled_() {
     nvs_handle_t nvs;
     if (nvs_open(kNvsNamespace, NVS_READWRITE, &nvs) == ESP_OK) {
@@ -804,6 +875,8 @@ class Esp32Bluetooth final : public IBluetooth {
   uint8_t own_addr_type_ = BLE_OWN_ADDR_PUBLIC;
   ble_addr_t peer_{};
   char pending_name_[sizeof(BluetoothDevice::name)] = {};
+  HandleCache cache_{};  // loaded in boot() before the host task starts
+  int64_t connected_us_ = 0;
 
   char name_[sizeof(BluetoothDevice::name)] = {};
   mutable char ui_name_[sizeof(BluetoothDevice::name)] = {};  // UI-side copy of name_

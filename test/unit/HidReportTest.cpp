@@ -211,6 +211,22 @@ TEST(HidReport, HeldBackAutoRepeatFiresOnce) {
   EXPECT_EQ(d.feed(back, 3, t + 1000).pressed, hid::kBack);
 }
 
+TEST(HidReport, HeldSelectWithSlowFirstRepeatFiresOnce) {
+  // TP-1 long press: first repeat ~600 ms after the press, then every ~200 ms.
+  hid::ReportDecoder d;
+  const uint8_t select[3] = {0x01, 0, 0};
+  const uint8_t release[3] = {};
+  uint8_t count = 0;
+  uint32_t t = 1000;
+  count += d.feed(select, 3, t).pressed == hid::kSelect;
+  d.feed(release, 3, t + 10);
+  for (t += 600; t < 3000; t += 200) {
+    count += d.feed(select, 3, t).pressed == hid::kSelect;
+    d.feed(release, 3, t + 10);
+  }
+  EXPECT_EQ(count, 1);
+}
+
 TEST(HidReport, FastPageTurnsAreNotDebounced) {
   hid::ReportDecoder d;
   const uint8_t next[8] = {0, 0, 0x4F, 0, 0, 0, 0, 0};

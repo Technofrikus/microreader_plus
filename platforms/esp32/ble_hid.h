@@ -19,6 +19,8 @@
 // main loop does no Bluetooth work at all.
 //
 // Radio budget:
+//   setup           — conn interval 7.5–15 ms; on reconnect only encryption
+//                     (report handles are cached in NVS), so this lasts ~75 ms
 //   connected       — conn interval 150–200 ms, peripheral latency 4; remote
 //                     requests for shorter intervals are clamped
 //   reconnecting    — 10% scan duty for 30 s, then ~5% for 150 s, then

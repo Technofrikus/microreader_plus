@@ -140,7 +140,8 @@ inline uint8_t swipe_action(int dx, int dy) {
 // Some clickers auto-repeat a held button as press/release pairs. Select or
 // Back pressed again this soon after it was last held is such a repeat — a
 // second Back would pop another screen. Page turns are not held back.
-constexpr uint32_t kRepeatGapMs = 500;
+// TP-1 sends its first repeat ~600 ms after the press, then every ~200 ms.
+constexpr uint32_t kRepeatGapMs = 800;
 constexpr uint8_t kNoRepeat = kSelect | kBack;
 
 // Per-report state: turns a stream of notifications into newly pressed
