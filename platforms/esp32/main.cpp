@@ -407,7 +407,8 @@ extern "C" void app_main(void) {
           microreader::EpubError err = book.open(cmd_path, work_buf, xml_buf);
           long open_ms = (long)((esp_timer_get_time() - t_open) / 1000);
           ESP_LOGI("bench", "open() returned err %d", (int)err);
-          microreader::benchmark_epub_conversion(book, "/sdcard/bench_tmp.mrb", open_ms, work_buf, xml_buf);
+          microreader::benchmark_epub_conversion(book, "/sdcard/bench_tmp.mrb", open_ms, work_buf, xml_buf,
+                                                 microreader::DrawBuffer::kBufSize);
           buf.reset_after_scratch();
           break;
         }

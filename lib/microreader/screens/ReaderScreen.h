@@ -149,6 +149,7 @@ class ReaderScreen final : public IScreen {
   PagePosition page_pos_;
   PageContent page_;
   bool open_ok_ = false;
+  const char* open_error_ = "Failed to open book";  // shown when open_ok_ is false
   bool buf_was_touched_ = false;
   bool cache_only_ = false;
 

@@ -590,6 +590,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     return;
   }
   buf_was_touched_ = false;
+  open_error_ = "Failed to open book";
 
   if (!mrb_ok) {
     // Upload the current frame before scratch buffer use so the display
@@ -608,6 +609,12 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     buf_was_touched_ = true;
     buf.sync_bw_ram();
     buf.show_loading("Converting...", 0);
+    // On an X3 the full-frame upload above leaves the driver's ~52 KB mirror
+    // buffer allocated. Opening and converting the book need that heap (with
+    // Bluetooth on it was the difference between converting and aborting), and
+    // the progress updates only use the small region path. Convert All does
+    // the same; the buffer is reallocated on the next full-frame upload.
+    buf.release_display_memory();
 
 #ifdef ESP_PLATFORM
     int64_t open_start = esp_timer_get_time();
@@ -646,6 +653,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
                                        nullptr, DrawBuffer::kBufSize)) {
       MR_LOGI("reader", "mrb conversion failed");
       MR_DIAG("reader", "conversion_failed");
+      open_error_ = conversion_read_error() ? "SD card read error" : "Failed to open book";
       open_ok_ = false;
       goto show_error;
     }
@@ -746,7 +754,7 @@ show_error:
   MR_DIAG("reader", "failed");
   if (buf_was_touched_) {
     buf.fill(true);
-    buf.draw_text(kPaddingLeft, kPaddingTop, "Failed to open book", true, kScale);
+    buf.draw_text(kPaddingLeft, kPaddingTop, open_error_, true, kScale);
   }
 }
 
