@@ -1,5 +1,6 @@
 #include "SleepImageScreen.h"
 
+#include <type_traits>
 #include <string>
 
 #include "../Application.h"
@@ -58,8 +59,7 @@ void SleepImageScreen::on_start() {
 }
 
 void SleepImageScreen::stop() {
-  images_.clear();
-  images_.shrink_to_fit();
+  std::decay_t<decltype(images_)>().swap(images_);
   free_items_storage();
 }
 

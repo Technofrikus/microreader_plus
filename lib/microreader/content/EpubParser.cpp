@@ -1,5 +1,6 @@
 #include "EpubParser.h"
 
+#include <type_traits>
 #include <algorithm>
 #include <cctype>
 #include <memory>
@@ -619,8 +620,8 @@ EpubError Epub::parse_opf(IZipFile& file, const std::string& opf_path, uint8_t* 
       ncx_file_idx = -1;
   }
 
-  manifest.clear();
-  manifest.shrink_to_fit();
+  // Swap, not clear() + shrink_to_fit(): the latter did not release the buffer on the device.
+  std::decay_t<decltype(manifest)>().swap(manifest);
 
   if (!parse_css_ncx)
     return EpubError::Ok;
@@ -644,11 +645,9 @@ EpubError Epub::parse_opf(IZipFile& file, const std::string& opf_path, uint8_t* 
 
 void Epub::close() {
   zip_ = ZipReader{};
-  root_dir_.clear();
-  root_dir_.shrink_to_fit();
+  std::string().swap(root_dir_);
   metadata_ = EpubMetadata{};
-  spine_.clear();
-  spine_.shrink_to_fit();
+  std::decay_t<decltype(spine_)>().swap(spine_);
   toc_ = TableOfContents{};
   css_cache_.clear();
   cover_idx_ = -1;
