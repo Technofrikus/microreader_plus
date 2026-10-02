@@ -517,6 +517,38 @@ def gen_big_css():
 
 
 # ---------------------------------------------------------------------------
+# huge_head.epub — a comment in <head> far larger than the XML reader buffer
+# (the stylesheet head scan must skip it, not loop), then a linked stylesheet.
+# ---------------------------------------------------------------------------
+def gen_huge_head():
+    opf_path = "OEBPS/content.opf"
+    ch1 = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Huge</title><!-- {"x" * 40000} --><link rel="stylesheet" type="text/css" href="small.css"/></head>
+<body>
+<p>indented</p>
+</body>
+</html>"""
+    opf = make_opf(
+        title="Huge Head",
+        manifest_items=[
+            ("ch1", "ch1.xhtml", "application/xhtml+xml"),
+            ("small", "small.css", "text/css"),
+        ],
+        spine_idrefs=["ch1"],
+    )
+    files = [
+        ("META-INF/container.xml", CONTAINER_XML.format(opf_path=opf_path), False),
+        (opf_path, opf, True),
+        ("OEBPS/small.css", "p { text-indent: 2em; }", True),
+        ("OEBPS/ch1.xhtml", ch1, True),
+    ]
+    write_epub("huge_head.epub", files, opf_path)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
@@ -532,4 +564,5 @@ if __name__ == "__main__":
     gen_large_chapter()
     gen_multilingual()
     gen_big_css()
+    gen_huge_head()
     print("Done!")

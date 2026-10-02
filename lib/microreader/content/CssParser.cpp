@@ -19,29 +19,35 @@ namespace microreader {
 // Parse a CSS length value (already lowercased) to pixels.
 // For em/rem, uses glyph_width. For %, uses ref_width.
 // Returns std::nullopt if the value can't be parsed.
-static std::optional<int> parse_css_length(const std::string& value, uint16_t glyph_width, uint16_t ref_width) {
+static bool ends_with(std::string_view v, std::string_view suffix) {
+  return v.size() >= suffix.size() && v.compare(v.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// `value` must be NUL-terminated at value.data()[value.size()] (strtol/strtof).
+static std::optional<int> parse_css_length(std::string_view value, uint16_t glyph_width, uint16_t ref_width) {
   if (value == "0" || value == "auto")
     return 0;
   char* end = nullptr;
-  if (value.size() > 2 && value.substr(value.size() - 2) == "px") {
-    long v = std::strtol(value.c_str(), &end, 10);
-    if (end != value.c_str())
+  const char* begin = value.data();
+  if (value.size() > 2 && ends_with(value, "px")) {
+    long v = std::strtol(begin, &end, 10);
+    if (end != begin)
       return static_cast<int>(v);
-  } else if (value.size() > 2 && value.substr(value.size() - 2) == "pt") {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+  } else if (value.size() > 2 && ends_with(value, "pt")) {
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * 4 / 3 + 0.5f);
-  } else if (value.size() > 3 && value.substr(value.size() - 3) == "rem") {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+  } else if (value.size() > 3 && ends_with(value, "rem")) {
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * glyph_width + 0.5f);
-  } else if (value.size() > 2 && value.substr(value.size() - 2) == "em") {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+  } else if (value.size() > 2 && ends_with(value, "em")) {
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * glyph_width + 0.5f);
   } else if (value.size() > 1 && value.back() == '%') {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * ref_width / 100 + 0.5f);
   }
   return std::nullopt;
@@ -56,42 +62,54 @@ struct FourSides {
   int top = 0, right = 0, bottom = 0, left = 0;
 };
 
-static std::vector<std::string> split_css_values(const std::string& value) {
-  std::vector<std::string> parts;
+struct CssParts {
+  std::string_view v[4];
+  size_t count = 0;  // parts beyond the fourth are ignored (4+ parts use the first four)
+};
+
+// Splits on whitespace, NUL-terminating each part in place (so strtof can be
+// used on it). `value` must be mutable and NUL-terminated at value[size].
+static CssParts split_css_values(char* value, size_t size) {
+  CssParts parts;
   size_t p = 0;
-  while (p < value.size()) {
-    while (p < value.size() && std::isspace(static_cast<unsigned char>(value[p])))
+  while (p < size) {
+    while (p < size && std::isspace(static_cast<unsigned char>(value[p])))
       ++p;
     size_t start = p;
-    while (p < value.size() && !std::isspace(static_cast<unsigned char>(value[p])))
+    while (p < size && !std::isspace(static_cast<unsigned char>(value[p])))
       ++p;
-    if (p > start)
-      parts.push_back(value.substr(start, p - start));
+    if (p > start) {
+      if (parts.count < 4) {
+        parts.v[parts.count] = std::string_view(value + start, p - start);
+        ++parts.count;
+      }
+      if (p < size)
+        value[p++] = '\0';
+    }
   }
   return parts;
 }
 
-static FourSides parse_shorthand_sides(const std::vector<std::string>& parts, uint16_t glyph_width,
-                                       uint16_t ref_width) {
-  auto to_px = [&](const std::string& v) -> int {
+static FourSides parse_shorthand_sides(const CssParts& parts, uint16_t glyph_width, uint16_t ref_width) {
+  auto to_px = [&](std::string_view v) -> int {
     auto len = parse_css_length(v, glyph_width, ref_width);
     return len.value_or(0);
   };
   FourSides s;
-  if (parts.size() == 1) {
-    s.top = s.right = s.bottom = s.left = to_px(parts[0]);
-  } else if (parts.size() == 2) {
-    s.top = s.bottom = to_px(parts[0]);
-    s.left = s.right = to_px(parts[1]);
-  } else if (parts.size() == 3) {
-    s.top = to_px(parts[0]);
-    s.left = s.right = to_px(parts[1]);
-    s.bottom = to_px(parts[2]);
-  } else if (parts.size() >= 4) {
-    s.top = to_px(parts[0]);
-    s.right = to_px(parts[1]);
-    s.bottom = to_px(parts[2]);
-    s.left = to_px(parts[3]);
+  if (parts.count == 1) {
+    s.top = s.right = s.bottom = s.left = to_px(parts.v[0]);
+  } else if (parts.count == 2) {
+    s.top = s.bottom = to_px(parts.v[0]);
+    s.left = s.right = to_px(parts.v[1]);
+  } else if (parts.count == 3) {
+    s.top = to_px(parts.v[0]);
+    s.left = s.right = to_px(parts.v[1]);
+    s.bottom = to_px(parts.v[2]);
+  } else if (parts.count >= 4) {
+    s.top = to_px(parts.v[0]);
+    s.right = to_px(parts.v[1]);
+    s.bottom = to_px(parts.v[2]);
+    s.left = to_px(parts.v[3]);
   }
   return s;
 }
@@ -114,32 +132,38 @@ CssRule CssRule::parse(const char* decl, size_t length, const CssConfig& config)
 }
 
 void CssRule::apply(CssRule& rule, const char* decl, size_t length, const CssConfig& config) {
-  std::string s(decl, length);
-  // Lowercase
-  for (auto& c : s)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-  const size_t semi = s.size();
-  const size_t colon = s.find(':');
-  if (colon == std::string::npos)
+  // No heap: lowercase into a fixed stack buffer. No supported value is
+  // anywhere near this long, so longer declarations are ignored.
+  constexpr size_t kMaxDecl = 512;
+  if (length >= kMaxDecl)
     return;
-  // Extract key and value
+  char buf[kMaxDecl];
+  for (size_t i = 0; i < length; ++i)
+    buf[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(decl[i])));
+  buf[length] = '\0';
+
+  const size_t semi = length;
+  const char* colon_p = static_cast<const char*>(std::memchr(buf, ':', length));
+  if (!colon_p)
+    return;
+  const size_t colon = static_cast<size_t>(colon_p - buf);
   size_t key_start = 0;
-  while (key_start < colon && std::isspace(static_cast<unsigned char>(s[key_start])))
+  while (key_start < colon && std::isspace(static_cast<unsigned char>(buf[key_start])))
     ++key_start;
   size_t key_end = colon;
-  while (key_end > key_start && std::isspace(static_cast<unsigned char>(s[key_end - 1])))
+  while (key_end > key_start && std::isspace(static_cast<unsigned char>(buf[key_end - 1])))
     --key_end;
 
   size_t val_start = colon + 1;
-  while (val_start < semi && std::isspace(static_cast<unsigned char>(s[val_start])))
+  while (val_start < semi && std::isspace(static_cast<unsigned char>(buf[val_start])))
     ++val_start;
   size_t val_end = semi;
-  while (val_end > val_start && std::isspace(static_cast<unsigned char>(s[val_end - 1])))
+  while (val_end > val_start && std::isspace(static_cast<unsigned char>(buf[val_end - 1])))
     --val_end;
 
-  std::string key = s.substr(key_start, key_end - key_start);
-  std::string value = s.substr(val_start, val_end - val_start);
+  const std::string_view key(buf + key_start, key_end - key_start);
+  buf[val_end] = '\0';  // value is NUL-terminated for strtof/strtol
+  const std::string_view value(buf + val_start, val_end - val_start);
 
   if (key == "text-align") {
     if (value == "start" || value == "left")
@@ -181,13 +205,13 @@ void CssRule::apply(CssRule& rule, const char* decl, size_t length, const CssCon
     if (len.has_value())
       rule.set_margin_bottom(static_cast<uint16_t>(std::max(0, *len)));
   } else if (key == "margin") {
-    auto parts = split_css_values(value);
+    auto parts = split_css_values(buf + val_start, value.size());
     auto s = parse_shorthand_sides(parts, config.glyph_width, config.content_width);
     if (s.left > 0)
       rule.set_margin_left(static_cast<uint16_t>(s.left));
     if (s.right > 0)
       rule.set_margin_right(static_cast<uint16_t>(s.right));
-    if (!parts.empty()) {
+    if (parts.count > 0) {
       rule.set_margin_top(static_cast<uint16_t>(std::max(0, s.top)));
       rule.set_margin_bottom(static_cast<uint16_t>(std::max(0, s.bottom)));
     }
@@ -216,9 +240,9 @@ void CssRule::apply(CssRule& rule, const char* decl, size_t length, const CssCon
       rule.set_margin_bottom(std::max(rule.margin_bottom_opt().value_or(0), val));
     }
   } else if (key == "padding") {
-    auto parts = split_css_values(value);
+    auto parts = split_css_values(buf + val_start, value.size());
     auto s = parse_shorthand_sides(parts, config.glyph_width, config.content_width);
-    if (!parts.empty()) {
+    if (parts.count > 0) {
       uint16_t lv = s.left > 0 ? static_cast<uint16_t>(s.left) : 0;
       rule.set_margin_left(rule.has_margin_left_ ? rule.margin_left + lv : lv);
     }
@@ -245,14 +269,14 @@ void CssRule::apply(CssRule& rule, const char* decl, size_t length, const CssCon
     // e.g. "1px solid black" — any non-none value means a visible border
     if (value == "none" || value == "0" || value == "hidden")
       rule.set_border_top(false);
-    else if (value.find("solid") != std::string::npos || value.find("dashed") != std::string::npos ||
-             value.find("dotted") != std::string::npos || value.find("double") != std::string::npos)
+    else if (value.find("solid") != std::string_view::npos || value.find("dashed") != std::string_view::npos ||
+             value.find("dotted") != std::string_view::npos || value.find("double") != std::string_view::npos)
       rule.set_border_top(true);
   } else if (key == "width") {
     if (!value.empty() && value.back() == '%') {
       char* end = nullptr;
-      float v = std::strtof(value.c_str(), &end);
-      if (end != value.c_str()) {
+      float v = std::strtof(value.data(), &end);
+      if (end != value.data()) {
         int pct = static_cast<int>(v + 0.5f);
         if (pct < 0) pct = 0;
         if (pct > 100) pct = 100;
@@ -309,21 +333,21 @@ void CssRule::apply(CssRule& rule, const char* decl, size_t length, const CssCon
     if (value == "normal" || value == "inherit") {
       rule.set_line_height_pct(100);
     } else if (value.size() > 1 && value.back() == '%') {
-      float pct = std::strtof(value.c_str(), &end);
-      if (end != value.c_str()) {
+      float pct = std::strtof(value.data(), &end);
+      if (end != value.data()) {
         uint8_t val = static_cast<uint8_t>(std::clamp(pct / kNormFactor, 70.0f, 200.0f));
         rule.set_line_height_pct(val);
       }
-    } else if (value.size() > 2 && value.substr(value.size() - 2) == "em") {
-      float em = std::strtof(value.c_str(), &end);
-      if (end != value.c_str()) {
+    } else if (value.size() > 2 && ends_with(value, "em")) {
+      float em = std::strtof(value.data(), &end);
+      if (end != value.data()) {
         uint8_t val = static_cast<uint8_t>(std::clamp(em * 100.0f / kNormFactor, 70.0f, 200.0f));
         rule.set_line_height_pct(val);
       }
     } else {
       // Unitless number (e.g. "1.5")
-      float num = std::strtof(value.c_str(), &end);
-      if (end != value.c_str()) {
+      float num = std::strtof(value.data(), &end);
+      if (end != value.data()) {
         uint8_t val = static_cast<uint8_t>(std::clamp(num * 100.0f / kNormFactor, 70.0f, 200.0f));
         rule.set_line_height_pct(val);
       }
@@ -346,29 +370,29 @@ void CssRule::apply(CssRule& rule, const char* decl, size_t length, const CssCon
       // Try parsing numeric values: percentages (90%) and em (0.9em)
       char* end = nullptr;
       if (value.size() > 1 && value.back() == '%') {
-        float pct = std::strtof(value.c_str(), &end);
-        if (end != value.c_str()) {
+        float pct = std::strtof(value.data(), &end);
+        if (end != value.data()) {
           rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(pct, 30.0f, 250.0f)));
         }
-      } else if (value.size() > 2 && value.substr(value.size() - 2) == "em") {
-        float em = std::strtof(value.c_str(), &end);
-        if (end != value.c_str()) {
+      } else if (value.size() > 2 && ends_with(value, "em")) {
+        float em = std::strtof(value.data(), &end);
+        if (end != value.data()) {
           rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(em * 100.0f, 30.0f, 250.0f)));
         }
-      } else if (value.size() > 3 && value.substr(value.size() - 3) == "rem") {
-        float rem = std::strtof(value.c_str(), &end);
-        if (end != value.c_str()) {
+      } else if (value.size() > 3 && ends_with(value, "rem")) {
+        float rem = std::strtof(value.data(), &end);
+        if (end != value.data()) {
           rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(rem * 100.0f, 30.0f, 250.0f)));
         }
-      } else if (value.size() > 2 && value.substr(value.size() - 2) == "pt") {
-        float pt = std::strtof(value.c_str(), &end);
-        if (end != value.c_str()) {
+      } else if (value.size() > 2 && ends_with(value, "pt")) {
+        float pt = std::strtof(value.data(), &end);
+        if (end != value.data()) {
           float ratio = pt / 12.0f;
           rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(ratio * 100.0f, 30.0f, 250.0f)));
         }
-      } else if (value.size() > 2 && value.substr(value.size() - 2) == "px") {
-        float px = std::strtof(value.c_str(), &end);
-        if (end != value.c_str()) {
+      } else if (value.size() > 2 && ends_with(value, "px")) {
+        float px = std::strtof(value.data(), &end);
+        if (end != value.data()) {
           float ratio = px / 24.0f;
           rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(ratio * 100.0f, 30.0f, 250.0f)));
         }

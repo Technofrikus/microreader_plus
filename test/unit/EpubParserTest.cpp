@@ -1888,3 +1888,61 @@ TEST_F(EpubTest, StylesheetStaysCachedAcrossChapters) {
   epub.release_css();
   EXPECT_EQ(epub.css_cache().entry_count(), 0u);
 }
+
+// A tag/comment in <head> larger than the XML reader buffer must be skipped by
+// the stylesheet head scan (it used to spin forever), and the linked sheet after
+// it must still apply.
+TEST_F(EpubTest, HugeHeadCommentDoesNotHangStylesheetScan) {
+  open_fixture("huge_head.epub");
+  std::vector<uint8_t> work(ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048);
+  std::vector<uint8_t> xml(Epub::kChapterBufSize);
+  auto ch = stream_chapter(file, epub, 0, work, xml);
+  ASSERT_EQ(ch.size(), 1u);
+  EXPECT_EQ(ch[0].text.indent.value_or(0), 24);
+}
+
+// Sheets handed out by CssCache must stay valid when a later load evicts a
+// sheet in front of them (entries used to shift down, so the pointer then
+// referred to the wrong sheet).
+TEST(CssCachePointers, SurviveEvictionOfEarlierSheet) {
+  CssCache cache;
+  cache.set_arena(nullptr);
+  CssConfig config;
+  std::vector<char> scratch(CssStylesheet::Parser::kScratchSize);
+  auto filler = [&](const std::string& css) {
+    return [&scratch, css](CssStylesheet& sheet) {
+      CssStylesheet::Parser parser(sheet, scratch.data());
+      parser.feed(css.data(), css.size());
+      parser.finish();
+      return true;
+    };
+  };
+  auto big = [](const char* prefix) {
+    std::string s;
+    for (int i = 0; i < 800; ++i)
+      s += std::string(".") + prefix + std::to_string(i) + "{font-weight:bold}\n";
+    return s;
+  };
+  const std::string big_x = big("x"), big_b = big("b"), small_a = ".a0{font-style:italic}";
+
+  cache.begin_chapter();
+  const CssStylesheet* x = cache.load(1, config, false, CssCache::kArenaSize, false, filler(big_x));
+  ASSERT_NE(x, nullptr);
+  ASSERT_FALSE(x->overflow());
+  cache.begin_chapter();
+  ASSERT_NE(cache.load(2, config, false, CssCache::kArenaSize, false, filler(small_a)), nullptr);
+  cache.begin_chapter();
+  const CssStylesheet* a = cache.find(2);
+  ASSERT_NE(a, nullptr);
+  // B only fits once X is gone.
+  ASSERT_GT(big_x.size() + big_b.size(), 0u);
+  const CssStylesheet* b = cache.load(3, config, false, CssCache::kArenaSize, false, filler(big_b));
+  ASSERT_NE(b, nullptr);
+  EXPECT_EQ(cache.find(1), nullptr) << "X should have been evicted";
+  EXPECT_EQ(cache.entry_count(), 2u);
+  EXPECT_TRUE(a->get("p", nullptr, "a0").italic_opt().value_or(false));
+  EXPECT_FALSE(a->get("p", nullptr, "b5").bold_opt().value_or(false));
+  EXPECT_TRUE(b->get("p", nullptr, "b5").bold_opt().value_or(false));
+  EXPECT_EQ(cache.find(2), a);
+  EXPECT_EQ(cache.find(3), b);
+}

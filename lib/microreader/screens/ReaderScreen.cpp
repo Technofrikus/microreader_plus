@@ -654,6 +654,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
       MR_LOGI("reader", "mrb conversion failed");
       MR_DIAG("reader", "conversion_failed");
       open_error_ = conversion_read_error() ? "SD card read error" : "Failed to open book";
+      std::remove(mrb_path_.c_str());  // don't leave a half-written MRB behind (Convert All does the same)
       open_ok_ = false;
       goto show_error;
     }
@@ -814,12 +815,11 @@ void ReaderScreen::stop() {
   if (open_ok_)
     save_position_();
   page_ = PageContent{};
-  mrb_path_.clear();
-  mrb_path_.shrink_to_fit();
-  pos_path_.clear();
-  pos_path_.shrink_to_fit();
-  book_key_.clear();
-  book_key_.shrink_to_fit();
+  layout_engine_ = TextLayout{};
+  // Swap with empty strings: shrink_to_fit() did not release the buffers on the device.
+  std::string().swap(mrb_path_);
+  std::string().swap(pos_path_);
+  std::string().swap(book_key_);
   nav_history_.clear();
   reset_eta_();
   open_ok_ = false;

@@ -63,10 +63,16 @@ class CssCache {
   const CssStylesheet* load(uint32_t key, const CssConfig& config, bool chapter_only, size_t limit,
                             bool keep_partial, Fill&& fill) {
     for (;;) {
-      if (count_ == kMaxEntries + 1 && !evict_one())
-        return nullptr;
+      size_t slot = 0;
+      while (slot < kMaxEntries + 1 && entries_[slot].used)
+        ++slot;
+      if (slot == kMaxEntries + 1) {
+        if (!evict_one())
+          return nullptr;
+        continue;
+      }
       const size_t start = end_offset();
-      Entry& e = entries_[count_];
+      Entry& e = entries_[slot];
       e.key = key;
       e.offset = static_cast<uint32_t>(start);
       e.last_used = gen_;
@@ -76,7 +82,8 @@ class CssCache {
       if (!fill(e.sheet))
         return nullptr;
       if (!e.sheet.overflow() || keep_partial) {
-        ++count_;
+        e.used = true;
+        order_[count_++] = static_cast<uint8_t>(slot);
         peak_ = std::max(peak_, end_offset());
         return &e.sheet;
       }
@@ -110,10 +117,16 @@ class CssCache {
     uint32_t offset = 0;
     uint32_t last_used = 0;
     bool chapter_only = false;
+    bool used = false;
     CssStylesheet sheet;
   };
 
+  // Entries live in fixed slots and never move, so the CssStylesheet pointers
+  // handed out by find()/load() stay valid while other sheets are loaded or
+  // evicted (remove() only moves arena bytes and rebases sheets). order_ lists
+  // the used slots in arena order.
   Entry entries_[kMaxEntries + 1];  // + the inline sheet
+  uint8_t order_[kMaxEntries + 1] = {};
   size_t count_ = 0;
   uint8_t* arena_ = nullptr;
   std::vector<uint8_t> owned_arena_;
@@ -124,11 +137,14 @@ class CssCache {
   size_t too_big_count_ = 0;
 
   size_t end_offset() const {
-    return count_ == 0 ? 0 : entries_[count_ - 1].offset + entries_[count_ - 1].sheet.size_bytes();
+    if (count_ == 0)
+      return 0;
+    const Entry& last = entries_[order_[count_ - 1]];
+    return last.offset + last.sheet.size_bytes();
   }
   // Drops the least recently used sheet this chapter does not use; false if none.
   bool evict_one();
-  // Removes entry i and moves the sheets after it down.
+  // Removes the i-th sheet in arena order and moves the sheets after it down.
   void remove(size_t i);
 };
 

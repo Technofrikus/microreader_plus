@@ -491,7 +491,8 @@ ZipError ZipEntryInput::open(IZipFile& file, const ZipEntry& entry, uint8_t* wor
   done_ = false;
   error_ = false;
   out_avail_ = 0;
-  check_crc_ = entry.has_crc;
+  has_crc_ = entry.has_crc;
+  check_crc_ = false;
   expected_crc_ = entry.crc32;
   expected_size_ = entry.uncompressed_size;
   crc_ = 0;
@@ -563,6 +564,7 @@ ZipError ZipReader::verify_crc(IZipFile& file, const ZipEntry& entry, uint8_t* w
   ZipError err = in.open(file, entry, work_buf, work_buf_size);
   if (err != ZipError::Ok)
     return err;
+  in.enable_crc_check();
   return in.finish();
 }
 

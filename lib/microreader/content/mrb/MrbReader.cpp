@@ -19,6 +19,13 @@ bool MrbReader::open(const char* path) {
     close();
     return false;
   }
+  // An interrupted conversion leaves magic and version but zeroed offsets
+  // (finish() fills them last). Reading the metadata from offset 0 would take the
+  // header bytes for a string length and abort on the allocation.
+  if (header_.meta_offset < sizeof(header_)) {
+    close();
+    return false;
+  }
 
   // Read chapter table (16 bytes per entry in v2)
   chapters_.resize(header_.chapter_count);
@@ -107,14 +114,17 @@ void MrbReader::close() {
     fclose(f_);
     f_ = nullptr;
   }
-  chapters_.clear();
-  chapters_.shrink_to_fit();
-  images_.clear();
-  images_.shrink_to_fit();
+  // Swap with empty vectors: on the device clear() + shrink_to_fit() left the
+  // chapter table allocated (it then sits in the middle of the heap and splits
+  // the largest free block after the book is closed).
+  std::vector<MrbChapterEntry>().swap(chapters_);
+  std::vector<MrbImageRef>().swap(images_);
   header_ = {};
   metadata_ = {};
   toc_ = {};
-  spine_files_.clear();
+  // clear() would keep the vector's capacity (32 B per spine file: ~16 KB on a
+  // 500-file book) sitting in the middle of the heap after the book is closed.
+  std::vector<std::string>().swap(spine_files_);
   anchor_offset_ = 0;
   anchor_count_ = 0;
 }

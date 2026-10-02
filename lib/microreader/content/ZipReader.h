@@ -179,6 +179,13 @@ class ZipEntryInput : public IXmlInput {
   // when the stream itself failed. Call after the last read().
   ZipError finish();
 
+  // CRC32 is only computed when asked for (it costs a pass over every byte):
+  // call after open() and before the first read(). Without it finish() only
+  // drains the stream and reports read errors.
+  void enable_crc_check() {
+    check_crc_ = has_crc_;
+  }
+
  private:
   size_t read_impl_(void* buf, size_t max_size);
 
@@ -187,6 +194,7 @@ class ZipEntryInput : public IXmlInput {
   uint32_t expected_crc_ = 0;
   uint32_t expected_size_ = 0;
   size_t out_total_ = 0;
+  bool has_crc_ = false;
   bool check_crc_ = false;
   void* decomp_ = nullptr;  // tinfl_decompressor* (points into work_buf, NOT heap-allocated)
 

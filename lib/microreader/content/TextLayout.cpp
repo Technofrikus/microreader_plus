@@ -1371,6 +1371,22 @@ TextLayout::CollectResult TextLayout::collect_page_items(PagePosition pos) const
       boundary = {static_cast<uint16_t>(pi + 1), 0, 0};
   }
 
+  // Never end a page on a hyphenated line: the word's tail would open the next
+  // page. Push that line over to the next page (the page keeps >= 1 item).
+  if (page_full && items.size() > 1 && items.back().kind == PageItem::TextLine) {
+    const PageItem& last = items.back();
+    const LaidOutParagraph& lp = get_laid_out_(last.para_idx);
+    if (last.line_idx < lp.lines.size() && lp.lines[last.line_idx].hyphenated) {
+      size_t idx = last.line_idx;
+      if (lp.inline_img.promoted && lp.promoted_h > 0)
+        idx += lp.promoted_h;
+      if (lp.leading_spacer > 0)
+        idx += 1;
+      boundary = {last.para_idx, static_cast<uint16_t>(idx), lp.lines[last.line_idx].text_offset};
+      items.pop_back();
+    }
+  }
+
   return {std::move(items), boundary, !page_full};
 }
 

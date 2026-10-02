@@ -51,8 +51,8 @@ void CssCache::set_arena(uint8_t* base) {
 }
 
 void CssCache::drop_sheets() {
-  for (size_t i = 0; i < count_; ++i)
-    entries_[i] = Entry{};
+  for (auto& e : entries_)
+    e = Entry{};
   count_ = 0;
 }
 
@@ -64,16 +64,17 @@ void CssCache::clear() {
 void CssCache::begin_chapter() {
   ++gen_;
   for (size_t i = count_; i-- > 0;) {
-    if (entries_[i].chapter_only)
+    if (entries_[order_[i]].chapter_only)
       remove(i);
   }
 }
 
 const CssStylesheet* CssCache::find(uint32_t key) {
   for (size_t i = 0; i < count_; ++i) {
-    if (entries_[i].key == key) {
-      entries_[i].last_used = gen_;
-      return &entries_[i].sheet;
+    Entry& e = entries_[order_[i]];
+    if (e.key == key) {
+      e.last_used = gen_;
+      return &e.sheet;
     }
   }
   return nullptr;
@@ -82,9 +83,10 @@ const CssStylesheet* CssCache::find(uint32_t key) {
 bool CssCache::evict_one() {
   size_t best = count_;
   for (size_t i = 0; i < count_; ++i) {
-    if (entries_[i].last_used == gen_)
+    const Entry& e = entries_[order_[i]];
+    if (e.last_used == gen_)
       continue;  // used by this chapter
-    if (best == count_ || entries_[i].last_used < entries_[best].last_used)
+    if (best == count_ || e.last_used < entries_[order_[best]].last_used)
       best = i;
   }
   if (best == count_)
@@ -94,17 +96,20 @@ bool CssCache::evict_one() {
 }
 
 void CssCache::remove(size_t i) {
-  const size_t gap = entries_[i].sheet.size_bytes();
-  const size_t from = entries_[i].offset + gap;
+  Entry& victim = entries_[order_[i]];
+  const size_t gap = victim.sheet.size_bytes();
+  const size_t from = victim.offset + gap;
   const size_t end = end_offset();
   if (gap != 0 && from < end)
-    std::memmove(arena_ + entries_[i].offset, arena_ + from, end - from);
+    std::memmove(arena_ + victim.offset, arena_ + from, end - from);
+  victim = Entry{};
   for (size_t j = i + 1; j < count_; ++j) {
-    entries_[j].offset -= static_cast<uint32_t>(gap);
-    entries_[j].sheet.rebase(arena_ + entries_[j].offset);
-    entries_[j - 1] = entries_[j];
+    Entry& e = entries_[order_[j]];
+    e.offset -= static_cast<uint32_t>(gap);
+    e.sheet.rebase(arena_ + e.offset);
+    order_[j - 1] = order_[j];
   }
-  entries_[--count_] = Entry{};
+  --count_;
 }
 
 void CssCache::mark_too_big(uint32_t key) {
@@ -2356,7 +2361,13 @@ void load_chapter_css(IZipFile& file, const ZipReader& zip, CssCache& cache, con
       XmlEvent ev;
       for (;;) {
         XmlError err = reader.next_event(ev);
-        if (err != XmlError::Ok && err != XmlError::BufferTooSmall)
+        if (err == XmlError::BufferTooSmall) {
+          // An oversized tag/comment: skip it, or the reader never advances.
+          if (reader.skip_element() != XmlError::Ok)
+            break;
+          continue;
+        }
+        if (err != XmlError::Ok)
           break;
         if (ev.type == XmlEventType::EndOfFile)
           break;
@@ -2546,6 +2557,20 @@ EpubError Epub::parse_chapter_streaming(IZipFile& file, size_t index, ParagraphS
     css_cache_.set_arena(nullptr);
   }
 
+  // Pre-pass: the chapter must read back intact before any paragraph reaches
+  // the sink. A mismatch is retried once (SD read glitch), then reported.
+  if (entry.has_crc) {
+    ZipError verr = ZipReader::verify_crc(file, entry, work_ptr, kWorkBufSize);
+    if (verr == ZipError::CrcMismatch) {
+      MR_LOGI("epub", "chapter %u: CRC mismatch, retrying", static_cast<unsigned>(index));
+      verr = ZipReader::verify_crc(file, entry, work_ptr, kWorkBufSize);
+    }
+    if (verr == ZipError::CrcMismatch)
+      return EpubError::CrcMismatch;
+    if (verr != ZipError::Ok)
+      return EpubError::ZipError;
+  }
+
   // Stylesheets first. Everything here reads the chapter or the CSS files
   // through work_ptr/xml_ptr, one stream at a time.
   ChapterCss css;
@@ -2563,6 +2588,7 @@ EpubError Epub::parse_chapter_streaming(IZipFile& file, size_t index, ParagraphS
   ZipEntryInput zip_input;
   if (zip_input.open(file, entry, work_ptr, kWorkBufSize) != ZipError::Ok)
     return EpubError::ZipError;
+  zip_input.enable_crc_check();
 
   XmlReader reader;
   if (reader.open(zip_input, xml_ptr, kChapterXmlSize) != XmlError::Ok)

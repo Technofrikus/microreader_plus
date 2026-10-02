@@ -1033,3 +1033,53 @@ TEST(CssStreamParser, NameFilterKeepsOnlyUsableRules) {
   EXPECT_EQ(r.font_size_pct_opt().value_or(0), 150);
   EXPECT_EQ(r.indent_opt().value_or(0), 12);
 }
+
+// ---------------------------------------------------------------------------
+// Allocation-free apply(): shorthand part counts, case, units, over-long input
+// ---------------------------------------------------------------------------
+
+TEST(CssRuleParse, MarginShorthandPartCounts) {
+  CssConfig cfg;
+  cfg.content_width = 1000;
+  cfg.max_margin_pct = 100;
+  auto r1 = CssRule::parse("margin: 4px", cfg);
+  EXPECT_EQ(r1.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r1.margin_left_opt().value_or(99), 4);
+  auto r2 = CssRule::parse("margin: 4px 8px", cfg);
+  EXPECT_EQ(r2.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r2.margin_bottom_opt().value_or(99), 4);
+  EXPECT_EQ(r2.margin_left_opt().value_or(99), 8);
+  EXPECT_EQ(r2.margin_right_opt().value_or(99), 8);
+  auto r3 = CssRule::parse("margin: 4px 8px 12px", cfg);
+  EXPECT_EQ(r3.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r3.margin_left_opt().value_or(99), 8);
+  EXPECT_EQ(r3.margin_bottom_opt().value_or(99), 12);
+  auto r4 = CssRule::parse("margin: 4px 8px 12px 16px", cfg);
+  EXPECT_EQ(r4.margin_right_opt().value_or(99), 8);
+  EXPECT_EQ(r4.margin_left_opt().value_or(99), 16);
+  auto r5 = CssRule::parse("margin:  4px   8px 12px 16px 20px ", cfg);
+  EXPECT_EQ(r5.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r5.margin_right_opt().value_or(99), 8);
+  EXPECT_EQ(r5.margin_bottom_opt().value_or(99), 12);
+  EXPECT_EQ(r5.margin_left_opt().value_or(99), 16);
+}
+
+TEST(CssRuleParse, UppercaseAndUnits) {
+  CssConfig cfg;
+  cfg.glyph_width = 10;
+  cfg.content_width = 400;
+  EXPECT_EQ(CssRule::parse("TEXT-INDENT: 2EM", cfg).indent_opt().value_or(0), 20);
+  EXPECT_EQ(CssRule::parse("text-indent: 1.5rem", cfg).indent_opt().value_or(0), 15);
+  EXPECT_EQ(CssRule::parse("text-indent: 6pt", cfg).indent_opt().value_or(0), 8);
+  EXPECT_EQ(CssRule::parse("text-indent: 5%", cfg).indent_opt().value_or(0), 20);
+  EXPECT_EQ(CssRule::parse("text-indent: 7PX", cfg).indent_opt().value_or(0), 7);
+  EXPECT_TRUE(CssRule::parse("Font-Weight: BOLD").bold_opt().value_or(false));
+}
+
+TEST(CssRuleParse, OverLongDeclarationIgnored) {
+  std::string decl = "font-family: " + std::string(1400, 'a') + "; font-weight: bold";
+  auto r = CssRule::parse(decl);
+  EXPECT_TRUE(r.bold_opt().value_or(false));
+  std::string only = "font-weight: " + std::string(1500, 'b');
+  EXPECT_FALSE(CssRule::parse(only).has_bold_);
+}

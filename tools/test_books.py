@@ -113,7 +113,8 @@ def cmd_list_books(ser: serial.SerialBase) -> list:
         elif line.startswith("ERR:"):
             break
         elif started:
-            books.append(line.strip())
+            # Device format: path|title|author|size|mtime — only the path is needed.
+            books.append(line.strip().split("|", 1)[0])
     return books
 
 
