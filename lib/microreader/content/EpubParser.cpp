@@ -32,220 +32,98 @@ static bool sv_eq(XmlStringView sv, const char* s) {
   return sv == s;
 }
 
-// Extract just the file data for a given zip entry into a vector.
-static EpubError extract_entry(IZipFile& file, const ZipReader& zip, const ZipEntry& entry, std::vector<uint8_t>& out) {
-  if (zip.extract(file, entry, out) != ZipError::Ok) {
-    return EpubError::ZipError;
-  }
-  return EpubError::Ok;
-}
-
 // ---------------------------------------------------------------------------
 // CssCache
 // ---------------------------------------------------------------------------
 
-// FNV-1a of a stylesheet path, for CssCache's skip list.
-static uint32_t css_path_hash(const std::string& path) {
-  uint32_t h = 2166136261u;
-  for (char c : path)
-    h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
-  return h;
+void CssCache::set_arena(uint8_t* base) {
+  if (!base) {
+    if (owned_arena_.empty())
+      owned_arena_.resize(kArenaSize);
+    base = owned_arena_.data();
+  }
+  if (base != arena_) {
+    clear();
+    arena_ = base;
+  }
+  if (arena_ != owned_arena_.data())
+    owned_arena_ = {};
 }
 
-bool CssCache::low_memory() {
-#ifdef ESP_PLATFORM
-  return esp_get_free_heap_size() < 24 * 1024;
-#else
-  return false;
-#endif
-}
-
-size_t CssCache::find_evict_slot(uint32_t protect_gen) const {
-  size_t best = kMaxEntries;
-  for (size_t i = 0; i < count_; ++i) {
-    bool candidate = (protect_gen == 0) || (entries_[i].last_used_gen <= protect_gen);
-    if (candidate) {
-      if (best == kMaxEntries || entries_[i].last_used_gen < entries_[best].last_used_gen)
-        best = i;
-    }
-  }
-  return best;
-}
-
-// Streams a ZIP entry into `dst` (capacity `cap`). True only if the whole
-// entry fit and decompressed completely.
-static bool extract_to_buffer(IZipFile& file, const ZipEntry& ze, uint8_t* work_buf, size_t work_buf_size,
-                              uint8_t* dst, size_t cap, size_t& out_len) {
-  out_len = 0;
-  if (ze.uncompressed_size > cap)
-    return false;
-  ZipEntryInput in;
-  if (in.open(file, ze, work_buf, work_buf_size) != ZipError::Ok)
-    return false;
-  while (out_len < ze.uncompressed_size) {
-    size_t n = in.read(dst + out_len, ze.uncompressed_size - out_len);
-    if (n == 0)
-      break;
-    out_len += n;
-  }
-  return out_len == ze.uncompressed_size;
-}
-
-// Is there `bytes` of free heap on top of the stylesheet reserve, with a single
-// block of at least `contiguous`?
-static bool heap_has(size_t bytes, size_t contiguous) {
-#ifdef ESP_PLATFORM
-  if (esp_get_free_heap_size() < CssStylesheet::kMinFreeHeap + bytes)
-    return false;
-  return contiguous == 0 || heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= contiguous + 1024;
-#else
-  (void)bytes;
-  (void)contiguous;
-  return true;
-#endif
-}
-
-bool CssCache::evict_for_memory(uint32_t protect_gen) {
-  size_t best = kMaxEntries;
-  for (size_t i = 0; i < count_; ++i) {
-    if (entries_[i].path.empty())
-      continue;  // already released
-    if (protect_gen != 0 && entries_[i].last_used_gen > protect_gen)
-      continue;  // loaded for the current chapter
-    if (best == kMaxEntries || entries_[i].last_used_gen < entries_[best].last_used_gen)
-      best = i;
-  }
-  if (best == kMaxEntries)
-    return false;
-  // Release in place (the slot is reused later): other entries keep their
-  // addresses, which callers may still hold.
-  total_bytes_ -= entries_[best].bytes;
-  entries_[best] = Entry{};
-  return true;
-}
-
-const CssStylesheet* CssCache::get_or_load(IZipFile& file, const ZipReader& zip, const std::string& path,
-                                            const CssConfig& config, uint32_t protect_gen,
-                                            uint8_t* work_buf, size_t work_buf_size,
-                                            uint8_t* text_buf, size_t text_buf_size) {
-  for (size_t i = 0; i < count_; ++i) {
-    if (entries_[i].path == path) {
-      entries_[i].last_used_gen = ++gen_;
-      return &entries_[i].sheet;
-    }
-  }
-
-  // Cache miss requires extraction. Without a work buffer we cannot extract —
-  // return nullptr rather than falling back to the allocating overload (which
-  // heap-allocates ~44KB and aborts on a fragmented ESP32 heap).
-  if (!work_buf || work_buf_size == 0)
-    return nullptr;
-
-  const uint32_t path_hash = css_path_hash(path);
-  for (size_t i = 0; i < skipped_count_; ++i) {
-    if (skipped_[i] == path_hash)
-      return nullptr;
-  }
-
-  const ZipEntry* ze = zip.find(path);
-  if (!ze)
-    return nullptr;
-
-  auto skip = [&](const char* why) -> const CssStylesheet* {
-    MR_LOGI("css", "skipping %s (%lu bytes): %s", path.c_str(), static_cast<unsigned long>(ze->uncompressed_size),
-            why);
-    if (skipped_count_ < kMaxSkipped)
-      skipped_[skipped_count_++] = path_hash;
-    return nullptr;
-  };
-
-  // The CSS text goes into the caller's idle buffer when it fits, else the heap
-  // (one block; make room by dropping older stylesheets if needed).
-  const bool text_on_heap = !text_buf || ze->uncompressed_size > text_buf_size;
-  if (text_on_heap) {
-    while (!heap_has(ze->uncompressed_size, ze->uncompressed_size))
-      if (!evict_for_memory(protect_gen))
-        return skip("no heap block for the text");
-  }
-
-  std::vector<uint8_t> heap_text;
-  char* css_text = nullptr;
-  size_t css_len = 0;
-  if (text_on_heap) {
-    if (zip.extract(file, *ze, heap_text, work_buf, work_buf_size) != ZipError::Ok)
-      return nullptr;
-    css_text = reinterpret_cast<char*>(heap_text.data());
-    css_len = heap_text.size();
-  } else {
-    if (!extract_to_buffer(file, *ze, work_buf, work_buf_size, text_buf, text_buf_size, css_len))
-      return nullptr;
-    css_text = reinterpret_cast<char*>(text_buf);
-  }
-
-  // Exact heap the parsed sheet will take (the parser's own first pass). Make
-  // room by dropping stylesheets of earlier chapters; only if that's not enough
-  // is the sheet loaded partially (the parser keeps rules until the floor).
-  const size_t parsed_bytes = CssStylesheet(config).heap_needed(css_text, css_len);
-  while (!heap_has(parsed_bytes, 0) && evict_for_memory(protect_gen)) {
-  }
-  if (!heap_has(parsed_bytes, 0))
-    MR_LOGI("css", "%s: needs %lu bytes, heap short even after eviction", path.c_str(),
-            static_cast<unsigned long>(parsed_bytes));
-
-  bool over_budget = total_bytes_ + css_len > kMaxCacheBytes;
-  bool need_evict = over_budget || low_memory();
-
-  size_t slot;
-  if (!need_evict && count_ < kMaxEntries) {
-    slot = count_++;
-  } else {
-    slot = find_evict_slot(protect_gen);
-    if (slot == kMaxEntries) {
-      // All entries are from the current chapter — grow array if possible.
-      if (count_ < kMaxEntries)
-        slot = count_++;
-      else
-        return nullptr;  // array full, all entries protected
-    } else {
-      total_bytes_ -= entries_[slot].bytes;
-    }
-  }
-
-  entries_[slot].path = path;
-  entries_[slot].sheet = CssStylesheet(config);
-  entries_[slot].sheet.extend_from_mut_sheet(css_text, css_len);
-  if (entries_[slot].sheet.truncated())
-    MR_LOGI("css", "%s: heap low, kept %lu rules", path.c_str(),
-            static_cast<unsigned long>(entries_[slot].sheet.rule_count()));
-  entries_[slot].bytes = css_len;
-  entries_[slot].last_used_gen = ++gen_;
-  total_bytes_ += css_len;
-  return &entries_[slot].sheet;
+void CssCache::drop_sheets() {
+  for (auto& e : entries_)
+    e = Entry{};
+  count_ = 0;
 }
 
 void CssCache::clear() {
-  for (size_t i = 0; i < count_; ++i)
-    entries_[i] = Entry{};
-  count_ = 0;
-  skipped_count_ = 0;
-  total_bytes_ = 0;
-  gen_ = 0;
+  drop_sheets();
+  too_big_count_ = 0;
 }
 
-// ---------------------------------------------------------------------------
-// CssContext — passed into parse_xhtml_events for on-demand CSS loading.
-// ---------------------------------------------------------------------------
+void CssCache::begin_chapter() {
+  ++gen_;
+  for (size_t i = count_; i-- > 0;) {
+    if (entries_[order_[i]].chapter_only)
+      remove(i);
+  }
+}
 
-struct CssContext {
-  IZipFile* file;
-  const ZipReader* zip;
-  CssCache* cache;
-  CssConfig config;
-  const std::string* base_dir;
-  uint32_t chapter_start_gen;  // gen snapshot before this chapter's CSS loads — protects those entries
-  uint8_t* work_buf;           // caller's decompression buffer (from framebuffer); nullptr during streaming
-  size_t work_buf_size;
-};
+const CssStylesheet* CssCache::find(uint32_t key) {
+  for (size_t i = 0; i < count_; ++i) {
+    Entry& e = entries_[order_[i]];
+    if (e.key == key) {
+      e.last_used = gen_;
+      return &e.sheet;
+    }
+  }
+  return nullptr;
+}
+
+bool CssCache::evict_one() {
+  size_t best = count_;
+  for (size_t i = 0; i < count_; ++i) {
+    const Entry& e = entries_[order_[i]];
+    if (e.last_used == gen_)
+      continue;  // used by this chapter
+    if (best == count_ || e.last_used < entries_[order_[best]].last_used)
+      best = i;
+  }
+  if (best == count_)
+    return false;
+  remove(best);
+  return true;
+}
+
+void CssCache::remove(size_t i) {
+  Entry& victim = entries_[order_[i]];
+  const size_t gap = victim.sheet.size_bytes();
+  const size_t from = victim.offset + gap;
+  const size_t end = end_offset();
+  if (gap != 0 && from < end)
+    std::memmove(arena_ + victim.offset, arena_ + from, end - from);
+  victim = Entry{};
+  for (size_t j = i + 1; j < count_; ++j) {
+    Entry& e = entries_[order_[j]];
+    e.offset -= static_cast<uint32_t>(gap);
+    e.sheet.rebase(arena_ + e.offset);
+    order_[j - 1] = order_[j];
+  }
+  --count_;
+}
+
+void CssCache::mark_too_big(uint32_t key) {
+  if (!too_big(key) && too_big_count_ < kMaxTooBig)
+    too_big_[too_big_count_++] = key;
+}
+
+bool CssCache::too_big(uint32_t key) const {
+  for (size_t i = 0; i < too_big_count_; ++i) {
+    if (too_big_[i] == key)
+      return true;
+  }
+  return false;
+}
 
 // ---------------------------------------------------------------------------
 // CssSheets — lightweight wrapper over up to N stylesheet pointers.
@@ -254,7 +132,7 @@ struct CssContext {
 
 struct CssSheets {
   static constexpr size_t kMax = CssCache::kMaxEntries + 1;  // cached + one extern stylesheet
-  const CssStylesheet* ptrs[kMax];
+  const CssStylesheet* ptrs[kMax] = {};
   size_t n = 0;
 
   void add(const CssStylesheet* s) {
@@ -504,6 +382,25 @@ static std::string normalize_whitespace(const std::string& s) {
 static EpubError parse_ncx(IZipFile& file, const ZipReader& zip, const ZipEntry& entry, const std::string& root_dir,
                            TableOfContents& toc, uint8_t* work_buf, size_t work_buf_size, uint8_t* xml_buf,
                            size_t xml_buf_size) {
+  // Pre-pass: count the navPoints and reserve the entry table once.  Growing
+  // it by push_back doubles the block and holds old + new at the same time;
+  // with Bluetooth on that 6 KB + 12 KB request (a 300-chapter book) aborts
+  // during a batch conversion.
+  {
+    ZipEntryInput count_input;
+    XmlReader count_reader;
+    if (count_input.open(file, entry, work_buf, work_buf_size) == ZipError::Ok &&
+        count_reader.open(count_input, xml_buf, xml_buf_size) == XmlError::Ok) {
+      size_t n = 0;
+      XmlEvent cev;
+      while (count_reader.next_event(cev) == XmlError::Ok && cev.type != XmlEventType::EndOfFile) {
+        if (cev.type == XmlEventType::StartElement && sv_eq(cev.name, "navPoint"))
+          ++n;
+      }
+      toc.entries.reserve(toc.entries.size() + n);
+    }
+  }
+
   ZipEntryInput zip_input;
   if (zip_input.open(file, entry, work_buf, work_buf_size) != ZipError::Ok)
     return EpubError::ZipError;
@@ -761,7 +658,6 @@ EpubError Epub::open(IZipFile& file, uint8_t* work_buf, uint8_t* xml_buf, bool p
   close();  // release previous data
   // Pass work_buf for the central-directory bulk read to avoid a heap
   // allocation that may fail on fragmented ESP32 heap (cd_buf ≤ 48 KB fits).
-  static constexpr size_t kWorkBufSize = ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048;
   // The smallest work_buf any caller passes (Book::open's own allocation).
   static constexpr size_t kCdBufSize = ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 1024;
   if (zip_.open(file, work_buf, work_buf ? kCdBufSize : 0) != ZipError::Ok)
@@ -1578,27 +1474,18 @@ class BodyParser {
 }  // anonymous namespace
 
 // Internal helper: parse XML events from an already-opened XmlReader.
-// Parses inline <style> elements and link-referenced stylesheets, skips to
-// <body>, then processes body events.
+// Skips to <body>, then processes body events.
 //
-// css_ctx: if non-null, <link rel="stylesheet"> tags in the head are resolved
-// and loaded from the cache. extern_css (if any) is added as a base layer.
-static EpubError parse_xhtml_events(XmlReader& reader, const CssStylesheet* inline_css, const CssStylesheet* extern_css,
-                                    const CssContext* css_ctx, const std::string& base_dir, const ZipReader& zip,
-                                    BodyParser& parser) {
-  // Effective config: from extern_css first, then css_ctx, then default.
-  const CssConfig& eff_config =
-      extern_css ? extern_css->config() : (css_ctx ? css_ctx->config : CssConfig{});
-
+// inline_css: the chapter's <style> blocks, already parsed; if null they are
+// parsed here, on the heap (tests / in-memory parsing only).
+// ext: the chapter's linked stylesheets in document order (may be null).
+static EpubError parse_xhtml_events(XmlReader& reader, const CssStylesheet* inline_css, const CssSheets* ext,
+                                    const std::string& base_dir, const ZipReader& zip, BodyParser& parser) {
+  static const CssSheets kNoSheets{};
+  const CssSheets& eff_ext = ext ? *ext : kNoSheets;
   // Skip to <body>
-  CssStylesheet parsed_inline_css(eff_config);
-
-  // Aggregates all external stylesheets that apply to this chapter.
-  // Populated from extern_css (if any) plus any <link>-referenced sheets
-  // loaded from the cache during the head scan below.
-  CssSheets eff_ext;
-  if (extern_css)
-    eff_ext.add(extern_css);
+  CssStylesheet parsed_inline_css(eff_ext.config_or(CssConfig{}));
+  std::vector<char> inline_scratch;
   XmlEvent ev;
 
 #ifdef ESP_PLATFORM
@@ -1625,34 +1512,26 @@ static EpubError parse_xhtml_events(XmlReader& reader, const CssStylesheet* inli
     if (ev.type == XmlEventType::EndOfFile)
       break;
     if (ev.type == XmlEventType::StartElement) {
-      if (sv_eq(ev.name, "style")) {
-        // Consume all text events inside <style>...</style>, then skip to </style>.
-        // With streaming XML buffers the CSS may arrive as multiple Text events.
+      if (sv_eq(ev.name, "style") && !inline_css) {
+        // With streaming XML buffers the CSS may arrive as several Text events;
+        // the parser takes them in pieces.
+        if (inline_scratch.empty())
+          inline_scratch.resize(CssStylesheet::Parser::kScratchSize);
+        CssStylesheet::Parser css(parsed_inline_css, inline_scratch.data());
         for (;;) {
           XmlEvent inner;
           XmlError serr = reader.next_event(inner);
           if (serr != XmlError::Ok)
             break;
           if (inner.type == XmlEventType::Text || inner.type == XmlEventType::CData) {
-            parsed_inline_css.extend_from_sheet(inner.content.data, inner.content.length);
+            css.feed(inner.content.data, inner.content.length);
           } else if (inner.type == XmlEventType::EndElement) {
             break;  // </style>
           } else if (inner.type == XmlEventType::EndOfFile) {
             break;
           }
         }
-      } else if (sv_eq(ev.name, "link") && css_ctx) {
-        // Load <link rel="stylesheet" href="..."> into the cache.
-        auto rel = ev.attrs.get("rel");
-        auto href = ev.attrs.get("href");
-        if (sv_eq(rel, "stylesheet") && href.length > 0) {
-          std::string css_path = Epub::resolve_path(*css_ctx->base_dir, sv_to_string(href));
-          const CssStylesheet* s =
-              css_ctx->cache->get_or_load(*css_ctx->file, *css_ctx->zip, css_path, css_ctx->config,
-                                         css_ctx->chapter_start_gen,
-                                         css_ctx->work_buf, css_ctx->work_buf_size);
-          eff_ext.add(s);
-        }
+        css.finish();
       } else if (sv_eq(ev.name, "body")) {
         break;
       }
@@ -2266,14 +2145,315 @@ EpubError parse_xhtml_body(const uint8_t* data, size_t size, const CssStylesheet
     return EpubError::XmlError;
   }
 
+  CssSheets ext;
+  ext.add(extern_css);
   BodyParser parser;
-  EpubError err = parse_xhtml_events(reader, inline_css, extern_css, nullptr, base_dir, zip, parser);
+  EpubError err = parse_xhtml_events(reader, inline_css, &ext, base_dir, zip, parser);
   if (err != EpubError::Ok)
     return err;
 
   out = parser.finish();
   return EpubError::Ok;
 }
+
+// ---------------------------------------------------------------------------
+// Chapter stylesheets
+//
+// Before a chapter's body is parsed, its linked stylesheets and <style> blocks
+// are parsed into the CssCache arena. The CSS text is streamed from the EPUB in
+// chunks through CssStylesheet::Parser, so neither the text nor the parsed
+// rules ever need heap. If the chapter's sheets do not fit the arena even after
+// dropping every sheet the chapter doesn't use, they are loaded again keeping
+// only the rules whose names (element, id, classes) occur in this chapter —
+// the others can't match anything in it, so the chapter is styled exactly as
+// with the full sheets.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Re-openable input over a chapter's XHTML: the CSS loader reads the head more
+// than once (links, then <style> blocks) and, rarely, the whole chapter.
+class ChapterSource {
+ public:
+  virtual IXmlInput* open() = 0;
+
+ protected:
+  ~ChapterSource() = default;
+};
+
+class ZipChapterSource final : public ChapterSource {
+ public:
+  ZipChapterSource(IZipFile& file, const ZipEntry& entry, uint8_t* work_buf, size_t work_buf_size)
+      : file_(file), entry_(entry), work_buf_(work_buf), work_buf_size_(work_buf_size) {}
+  IXmlInput* open() override {
+    return input_.open(file_, entry_, work_buf_, work_buf_size_) == ZipError::Ok ? &input_ : nullptr;
+  }
+
+ private:
+  IZipFile& file_;
+  const ZipEntry& entry_;
+  uint8_t* work_buf_;
+  size_t work_buf_size_;
+  ZipEntryInput input_;
+};
+
+class MemoryChapterSource final : public ChapterSource {
+ public:
+  MemoryChapterSource(const uint8_t* data, size_t size) : data_(data), size_(size), input_(data, size) {}
+  IXmlInput* open() override {
+    input_ = MemoryXmlInput(data_, size_);
+    return &input_;
+  }
+
+ private:
+  const uint8_t* data_;
+  size_t size_;
+  MemoryXmlInput input_;
+};
+
+struct ChapterCss {
+  CssSheets ext;                               // linked stylesheets, in document order
+  const CssStylesheet* inline_sheet = nullptr;  // the <style> blocks, if any
+  bool complete = true;
+};
+
+// Buffers for loading: `work` decompresses (>= ZipEntryInput::kMinWorkBufSize),
+// `xml` (Epub::kChapterXmlSize) holds XML or CSS text chunks, `scratch` is the
+// parser's (CssStylesheet::Parser::kScratchSize). The cache's arena is separate.
+struct CssLoadBuffers {
+  uint8_t* work;
+  size_t work_size;
+  uint8_t* xml;
+  char* scratch;
+};
+
+constexpr uint32_t kNoEntry = 0xFFFFFFFEu;  // a link to a file not in the EPUB
+
+// Adds a name's hash to the sorted set; false if the set is full.
+bool add_name(uint32_t* set, size_t& n, size_t cap, const char* s, size_t len) {
+  if (len == 0)
+    return true;
+  const uint32_t h = CssNameSet::hash(s, len);
+  uint32_t* pos = std::lower_bound(set, set + n, h);
+  if (pos != set + n && *pos == h)
+    return true;
+  if (n == cap)
+    return false;
+  std::memmove(pos + 1, pos, static_cast<size_t>(set + n - pos) * sizeof(uint32_t));
+  *pos = h;
+  ++n;
+  return true;
+}
+
+// Collects every element name, id and class the chapter uses into the top of
+// the arena. Returns the set (n entries, ending at the arena's end), or an
+// empty set with `ok` false if the chapter uses more names than it holds.
+CssNameSet collect_names(ChapterSource& src, uint8_t* xml, uint8_t* arena, bool& ok) {
+  static constexpr size_t kCap = CssCache::kArenaSize / 4 / sizeof(uint32_t);  // a quarter of the arena
+  uint32_t* const top = reinterpret_cast<uint32_t*>(arena + CssCache::kArenaSize);
+  uint32_t* const set = top - kCap;
+  size_t n = 0;
+  ok = false;
+  IXmlInput* in = src.open();
+  XmlReader reader;
+  if (!in || reader.open(*in, xml, Epub::kChapterXmlSize) != XmlError::Ok)
+    return {};
+  bool full = false;
+  XmlEvent ev;
+  for (;;) {
+    XmlError err = reader.next_event(ev);
+    if (err == XmlError::BufferTooSmall) {
+      reader.skip_element();  // the body parse skips it too
+      continue;
+    }
+    if (err != XmlError::Ok || ev.type == XmlEventType::EndOfFile)
+      break;
+    if (ev.type != XmlEventType::StartElement)
+      continue;
+    full |= !add_name(set, n, kCap, ev.name.data, ev.name.length);
+    auto id = ev.attrs.get("id");
+    full |= !add_name(set, n, kCap, id.data, id.length);
+    auto cls = ev.attrs.get("class");
+    for (size_t p = 0; p < cls.length;) {
+      while (p < cls.length && std::isspace(static_cast<unsigned char>(cls.data[p])))
+        ++p;
+      const size_t start = p;
+      while (p < cls.length && !std::isspace(static_cast<unsigned char>(cls.data[p])))
+        ++p;
+      full |= !add_name(set, n, kCap, cls.data + start, p - start);
+    }
+    if (full)
+      return {};
+  }
+  // Move the set to the very top so the sheets get the rest of the arena.
+  std::memmove(top - n, set, n * sizeof(uint32_t));
+  ok = true;
+  return CssNameSet{top - n, n};
+}
+
+// Streams a stylesheet file from the EPUB into `sheet`.
+bool fill_from_zip(IZipFile& file, const ZipEntry& entry, const CssLoadBuffers& bufs, const CssNameSet* filter,
+                   CssStylesheet& sheet) {
+  ZipEntryInput in;
+  if (in.open(file, entry, bufs.work, bufs.work_size) != ZipError::Ok)
+    return false;
+  CssStylesheet::Parser parser(sheet, bufs.scratch, filter);
+  size_t total = 0;
+  for (;;) {
+    const size_t n = in.read(bufs.xml, Epub::kChapterXmlSize);
+    if (n == 0)
+      break;
+    parser.feed(reinterpret_cast<const char*>(bufs.xml), n);
+    total += n;
+  }
+  if (total != entry.uncompressed_size)
+    return false;
+  parser.finish();
+  return true;
+}
+
+// Parses the chapter's <style> blocks (head only) into `sheet`.
+bool fill_from_styles(ChapterSource& src, const CssLoadBuffers& bufs, const CssNameSet* filter, CssStylesheet& sheet) {
+  IXmlInput* in = src.open();
+  XmlReader reader;
+  if (!in || reader.open(*in, bufs.xml, Epub::kChapterXmlSize) != XmlError::Ok)
+    return false;
+  XmlEvent ev;
+  for (;;) {
+    XmlError err = reader.next_event(ev);
+    if (err == XmlError::BufferTooSmall) {
+      reader.skip_element();
+      continue;
+    }
+    if (err != XmlError::Ok || ev.type == XmlEventType::EndOfFile)
+      break;
+    if (ev.type != XmlEventType::StartElement)
+      continue;
+    if (sv_eq(ev.name, "body"))
+      break;
+    if (!sv_eq(ev.name, "style"))
+      continue;
+    CssStylesheet::Parser parser(sheet, bufs.scratch, filter);
+    for (;;) {
+      XmlEvent inner;
+      if (reader.next_event(inner) != XmlError::Ok)
+        break;
+      if (inner.type == XmlEventType::Text || inner.type == XmlEventType::CData)
+        parser.feed(inner.content.data, inner.content.length);
+      else if (inner.type == XmlEventType::EndElement || inner.type == XmlEventType::EndOfFile)
+        break;
+    }
+    parser.finish();
+  }
+  return true;
+}
+
+void load_chapter_css(IZipFile& file, const ZipReader& zip, CssCache& cache, const CssConfig& config,
+                      const std::string& base_dir, ChapterSource& src, const CssLoadBuffers& bufs, ChapterCss& out) {
+  // Head scan: the <link rel="stylesheet"> targets, in order, and whether
+  // there are <style> blocks.
+  uint32_t links[CssCache::kMaxEntries];
+  size_t link_count = 0;
+  bool has_style = false;
+  if (IXmlInput* in = src.open()) {
+    XmlReader reader;
+    if (reader.open(*in, bufs.xml, Epub::kChapterXmlSize) == XmlError::Ok) {
+      XmlEvent ev;
+      for (;;) {
+        XmlError err = reader.next_event(ev);
+        if (err == XmlError::BufferTooSmall) {
+          // An oversized tag/comment: skip it, or the reader never advances.
+          if (reader.skip_element() != XmlError::Ok)
+            break;
+          continue;
+        }
+        if (err != XmlError::Ok)
+          break;
+        if (ev.type == XmlEventType::EndOfFile)
+          break;
+        if (ev.type != XmlEventType::StartElement)
+          continue;
+        if (sv_eq(ev.name, "body"))
+          break;
+        if (sv_eq(ev.name, "style")) {
+          has_style = true;
+        } else if (sv_eq(ev.name, "link") && link_count < CssCache::kMaxEntries) {
+          auto rel = ev.attrs.get("rel");
+          auto href = ev.attrs.get("href");
+          if (sv_eq(rel, "stylesheet") && href.length > 0) {
+            const ZipEntry* ze = zip.find(Epub::resolve_path(base_dir, sv_to_string(href)));
+            links[link_count++] = ze ? static_cast<uint32_t>(ze - zip.entries().data()) : kNoEntry;
+          }
+        }
+      }
+    }
+  }
+
+  cache.begin_chapter();
+
+  // Loads everything; false if a sheet did not fit (its key in `failed`).
+  // per_chapter: the fallback load — sheets are for this chapter only, and
+  // one that still doesn't fit keeps the rules that do.
+  auto load_all = [&](const CssNameSet* filter, size_t limit, bool per_chapter, uint32_t& failed) {
+    out.ext = CssSheets{};
+    out.inline_sheet = nullptr;
+    for (size_t i = 0; i < link_count; ++i) {
+      const uint32_t key = links[i];
+      if (key == kNoEntry)
+        continue;
+      const CssStylesheet* s = cache.find(key);
+      if (!s) {
+        bool read_ok = true;
+        s = cache.load(key, config, per_chapter, limit, per_chapter, [&](CssStylesheet& sheet) {
+          return read_ok = fill_from_zip(file, zip.entry(key), bufs, filter, sheet);
+        });
+        if (!s && read_ok) {
+          failed = key;
+          return false;
+        }
+      }
+      if (s && s->overflow())
+        out.complete = false;
+      out.ext.add(s);  // an unreadable sheet is skipped
+    }
+    if (has_style) {
+      bool read_ok = true;
+      out.inline_sheet = cache.load(CssCache::kInlineKey, config, true, limit, per_chapter, [&](CssStylesheet& sheet) {
+        return read_ok = fill_from_styles(src, bufs, filter, sheet);
+      });
+      if (!out.inline_sheet && read_ok) {
+        failed = CssCache::kInlineKey;
+        return false;
+      }
+      if (out.inline_sheet && out.inline_sheet->overflow())
+        out.complete = false;
+    }
+    return true;
+  };
+
+  bool known_too_big = false;
+  for (size_t i = 0; i < link_count; ++i)
+    known_too_big |= cache.too_big(links[i]);
+
+  uint32_t failed = kNoEntry;
+  if (!known_too_big && load_all(nullptr, CssCache::kArenaSize, false, failed))
+    return;
+  if (failed != kNoEntry && failed != CssCache::kInlineKey)
+    cache.mark_too_big(failed);
+
+  // Too big for the arena: keep only the rules this chapter can use.
+  cache.drop_sheets();
+  bool names_ok = false;
+  CssNameSet names = collect_names(src, bufs.xml, cache.arena(), names_ok);
+  if (!names_ok)
+    out.complete = false;  // more names than the set holds: load what fits
+  const size_t limit = CssCache::kArenaSize - names.count * sizeof(uint32_t);
+  out.complete &= load_all(names_ok ? &names : nullptr, limit, true, failed);
+  MR_LOGI("css", "chapter stylesheets too large for the arena, filtered to this chapter: %s",
+          out.complete ? "complete" : "INCOMPLETE");
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Epub::parse_chapter
@@ -2308,11 +2488,19 @@ EpubError Epub::parse_chapter(IZipFile& file, size_t index, Chapter& out) const 
     base_dir = entry.name.substr(0, slash + 1);
   }
 
-  // Allocate a work buffer for CSS extraction (desktop/test — heap is not fragmented here).
+  // Stylesheets: same loader as the streaming parse, with heap buffers
+  // (desktop/tests — the heap is not fragmented here).
   static constexpr size_t kCssWorkBufSize = ZipEntryInput::kMinWorkBufSize + 1024;
   std::vector<uint8_t> css_work_buf(kCssWorkBufSize);
-  CssContext ctx{&file, &zip_, &css_cache_, css_config_, &base_dir, css_cache_.current_gen(),
-                 css_work_buf.data(), kCssWorkBufSize};
+  std::vector<uint8_t> css_xml_buf(kChapterXmlSize);
+  std::vector<char> css_scratch(CssStylesheet::Parser::kScratchSize);
+  css_cache_.set_arena(nullptr);
+  MemoryChapterSource src(data.data(), data.size());
+  ChapterCss css;
+  load_chapter_css(file, zip_, css_cache_, css_config_, base_dir, src,
+                   CssLoadBuffers{css_work_buf.data(), kCssWorkBufSize, css_xml_buf.data(), css_scratch.data()}, css);
+  if (!css.complete)
+    ++css_incomplete_;
 
   MemoryXmlInput input(data.data(), data.size());
   std::vector<uint8_t> xml_buf_vec(std::max(data.size() + 1, size_t(4096)));
@@ -2320,8 +2508,10 @@ EpubError Epub::parse_chapter(IZipFile& file, size_t index, Chapter& out) const 
   if (reader.open(input, xml_buf_vec.data(), xml_buf_vec.size()) != XmlError::Ok)
     return EpubError::XmlError;
 
+  static const CssStylesheet kNoInline;
   BodyParser parser;
-  EpubError err = parse_xhtml_events(reader, nullptr, nullptr, &ctx, base_dir, zip_, parser);
+  EpubError err = parse_xhtml_events(reader, css.inline_sheet ? css.inline_sheet : &kNoInline, &css.ext, base_dir,
+                                     zip_, parser);
   if (err != EpubError::Ok)
     return err;
 
@@ -2350,72 +2540,58 @@ EpubError Epub::parse_chapter_streaming(IZipFile& file, size_t index, ParagraphS
   }
 
   static constexpr size_t kWorkBufSize = ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048;
-  static constexpr size_t kXmlBufSize = 16384;
 
   uint8_t* work_ptr = work_buf;
   uint8_t* xml_ptr = xml_buf;
 
-  // --- Pass 1: pre-scan the XHTML head to collect <link rel="stylesheet"> hrefs.
-  // The ZipEntryInput is opened and closed here so that work_ptr is free for
-  // CSS extraction afterwards — the same framebuffer work_buf serves both roles,
-  // just not simultaneously.
-  static constexpr size_t kMaxCssLinks = CssCache::kMaxEntries;
-  static constexpr size_t kMaxPathLen = 128;
-  char css_link_paths[kMaxCssLinks][kMaxPathLen];
-  size_t css_link_lens[kMaxCssLinks] = {};
-  size_t css_link_count = 0;
-
-  {
-    ZipEntryInput zip_scan;
-    if (zip_scan.open(file, entry, work_ptr, kWorkBufSize) == ZipError::Ok) {
-      XmlReader scan_reader;
-      if (scan_reader.open(zip_scan, xml_ptr, kXmlBufSize) == XmlError::Ok) {
-        XmlEvent ev;
-        for (;;) {
-          XmlError xerr = scan_reader.next_event(ev);
-          if (xerr != XmlError::Ok && xerr != XmlError::BufferTooSmall)
-            break;
-          if (ev.type == XmlEventType::EndOfFile)
-            break;
-          if (ev.type == XmlEventType::StartElement) {
-            if (sv_eq(ev.name, "body"))
-              break;
-            if (sv_eq(ev.name, "link") && css_link_count < kMaxCssLinks) {
-              auto rel = ev.attrs.get("rel");
-              auto href = ev.attrs.get("href");
-              if (sv_eq(rel, "stylesheet") && href.length > 0) {
-                std::string path = Epub::resolve_path(base_dir, sv_to_string(href));
-                size_t len = std::min(path.size(), kMaxPathLen - 1);
-                std::memcpy(css_link_paths[css_link_count], path.c_str(), len);
-                css_link_lens[css_link_count] = len;
-                ++css_link_count;
-              }
-            }
-          }
-        }
-      }
-    }
-  }  // zip_scan destroyed → work_ptr is now free
-
-  // Load CSS files using work_buf for decompression and xml_buf for the CSS
-  // text (both free between the two streaming passes).
-  uint32_t protect_gen = css_cache_.current_gen();
-  const size_t css_text_size = xml_buf_size != 0 ? xml_buf_size : kXmlBufSize;
-  for (size_t i = 0; i < css_link_count; ++i) {
-    std::string path(css_link_paths[i], css_link_lens[i]);
-    css_cache_.get_or_load(file, zip_, path, css_config_, protect_gen, work_ptr, kWorkBufSize, xml_ptr,
-                           css_text_size);
+  // xml_buf = [XML reader | CSS parser scratch | stylesheet arena] when it is a
+  // whole framebuffer; otherwise scratch and arena come from the heap.
+  std::vector<char> own_scratch;
+  char* scratch;
+  if (xml_buf_size >= kChapterBufSize) {
+    scratch = reinterpret_cast<char*>(xml_buf + kChapterXmlSize);
+    css_cache_.set_arena(xml_buf + kChapterXmlSize + CssStylesheet::Parser::kScratchSize);
+  } else {
+    own_scratch.resize(CssStylesheet::Parser::kScratchSize);
+    scratch = own_scratch.data();
+    css_cache_.set_arena(nullptr);
   }
 
-  // --- Pass 2: full XHTML streaming parse with CSS already cached.
-  // ZipEntryInput uses work_ptr again; get_or_load calls during the head scan
-  // will be cache hits and never call zip.extract, so no conflict.
+  // Pre-pass: the chapter must read back intact before any paragraph reaches
+  // the sink. A mismatch is retried once (SD read glitch), then reported.
+  if (entry.has_crc) {
+    ZipError verr = ZipReader::verify_crc(file, entry, work_ptr, kWorkBufSize);
+    if (verr == ZipError::CrcMismatch) {
+      MR_LOGI("epub", "chapter %u: CRC mismatch, retrying", static_cast<unsigned>(index));
+      verr = ZipReader::verify_crc(file, entry, work_ptr, kWorkBufSize);
+    }
+    if (verr == ZipError::CrcMismatch)
+      return EpubError::CrcMismatch;
+    if (verr != ZipError::Ok)
+      return EpubError::ZipError;
+  }
+
+  // Stylesheets first. Everything here reads the chapter or the CSS files
+  // through work_ptr/xml_ptr, one stream at a time.
+  ChapterCss css;
+  {
+    ZipChapterSource src(file, entry, work_ptr, kWorkBufSize);
+    load_chapter_css(file, zip_, css_cache_, css_config_, base_dir, src,
+                     CssLoadBuffers{work_ptr, kWorkBufSize, xml_ptr, scratch}, css);
+  }
+  if (!css.complete) {
+    ++css_incomplete_;
+    MR_LOGI("css", "chapter %u: styling incomplete", static_cast<unsigned>(index));
+  }
+
+  // Body parse.
   ZipEntryInput zip_input;
   if (zip_input.open(file, entry, work_ptr, kWorkBufSize) != ZipError::Ok)
     return EpubError::ZipError;
+  zip_input.enable_crc_check();
 
   XmlReader reader;
-  if (reader.open(zip_input, xml_ptr, kXmlBufSize) != XmlError::Ok)
+  if (reader.open(zip_input, xml_ptr, kChapterXmlSize) != XmlError::Ok)
     return EpubError::XmlError;
 
   BodyParser parser;
@@ -2424,14 +2600,22 @@ EpubError Epub::parse_chapter_streaming(IZipFile& file, size_t index, ParagraphS
     parser.set_id_callback(id_sink, id_sink_ctx);
   parser.reserve_runs(BodyParser::kDefaultRunReserve);
 
-  // work_buf=nullptr: CSS is already cached; any remaining cache miss skips silently.
-  CssContext ctx{&file, &zip_, &css_cache_, css_config_, &base_dir, protect_gen, nullptr, 0};
-
-  EpubError err = parse_xhtml_events(reader, nullptr, nullptr, &ctx, base_dir, zip_, parser);
+  static const CssStylesheet kNoInline;
+  EpubError err = parse_xhtml_events(reader, css.inline_sheet ? css.inline_sheet : &kNoInline, &css.ext, base_dir,
+                                     zip_, parser);
   if (err != EpubError::Ok)
     return err;
 
   parser.finish();
+
+  // The parse read the chapter a second time; it must still match.
+  ZipError ferr = zip_input.finish();
+  if (ferr == ZipError::CrcMismatch) {
+    MR_LOGI("epub", "chapter %u: CRC mismatch while parsing", static_cast<unsigned>(index));
+    return EpubError::CrcMismatch;
+  }
+  if (ferr != ZipError::Ok)
+    return EpubError::ZipError;
   return EpubError::Ok;
 }
 

@@ -285,7 +285,10 @@ void BookIndex::build_index(const std::string& root_dir, DrawBuffer& buf) {
       return;
     show_index_progress();
     book.close();
-    if (book.open_metadata(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2()) == EpubError::Ok) {
+    const EpubError open_err = book.open_metadata(path.c_str(), buf.scratch_buf1(), buf.scratch_buf2());
+    if (open_err != EpubError::Ok)
+      MR_LOGI("index", "skipped (open error %d): %s", static_cast<int>(open_err), path.c_str());
+    if (open_err == EpubError::Ok) {
       auto meta = book.metadata();
       const std::string author = meta.author.value_or("");
       add_entry(path, meta.title, author);
@@ -298,7 +301,7 @@ void BookIndex::build_index(const std::string& root_dir, DrawBuffer& buf) {
       }
     }
     book.close();
-    done++;
+    done++;  // counts every epub visited, including skipped ones
   };
 
   // Single iterator helper: calls `cb(path)` for each .epub found

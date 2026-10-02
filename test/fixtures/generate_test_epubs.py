@@ -451,6 +451,104 @@ Then Russian: Москва — столица России. Then Chinese: 你好
 
 
 # ---------------------------------------------------------------------------
+# big_css.epub — a stylesheet far larger than the CSS arena (CssCache), so
+# chapters must fall back to loading only the rules they use; plus a second
+# small sheet in the same chapter and a CDATA-wrapped <style> block.
+# ---------------------------------------------------------------------------
+BIG_CSS_ALIGNS = ["center", "right", "justify"]
+
+
+def gen_big_css():
+    opf_path = "OEBPS/content.opf"
+    rules = ["/* generated: 3000 alignment rules, 500 italic rules */"]
+    for i in range(3000):
+        rules.append(f".c{i} {{ text-align: {BIG_CSS_ALIGNS[i % 3]}; }}")
+    for i in range(500):
+        rules.append(f"p.i{i}, span.i{i} {{ font-style: italic; }}")
+    big = "\n".join(rules)
+    small = "p { text-indent: 2em; }"
+
+    def chapter(title, links, head_extra, body):
+        link_tags = "".join(f'<link rel="stylesheet" type="text/css" href="{l}"/>' for l in links)
+        return f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>{title}</title>{link_tags}{head_extra}</head>
+<body>
+{body}
+</body>
+</html>"""
+
+    ch1 = chapter("One", ["small.css", "big.css"], "", """\
+<p class="c7">c7</p>
+<p class="c1500">c1500</p>
+<p class="c2999">c2999</p>
+<p class="c42 i3">c42 i3</p>""")
+    ch2 = chapter("Two", ["big.css"], """<style type="text/css">
+/*<![CDATA[*/
+  p.x { font-weight: bold; }
+/*]]>*/
+</style>""", """\
+<p class="c10 x">c10 x</p>
+<p class="i499">i499</p>""")
+    ch3 = chapter("Three", ["small.css"], "", "<p>plain</p>")
+    opf = make_opf(
+        title="Big CSS",
+        manifest_items=[
+            ("ch1", "ch1.xhtml", "application/xhtml+xml"),
+            ("ch2", "ch2.xhtml", "application/xhtml+xml"),
+            ("ch3", "ch3.xhtml", "application/xhtml+xml"),
+            ("big", "big.css", "text/css"),
+            ("small", "small.css", "text/css"),
+        ],
+        spine_idrefs=["ch1", "ch2", "ch3"],
+    )
+    files = [
+        ("META-INF/container.xml", CONTAINER_XML.format(opf_path=opf_path), False),
+        (opf_path, opf, True),
+        ("OEBPS/big.css", big, True),
+        ("OEBPS/small.css", small, True),
+        ("OEBPS/ch1.xhtml", ch1, True),
+        ("OEBPS/ch2.xhtml", ch2, True),
+        ("OEBPS/ch3.xhtml", ch3, True),
+    ]
+    write_epub("big_css.epub", files, opf_path)
+
+
+# ---------------------------------------------------------------------------
+# huge_head.epub — a comment in <head> far larger than the XML reader buffer
+# (the stylesheet head scan must skip it, not loop), then a linked stylesheet.
+# ---------------------------------------------------------------------------
+def gen_huge_head():
+    opf_path = "OEBPS/content.opf"
+    ch1 = f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Huge</title><!-- {"x" * 40000} --><link rel="stylesheet" type="text/css" href="small.css"/></head>
+<body>
+<p>indented</p>
+</body>
+</html>"""
+    opf = make_opf(
+        title="Huge Head",
+        manifest_items=[
+            ("ch1", "ch1.xhtml", "application/xhtml+xml"),
+            ("small", "small.css", "text/css"),
+        ],
+        spine_idrefs=["ch1"],
+    )
+    files = [
+        ("META-INF/container.xml", CONTAINER_XML.format(opf_path=opf_path), False),
+        (opf_path, opf, True),
+        ("OEBPS/small.css", "p { text-indent: 2em; }", True),
+        ("OEBPS/ch1.xhtml", ch1, True),
+    ]
+    write_epub("huge_head.epub", files, opf_path)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
@@ -465,4 +563,6 @@ if __name__ == "__main__":
     gen_special_chars()
     gen_large_chapter()
     gen_multilingual()
+    gen_big_css()
+    gen_huge_head()
     print("Done!")

@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -869,4 +871,215 @@ TEST(CssParserTest, LineHeightMerge) {
 TEST(CssParserTest, LineHeightNoValue) {
   auto rule = CssRule::parse("font-size: large");
   EXPECT_FALSE(rule.has_line_height_pct_);
+}
+
+// ---------------------------------------------------------------------------
+// CssStylesheet::Parser — streaming, fixed-size storage, name filter
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Covers comments, @-rules (with and without blocks, and '@' inside a
+// selector), nested blocks, comma lists, compound and complex selectors,
+// declarations that depend on each other, and an overlong declaration.
+const char* kStreamCss =
+    "@charset \"utf-8\";\n"
+    "/* header */ p { text-indent: 1.5em; /* mid */ margin: 0 2em; }\n"
+    "h1, h2 , .title{text-align:center;font-weight:bold}\n"
+    "@media screen { p { text-align: right; } .x { font-style: italic } }\n"
+    "a[href^='mailto:a@b'] { font-weight: bold; }\n"
+    "div p { text-align: justify; }\n"
+    ".pad { margin-left: 1em; padding-left: 1em; }\n"
+    ".sc { text-transform: none; font-variant: small-caps; }\n"
+    ".big { background: url(data:image/png;base64,"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    "); font-style: italic; }\n"
+    "p.intro#first { font-size: 120%; }\n"
+    ".nest { a { b: c } text-align: center; }\n"
+    "span { vertical-align: super }\n"
+    ".unterminated { font-weight: bold;";
+
+struct Probe {
+  const char* element;
+  const char* id;
+  const char* cls;
+};
+
+const Probe kProbes[] = {
+    {"p", nullptr, nullptr},      {"h1", nullptr, nullptr},     {"h2", nullptr, "title"}, {"div", nullptr, "x"},
+    {"a", nullptr, nullptr},      {"p", nullptr, "pad"},        {"span", nullptr, "sc"},  {"p", nullptr, "big"},
+    {"p", "first", "intro more"}, {"p", nullptr, "nest"},       {"span", nullptr, nullptr},
+    {"p", nullptr, "unterminated"},
+};
+
+bool same_rule(const CssRule& a, const CssRule& b) {
+  // CssRule has padding and bitfields; compare through the merge result.
+  CssRule x = CssRule() + a, y = CssRule() + b;
+  return x.alignment_opt().value_or(Alignment::Start) == y.alignment_opt().value_or(Alignment::Start) &&
+         x.has_alignment_ == y.has_alignment_ && x.bold_opt().value_or(false) == y.bold_opt().value_or(false) &&
+         x.has_bold_ == y.has_bold_ && x.italic_opt().value_or(false) == y.italic_opt().value_or(false) &&
+         x.has_italic_ == y.has_italic_ && x.indent_opt().value_or(-1) == y.indent_opt().value_or(-1) &&
+         x.margin_left_opt().value_or(0) == y.margin_left_opt().value_or(0) &&
+         x.margin_right_opt().value_or(0) == y.margin_right_opt().value_or(0) &&
+         x.font_size_pct_opt().value_or(0) == y.font_size_pct_opt().value_or(0) &&
+         x.text_transform_opt().value_or(TextTransform::None) == y.text_transform_opt().value_or(TextTransform::None) &&
+         x.font_variant_small_caps_opt().value_or(false) == y.font_variant_small_caps_opt().value_or(false) &&
+         x.vertical_align_opt().value_or(VerticalAlign::Baseline) ==
+             y.vertical_align_opt().value_or(VerticalAlign::Baseline);
+}
+
+}  // namespace
+
+TEST(CssStreamParser, WholeSheetResults) {
+  CssStylesheet sheet;
+  sheet.extend_from_sheet(kStreamCss);
+  EXPECT_EQ(sheet.get("p", nullptr, nullptr).indent_opt().value_or(0), 18);
+  EXPECT_EQ(sheet.get("p", nullptr, nullptr).alignment_opt().value_or(Alignment::Start), Alignment::Start)
+      << "rules inside @media are skipped";
+  EXPECT_TRUE(sheet.get("h2", nullptr, nullptr).bold_opt().value_or(false));
+  EXPECT_EQ(sheet.get("div", nullptr, "title").alignment_opt().value_or(Alignment::Start), Alignment::Center);
+  EXPECT_FALSE(sheet.get("a", nullptr, nullptr).has_bold_) << "'@' in a selector skips the rule";
+  EXPECT_FALSE(sheet.get("p", nullptr, "x").has_italic_);
+  // padding-left adds to margin-left within the same rule.
+  EXPECT_EQ(sheet.get("p", nullptr, "pad").margin_left_opt().value_or(0), 24);
+  // font-variant: small-caps sees the earlier explicit text-transform.
+  EXPECT_EQ(sheet.get("span", nullptr, "sc").text_transform_opt().value_or(TextTransform::Uppercase),
+            TextTransform::None);
+  // An overlong declaration is dropped, the rest of its rule is kept.
+  EXPECT_TRUE(sheet.get("p", nullptr, "big").italic_opt().value_or(false));
+  EXPECT_EQ(sheet.get("p", "first", "intro more").font_size_pct_opt().value_or(0), 120);
+  EXPECT_FALSE(sheet.get("p", nullptr, "nest").has_alignment_) << "a block with nested braces is skipped";
+  EXPECT_FALSE(sheet.get("p", nullptr, "unterminated").has_bold_);
+  EXPECT_FALSE(sheet.overflow());
+}
+
+TEST(CssStreamParser, ChunkingDoesNotMatter) {
+  CssStylesheet whole;
+  whole.extend_from_sheet(kStreamCss);
+  const std::string css = kStreamCss;
+  std::vector<char> scratch(CssStylesheet::Parser::kScratchSize);
+  for (size_t chunk : {size_t(1), size_t(2), size_t(3), size_t(7), size_t(64)}) {
+    CssStylesheet sheet;
+    CssStylesheet::Parser parser(sheet, scratch.data());
+    for (size_t pos = 0; pos < css.size(); pos += chunk)
+      parser.feed(css.data() + pos, std::min(chunk, css.size() - pos));
+    parser.finish();
+    EXPECT_EQ(sheet.rule_count(), whole.rule_count()) << "chunk " << chunk;
+    EXPECT_EQ(sheet.size_bytes(), whole.size_bytes()) << "chunk " << chunk;
+    for (const Probe& p : kProbes)
+      EXPECT_TRUE(same_rule(sheet.get(p.element, p.id, p.cls), whole.get(p.element, p.id, p.cls)))
+          << "chunk " << chunk << " element " << p.element << " class " << (p.cls ? p.cls : "");
+  }
+}
+
+// EPUB tools wrap <style> contents as /*<![CDATA[*/ ... /*]]>*/; the XML reader
+// hands that over in three pieces, split inside the comments.
+TEST(CssStreamParser, CdataWrappedStyleBlock) {
+  CssStylesheet sheet;
+  std::vector<char> scratch(CssStylesheet::Parser::kScratchSize);
+  CssStylesheet::Parser parser(sheet, scratch.data());
+  const char* pieces[] = {"\n/*", "*/\n  p.sgc-1 {text-align: justify;}\n  /*", "*/\n"};
+  for (const char* piece : pieces)
+    parser.feed(piece, std::strlen(piece));
+  parser.finish();
+  EXPECT_EQ(sheet.get("p", nullptr, "sgc-1").alignment_opt().value_or(Alignment::Start), Alignment::Justify);
+}
+
+TEST(CssStreamParser, ExternalStorageOverflowKeepsWholeRules) {
+  std::string css;
+  for (int i = 0; i < 100; ++i)
+    css += ".c" + std::to_string(i) + " { font-weight: bold; }\n";
+  CssStylesheet full;
+  full.extend_from_sheet(css);
+  ASSERT_EQ(full.rule_count(), 100u);
+
+  std::vector<uint8_t> region(full.size_bytes() / 2);
+  std::vector<char> scratch(CssStylesheet::Parser::kScratchSize);
+  CssStylesheet sheet;
+  sheet.use_external(region.data(), region.size());
+  CssStylesheet::Parser parser(sheet, scratch.data());
+  parser.feed(css.data(), css.size());
+  parser.finish();
+  EXPECT_TRUE(sheet.overflow());
+  EXPECT_LE(sheet.size_bytes(), region.size());
+  ASSERT_GT(sheet.rule_count(), 0u);
+  ASSERT_LT(sheet.rule_count(), 100u);
+  // The rules that fit are intact, the rest are absent.
+  EXPECT_TRUE(sheet.get("p", nullptr, "c0").bold_opt().value_or(false));
+  const std::string last_kept = "c" + std::to_string(sheet.rule_count() - 1);
+  EXPECT_TRUE(sheet.get("p", nullptr, last_kept.c_str()).bold_opt().value_or(false));
+  EXPECT_FALSE(sheet.get("p", nullptr, "c99").has_bold_);
+}
+
+TEST(CssStreamParser, NameFilterKeepsOnlyUsableRules) {
+  const char* css = "p { text-indent: 1em; } .a { font-weight: bold; } .b { font-style: italic; } "
+                    "p.a.c { text-align: center; } #id { text-align: right; } h1, .a { font-size: 150%; }";
+  std::vector<uint32_t> set;
+  for (const char* name : {"p", "a"})
+    set.push_back(CssNameSet::hash(name, std::strlen(name)));
+  std::sort(set.begin(), set.end());
+  const CssNameSet names{set.data(), set.size()};
+
+  CssStylesheet sheet;
+  std::vector<char> scratch(CssStylesheet::Parser::kScratchSize);
+  CssStylesheet::Parser parser(sheet, scratch.data(), &names);
+  parser.feed(css, std::strlen(css));
+  parser.finish();
+  // Kept: p, .a, and ".a" of the comma list. Dropped: .b, p.a.c (needs c), #id, h1.
+  EXPECT_EQ(sheet.rule_count(), 3u);
+  const CssRule r = sheet.get("p", nullptr, "a");
+  EXPECT_TRUE(r.bold_opt().value_or(false));
+  EXPECT_EQ(r.font_size_pct_opt().value_or(0), 150);
+  EXPECT_EQ(r.indent_opt().value_or(0), 12);
+}
+
+// ---------------------------------------------------------------------------
+// Allocation-free apply(): shorthand part counts, case, units, over-long input
+// ---------------------------------------------------------------------------
+
+TEST(CssRuleParse, MarginShorthandPartCounts) {
+  CssConfig cfg;
+  cfg.content_width = 1000;
+  cfg.max_margin_pct = 100;
+  auto r1 = CssRule::parse("margin: 4px", cfg);
+  EXPECT_EQ(r1.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r1.margin_left_opt().value_or(99), 4);
+  auto r2 = CssRule::parse("margin: 4px 8px", cfg);
+  EXPECT_EQ(r2.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r2.margin_bottom_opt().value_or(99), 4);
+  EXPECT_EQ(r2.margin_left_opt().value_or(99), 8);
+  EXPECT_EQ(r2.margin_right_opt().value_or(99), 8);
+  auto r3 = CssRule::parse("margin: 4px 8px 12px", cfg);
+  EXPECT_EQ(r3.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r3.margin_left_opt().value_or(99), 8);
+  EXPECT_EQ(r3.margin_bottom_opt().value_or(99), 12);
+  auto r4 = CssRule::parse("margin: 4px 8px 12px 16px", cfg);
+  EXPECT_EQ(r4.margin_right_opt().value_or(99), 8);
+  EXPECT_EQ(r4.margin_left_opt().value_or(99), 16);
+  auto r5 = CssRule::parse("margin:  4px   8px 12px 16px 20px ", cfg);
+  EXPECT_EQ(r5.margin_top_opt().value_or(99), 4);
+  EXPECT_EQ(r5.margin_right_opt().value_or(99), 8);
+  EXPECT_EQ(r5.margin_bottom_opt().value_or(99), 12);
+  EXPECT_EQ(r5.margin_left_opt().value_or(99), 16);
+}
+
+TEST(CssRuleParse, UppercaseAndUnits) {
+  CssConfig cfg;
+  cfg.glyph_width = 10;
+  cfg.content_width = 400;
+  EXPECT_EQ(CssRule::parse("TEXT-INDENT: 2EM", cfg).indent_opt().value_or(0), 20);
+  EXPECT_EQ(CssRule::parse("text-indent: 1.5rem", cfg).indent_opt().value_or(0), 15);
+  EXPECT_EQ(CssRule::parse("text-indent: 6pt", cfg).indent_opt().value_or(0), 8);
+  EXPECT_EQ(CssRule::parse("text-indent: 5%", cfg).indent_opt().value_or(0), 20);
+  EXPECT_EQ(CssRule::parse("text-indent: 7PX", cfg).indent_opt().value_or(0), 7);
+  EXPECT_TRUE(CssRule::parse("Font-Weight: BOLD").bold_opt().value_or(false));
+}
+
+TEST(CssRuleParse, OverLongDeclarationIgnored) {
+  std::string decl = "font-family: " + std::string(1400, 'a') + "; font-weight: bold";
+  auto r = CssRule::parse(decl);
+  EXPECT_TRUE(r.bold_opt().value_or(false));
+  std::string only = "font-weight: " + std::string(1500, 'b');
+  EXPECT_FALSE(CssRule::parse(only).has_bold_);
 }

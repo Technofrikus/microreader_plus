@@ -1,5 +1,6 @@
 #include "MrbConverter.h"
 
+#include "../../HeapLog.h"
 #include "../../display/DeviceConfig.h"
 #include "../../display/DrawBuffer.h"
 #include "../EpubParser.h"
@@ -138,6 +139,15 @@ bool write_split_paragraph(MrbWriter& writer, Paragraph& para) {
 
 }  // namespace
 
+// The screens pass a framebuffer as xml_buf; it must hold the stylesheet arena.
+static_assert(DrawBuffer::kBufSize >= Epub::kChapterBufSize, "framebuffer too small for the chapter CSS arena");
+
+static bool g_conversion_read_error = false;
+
+bool conversion_read_error() {
+  return g_conversion_read_error;
+}
+
 bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t* work_buf, uint8_t* xml_buf,
                                    std::function<void(int, int)> progress_cb, std::function<bool()> cancel_cb,
                                    size_t xml_buf_size) {
@@ -164,6 +174,21 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
     xml_buf = owned_xml.get();
     xml_buf_size = kXmlBufSize;
   }
+
+  // The parsed stylesheets live in xml_buf from chapter to chapter (see
+  // CssCache). Start clean — the caller may have drawn into it since a previous
+  // conversion — and let go of them when done, whatever the return path.
+  g_conversion_read_error = false;
+  const Epub& epub = book.epub();
+  epub.release_css();
+  struct ReleaseCss {
+    const Epub& epub;
+    ~ReleaseCss() {
+      if (epub.css_incomplete_chapters() != 0)
+        MR_LOGI("mrb", "styling incomplete in %u chapters", static_cast<unsigned>(epub.css_incomplete_chapters()));
+      epub.release_css();
+    }
+  } release_css{epub};
 
   std::vector<ImageMapping> image_map;
   const auto& zip = book.epub().zip();
@@ -278,7 +303,12 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
 
     ctx.current_zip_file_idx = static_cast<uint16_t>(book.epub().spine()[ci].file_idx);
     ctx.current_chapter_idx = static_cast<uint16_t>(ci);
-    book.load_chapter_streaming(ci, sink, &ctx, work_buf, xml_buf, id_sink, &ctx, xml_buf_size);
+    EpubError chapter_err = book.load_chapter_streaming(ci, sink, &ctx, work_buf, xml_buf, id_sink, &ctx, xml_buf_size);
+    if (chapter_err == EpubError::CrcMismatch) {
+      g_conversion_read_error = true;
+      MR_LOGI("mrb", "SD card read error: chapter %u fails its CRC32", static_cast<unsigned>(ci));
+      return false;
+    }
     if (ctx.error) {
 #ifdef ESP_PLATFORM
       ESP_LOGE("mrb", "ctx.error after ch %u", (unsigned)ci);
@@ -347,7 +377,8 @@ bool convert_epub_to_mrb_streaming(Book& book, const char* output_path, uint8_t*
 }
 
 #ifdef ESP_PLATFORM
-void benchmark_epub_conversion(Book& book, const char* tmp_path, long open_ms, uint8_t* work_buf, uint8_t* xml_buf) {
+void benchmark_epub_conversion(Book& book, const char* tmp_path, long open_ms, uint8_t* work_buf, uint8_t* xml_buf,
+                               size_t xml_buf_size) {
   static constexpr const char* TAG = "bench";
   static constexpr size_t kWorkBufSize = ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048;
   static constexpr size_t kXmlBufSize = 16384;
@@ -360,6 +391,7 @@ void benchmark_epub_conversion(Book& book, const char* tmp_path, long open_ms, u
   if (!xml_buf) {
     owned_xml = std::make_unique<uint8_t[]>(kXmlBufSize);
     xml_buf = owned_xml.get();
+    xml_buf_size = kXmlBufSize;
   }
 
   const ZipReader& zip = book.epub().zip();
@@ -377,7 +409,7 @@ void benchmark_epub_conversion(Book& book, const char* tmp_path, long open_ms, u
   // BENCH_CONV: full streaming conversion (main metric)
   ESP_LOGI(TAG, "--- BENCH_CONV ---");
   int64_t t = esp_timer_get_time();
-  bool ok = convert_epub_to_mrb_streaming(book, tmp_path, work_buf, xml_buf);
+  bool ok = convert_epub_to_mrb_streaming(book, tmp_path, work_buf, xml_buf, nullptr, nullptr, xml_buf_size);
   long t_conv = (long)((esp_timer_get_time() - t) / 1000);
   long out_bytes = 0;
   if (ok) {
@@ -421,7 +453,8 @@ void benchmark_epub_conversion(Book& book, const char* tmp_path, long open_ms, u
   auto count_sink = [](void* ctx, Paragraph&&) { ++(*(unsigned*)ctx); };
   t = esp_timer_get_time();
   for (size_t ci = 0; ci < book.chapter_count(); ++ci)
-    book.load_chapter_streaming(ci, count_sink, &total_paras, work_buf, xml_buf);
+    book.load_chapter_streaming(ci, count_sink, &total_paras, work_buf, xml_buf, nullptr, nullptr, xml_buf_size);
+  book.epub().release_css();
   long t_build = (long)((esp_timer_get_time() - t) / 1000);
   ESP_LOGI(TAG, "BENCH_BUILD: %ldms  paras=%u", t_build, total_paras);
 

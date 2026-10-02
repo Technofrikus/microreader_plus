@@ -336,3 +336,81 @@ INSTANTIATE_TEST_SUITE_P(AllEpubs, ZipReaderAllEpubsTest,
                          ::testing::Values("basic.epub", "multi_chapter.epub", "with_css.epub", "with_images.epub",
                                            "stored.epub", "nested_dirs.epub", "special_chars.epub",
                                            "large_chapter.epub"));
+
+// ---------------------------------------------------------------------------
+// CRC32 verification
+// ---------------------------------------------------------------------------
+
+namespace {
+// Flips one bit in every read larger than `min_read` bytes (i.e. file data, not
+// headers) while `corrupt` is set — an SD card returning wrong bytes silently.
+class FlakyZipFile : public IZipFile {
+ public:
+  explicit FlakyZipFile(StdioZipFile& inner) : inner_(inner) {}
+  bool corrupt = false;
+  bool seek(int64_t o, int w) override {
+    return inner_.seek(o, w);
+  }
+  int64_t tell() override {
+    return inner_.tell();
+  }
+  size_t read(void* buf, size_t size) override {
+    size_t n = inner_.read(buf, size);
+    if (corrupt && n > 64)
+      static_cast<uint8_t*>(buf)[n / 2] ^= 0x10;
+    return n;
+  }
+
+ private:
+  StdioZipFile& inner_;
+};
+}  // namespace
+
+TEST_F(ZipReaderTest, VerifyCrcAcceptsIntactEntries) {
+  open_fixture("basic.epub");
+  std::vector<uint8_t> work(ZipEntryInput::kMinWorkBufSize + 1024);
+  for (const auto& e : reader.entries()) {
+    EXPECT_TRUE(e.has_crc);
+    EXPECT_EQ(ZipReader::verify_crc(file, e, work.data(), work.size()), ZipError::Ok) << e.name;
+  }
+}
+
+TEST_F(ZipReaderTest, VerifyCrcDetectsCorruptRead) {
+  open_fixture("basic.epub");
+  FlakyZipFile flaky(file);
+  std::vector<uint8_t> work(ZipEntryInput::kMinWorkBufSize + 1024);
+  int mismatches = 0;
+  flaky.corrupt = true;
+  for (const auto& e : reader.entries()) {
+    ZipError err = ZipReader::verify_crc(flaky, e, work.data(), work.size());
+    if (e.compressed_size <= 64)
+      continue;  // too small for the flaky reader to touch
+    EXPECT_NE(err, ZipError::Ok) << e.name;
+    if (err == ZipError::CrcMismatch)
+      ++mismatches;
+  }
+  EXPECT_GT(mismatches, 0);
+  flaky.corrupt = false;
+  for (const auto& e : reader.entries())
+    EXPECT_EQ(ZipReader::verify_crc(flaky, e, work.data(), work.size()), ZipError::Ok) << e.name;
+}
+
+// CRC checking is opt-in: without enable_crc_check() a corrupt read goes unnoticed
+// by finish(); with it the mismatch is reported.
+TEST_F(ZipReaderTest, CrcCheckIsOptIn) {
+  open_fixture("basic.epub");
+  FlakyZipFile flaky(file);
+  std::vector<uint8_t> work(ZipEntryInput::kMinWorkBufSize + 1024);
+  for (const auto& e : reader.entries()) {
+    if (e.compressed_size <= 64 || e.compression != 0)
+      continue;  // stored entries: the flipped bit always lands in the data
+    flaky.corrupt = true;
+    ZipEntryInput off;
+    ASSERT_EQ(off.open(flaky, e, work.data(), work.size()), ZipError::Ok);
+    EXPECT_EQ(off.finish(), ZipError::Ok) << e.name;
+    ZipEntryInput on;
+    ASSERT_EQ(on.open(flaky, e, work.data(), work.size()), ZipError::Ok);
+    on.enable_crc_check();
+    EXPECT_EQ(on.finish(), ZipError::CrcMismatch) << e.name;
+  }
+}

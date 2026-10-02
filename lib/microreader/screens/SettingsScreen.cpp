@@ -286,7 +286,7 @@ void SettingsScreen::on_select(int index) {
       BookIndex::instance().build_index(root_dir, *buf_);
       BookIndex::instance().save(index_path);
       buf_->reset_after_scratch(true);
-      app_->pop_screen();  // go back to main menu
+      restart();  // stay on Settings; the menu reads the fresh index when shown
     }
     return;
   }
@@ -799,6 +799,16 @@ void SettingsScreen::start_convert_books_() {
   convert_books_pos_ = 0;
   convert_books_index_path_ = std::string(data_dir_) + "/book_index.dat";
   convert_books_total_ = BookIndex::count_paths(convert_books_index_path_);
+  if (convert_books_total_ == 0 && app_ && app_->main_menu() && app_->main_menu()->has_books_dir()) {
+    // No index yet (fresh card, books copied over by hand): build it first,
+    // exactly like Rebuild Index, instead of reporting "No books found".
+    buf_->sync_bw_ram();
+    BookIndex::instance().load(convert_books_index_path_);
+    BookIndex::instance().build_index(app_->main_menu()->books_dir(), *buf_);
+    BookIndex::instance().save(convert_books_index_path_);
+    buf_->reset_after_scratch(true);
+    convert_books_total_ = BookIndex::count_paths(convert_books_index_path_);
+  }
   if (convert_books_total_ == 0) {
     show_toast_(idx_convert_books_, "No books found");
     restart();

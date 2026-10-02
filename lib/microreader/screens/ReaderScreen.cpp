@@ -590,6 +590,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     return;
   }
   buf_was_touched_ = false;
+  open_error_ = "Failed to open book";
 
   if (!mrb_ok) {
     // Upload the current frame before scratch buffer use so the display
@@ -608,6 +609,12 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
     buf_was_touched_ = true;
     buf.sync_bw_ram();
     buf.show_loading("Converting...", 0);
+    // On an X3 the full-frame upload above leaves the driver's ~52 KB mirror
+    // buffer allocated. Opening and converting the book need that heap (with
+    // Bluetooth on it was the difference between converting and aborting), and
+    // the progress updates only use the small region path. Convert All does
+    // the same; the buffer is reallocated on the next full-frame upload.
+    buf.release_display_memory();
 
 #ifdef ESP_PLATFORM
     int64_t open_start = esp_timer_get_time();
@@ -646,6 +653,8 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
                                        nullptr, DrawBuffer::kBufSize)) {
       MR_LOGI("reader", "mrb conversion failed");
       MR_DIAG("reader", "conversion_failed");
+      open_error_ = conversion_read_error() ? "SD card read error" : "Failed to open book";
+      std::remove(mrb_path_.c_str());  // don't leave a half-written MRB behind (Convert All does the same)
       open_ok_ = false;
       goto show_error;
     }
@@ -746,7 +755,7 @@ show_error:
   MR_DIAG("reader", "failed");
   if (buf_was_touched_) {
     buf.fill(true);
-    buf.draw_text(kPaddingLeft, kPaddingTop, "Failed to open book", true, kScale);
+    buf.draw_text(kPaddingLeft, kPaddingTop, open_error_, true, kScale);
   }
 }
 
@@ -806,12 +815,11 @@ void ReaderScreen::stop() {
   if (open_ok_)
     save_position_();
   page_ = PageContent{};
-  mrb_path_.clear();
-  mrb_path_.shrink_to_fit();
-  pos_path_.clear();
-  pos_path_.shrink_to_fit();
-  book_key_.clear();
-  book_key_.shrink_to_fit();
+  layout_engine_ = TextLayout{};
+  // Swap with empty strings: shrink_to_fit() did not release the buffers on the device.
+  std::string().swap(mrb_path_);
+  std::string().swap(pos_path_);
+  std::string().swap(book_key_);
   nav_history_.clear();
   reset_eta_();
   open_ok_ = false;

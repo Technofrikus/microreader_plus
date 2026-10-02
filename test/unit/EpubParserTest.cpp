@@ -1794,3 +1794,155 @@ TEST(XhtmlHref, MultiWordLinkTextFullyCaptures) {
   }
   EXPECT_EQ(linked_count, 4) << "Expected 4 'Rechtenachweis' linked runs";
 }
+
+// ---------------------------------------------------------------------------
+// Chapter stylesheets in the CSS arena (big_css.epub: a ~110 KB stylesheet,
+// far larger than CssCache::kArenaSize)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::vector<Paragraph> stream_chapter(StdioZipFile& file, const Epub& epub, size_t index, std::vector<uint8_t>& work,
+                                      std::vector<uint8_t>& xml) {
+  std::vector<Paragraph> out;
+  auto sink = [](void* ctx, Paragraph&& p) { static_cast<std::vector<Paragraph>*>(ctx)->push_back(std::move(p)); };
+  EXPECT_EQ(epub.parse_chapter_streaming(file, index, sink, &out, work.data(), xml.data(), nullptr, nullptr, xml.size()),
+            EpubError::Ok);
+  return out;
+}
+
+Alignment align_of(const Paragraph& p) {
+  return p.text.alignment.value_or(Alignment::Start);
+}
+
+FontStyle style_of(const Paragraph& p) {
+  return p.text.runs.empty() ? FontStyle::Regular : p.text.runs[0].style;
+}
+
+void expect_big_css_styles(const std::vector<Paragraph>& ch1, const std::vector<Paragraph>& ch2,
+                           const std::vector<Paragraph>& ch3) {
+  // .cN aligns center/right/justify for N % 3 == 0/1/2; small.css indents p.
+  ASSERT_EQ(ch1.size(), 4u);
+  EXPECT_EQ(align_of(ch1[0]), Alignment::End);      // c7
+  EXPECT_EQ(align_of(ch1[1]), Alignment::Center);   // c1500
+  EXPECT_EQ(align_of(ch1[2]), Alignment::Justify);  // c2999
+  EXPECT_EQ(align_of(ch1[3]), Alignment::Center);   // c42
+  EXPECT_EQ(style_of(ch1[3]), FontStyle::Italic);   // p.i3
+  for (const Paragraph& p : ch1)
+    EXPECT_EQ(p.text.indent.value_or(0), 24) << "small.css, linked next to big.css";
+  // Chapter 2: big.css plus a CDATA-wrapped <style> block.
+  ASSERT_EQ(ch2.size(), 2u);
+  EXPECT_EQ(align_of(ch2[0]), Alignment::End);  // c10
+  EXPECT_EQ(style_of(ch2[0]), FontStyle::Bold);  // p.x from <style>
+  EXPECT_EQ(style_of(ch2[1]), FontStyle::Italic);  // p.i499, the sheet's last rule
+  ASSERT_EQ(ch3.size(), 1u);
+  EXPECT_EQ(ch3[0].text.indent.value_or(0), 24);
+}
+
+}  // namespace
+
+TEST_F(EpubTest, BigStylesheetIsFilteredPerChapterInTheArena) {
+  open_fixture("big_css.epub");
+  std::vector<uint8_t> work(ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048);
+  std::vector<uint8_t> xml(Epub::kChapterBufSize);
+  auto ch1 = stream_chapter(file, epub, 0, work, xml);
+  auto ch2 = stream_chapter(file, epub, 1, work, xml);
+  auto ch3 = stream_chapter(file, epub, 2, work, xml);
+  expect_big_css_styles(ch1, ch2, ch3);
+  EXPECT_EQ(epub.css_incomplete_chapters(), 0u);
+  EXPECT_TRUE(epub.css_cache().too_big(static_cast<uint32_t>(epub.find_entry_index("OEBPS/big.css"))));
+  EXPECT_LE(epub.css_cache().peak(), CssCache::kArenaSize);
+  // The arena is the tail of xml_buf: nothing was allocated for it.
+  EXPECT_EQ(epub.css_cache().arena(), xml.data() + Epub::kChapterXmlSize + CssStylesheet::Parser::kScratchSize);
+}
+
+TEST_F(EpubTest, BigStylesheetSameResultWithHeapArenaAndInMemoryParse) {
+  open_fixture("big_css.epub");
+  std::vector<uint8_t> work(ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048);
+  std::vector<uint8_t> xml(Epub::kChapterXmlSize);  // too small: arena from the heap
+  auto ch1 = stream_chapter(file, epub, 0, work, xml);
+  auto ch2 = stream_chapter(file, epub, 1, work, xml);
+  auto ch3 = stream_chapter(file, epub, 2, work, xml);
+  expect_big_css_styles(ch1, ch2, ch3);
+
+  Chapter c1, c2, c3;
+  ASSERT_EQ(epub.parse_chapter(file, 0, c1), EpubError::Ok);
+  ASSERT_EQ(epub.parse_chapter(file, 1, c2), EpubError::Ok);
+  ASSERT_EQ(epub.parse_chapter(file, 2, c3), EpubError::Ok);
+  expect_big_css_styles(c1.paragraphs, c2.paragraphs, c3.paragraphs);
+  EXPECT_EQ(epub.css_incomplete_chapters(), 0u);
+}
+
+// Small sheets stay in the arena from chapter to chapter.
+TEST_F(EpubTest, StylesheetStaysCachedAcrossChapters) {
+  open_fixture("with_css.epub");
+  std::vector<uint8_t> work(ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048);
+  std::vector<uint8_t> xml(Epub::kChapterBufSize);
+  auto a = stream_chapter(file, epub, 0, work, xml);
+  const size_t used = epub.css_cache().used();
+  EXPECT_GT(used, 0u);
+  auto b = stream_chapter(file, epub, 0, work, xml);
+  EXPECT_EQ(epub.css_cache().used(), used);
+  EXPECT_EQ(epub.css_cache().entry_count(), 1u);
+  ASSERT_EQ(a.size(), b.size());
+  epub.release_css();
+  EXPECT_EQ(epub.css_cache().entry_count(), 0u);
+}
+
+// A tag/comment in <head> larger than the XML reader buffer must be skipped by
+// the stylesheet head scan (it used to spin forever), and the linked sheet after
+// it must still apply.
+TEST_F(EpubTest, HugeHeadCommentDoesNotHangStylesheetScan) {
+  open_fixture("huge_head.epub");
+  std::vector<uint8_t> work(ZipEntryInput::kDecompSize + ZipEntryInput::kDictSize + 2048);
+  std::vector<uint8_t> xml(Epub::kChapterBufSize);
+  auto ch = stream_chapter(file, epub, 0, work, xml);
+  ASSERT_EQ(ch.size(), 1u);
+  EXPECT_EQ(ch[0].text.indent.value_or(0), 24);
+}
+
+// Sheets handed out by CssCache must stay valid when a later load evicts a
+// sheet in front of them (entries used to shift down, so the pointer then
+// referred to the wrong sheet).
+TEST(CssCachePointers, SurviveEvictionOfEarlierSheet) {
+  CssCache cache;
+  cache.set_arena(nullptr);
+  CssConfig config;
+  std::vector<char> scratch(CssStylesheet::Parser::kScratchSize);
+  auto filler = [&](const std::string& css) {
+    return [&scratch, css](CssStylesheet& sheet) {
+      CssStylesheet::Parser parser(sheet, scratch.data());
+      parser.feed(css.data(), css.size());
+      parser.finish();
+      return true;
+    };
+  };
+  auto big = [](const char* prefix) {
+    std::string s;
+    for (int i = 0; i < 800; ++i)
+      s += std::string(".") + prefix + std::to_string(i) + "{font-weight:bold}\n";
+    return s;
+  };
+  const std::string big_x = big("x"), big_b = big("b"), small_a = ".a0{font-style:italic}";
+
+  cache.begin_chapter();
+  const CssStylesheet* x = cache.load(1, config, false, CssCache::kArenaSize, false, filler(big_x));
+  ASSERT_NE(x, nullptr);
+  ASSERT_FALSE(x->overflow());
+  cache.begin_chapter();
+  ASSERT_NE(cache.load(2, config, false, CssCache::kArenaSize, false, filler(small_a)), nullptr);
+  cache.begin_chapter();
+  const CssStylesheet* a = cache.find(2);
+  ASSERT_NE(a, nullptr);
+  // B only fits once X is gone.
+  ASSERT_GT(big_x.size() + big_b.size(), 0u);
+  const CssStylesheet* b = cache.load(3, config, false, CssCache::kArenaSize, false, filler(big_b));
+  ASSERT_NE(b, nullptr);
+  EXPECT_EQ(cache.find(1), nullptr) << "X should have been evicted";
+  EXPECT_EQ(cache.entry_count(), 2u);
+  EXPECT_TRUE(a->get("p", nullptr, "a0").italic_opt().value_or(false));
+  EXPECT_FALSE(a->get("p", nullptr, "b5").bold_opt().value_or(false));
+  EXPECT_TRUE(b->get("p", nullptr, "b5").bold_opt().value_or(false));
+  EXPECT_EQ(cache.find(2), a);
+  EXPECT_EQ(cache.find(3), b);
+}

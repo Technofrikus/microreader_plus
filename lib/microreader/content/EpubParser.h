@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -13,73 +14,138 @@ namespace microreader {
 // Each paragraph is emitted as soon as it's parsed — no accumulation.
 using ParagraphSink = void (*)(void* ctx, Paragraph&& para);
 
-// Cache for per-file parsed CSS stylesheets.
-// Uses a fixed-size array so entry addresses never move — callers may hold
-// raw pointers to Entry::sheet for the duration of a chapter parse.
-// Evicts the least-recently-used eligible entry when total cached bytes
-// exceed kMaxCacheBytes, or when the platform reports low heap (ESP32 only).
-// CSS files are loaded on demand — only those actually referenced by a
-// chapter's <link rel="stylesheet"> tags are loaded.
+// The parsed stylesheets of a book, kept in one fixed memory region (the
+// arena) rather than on the heap — during a conversion that is the unused part
+// of the chapter's XML buffer, so loading CSS never competes with the rest of
+// the conversion (or Bluetooth) for heap, and the result is the same on every
+// device and in every memory state.
+//
+// Sheets sit back to back in the arena, oldest first. Each chapter marks the
+// ones it uses; to make room, sheets the current chapter does not use are
+// dropped (they are simply parsed from the EPUB again when a later chapter
+// needs them) and the rest are moved down.
 class CssCache {
  public:
-  static constexpr size_t kMaxCacheBytes = 64 * 1024;
-  static constexpr size_t kMaxEntries = 16;
+  static constexpr size_t kMaxEntries = 16;  // stylesheet links per chapter
+  // Arena size. The same everywhere so a book converts identically on any
+  // platform; parse_chapter_streaming() takes it from its xml_buf when that is
+  // large enough (Epub::kChapterBufSize) and from the heap otherwise. Sized so
+  // kChapterBufSize is exactly one display framebuffer (DrawBuffer::kBufSize).
+  static constexpr size_t kArenaSize = 32288;
+  static constexpr uint32_t kInlineKey = 0xFFFFFFFFu;  // the chapter's <style> blocks
 
-  // protect_gen: entries whose last_used_gen > protect_gen are not evicted.
-  // Pass current_gen() before the chapter's head scan starts so that CSS
-  // loaded earlier in the same chapter cannot be evicted mid-scan.
-  //
-  // work_buf/work_buf_size: caller-provided decompression buffer (from the
-  // application's framebuffer). Required on cache miss; if null and there
-  // is a cache miss the stylesheet is silently skipped rather than crashing.
-  //
-  // text_buf/text_buf_size: optional caller-provided buffer (another idle
-  // framebuffer) that receives the raw CSS text, so a large stylesheet doesn't
-  // need one big heap block. Files that don't fit fall back to the heap.
-  //
-  // On ESP32 the parsed size is measured first; if the heap is short, cached
-  // stylesheets of earlier chapters are released to make room. Only if that is
-  // not enough is the sheet loaded partially (rules up to the heap floor) — or,
-  // for text too large for text_buf with no heap block for it, skipped (not
-  // retried for the rest of the book). The conversion never aborts.
-  const CssStylesheet* get_or_load(IZipFile& file, const ZipReader& zip,
-                                   const std::string& path, const CssConfig& config,
-                                   uint32_t protect_gen = 0,
-                                   uint8_t* work_buf = nullptr,
-                                   size_t work_buf_size = 0,
-                                   uint8_t* text_buf = nullptr,
-                                   size_t text_buf_size = 0);
+  CssCache() = default;
+  CssCache(const CssCache&) = delete;
+  CssCache& operator=(const CssCache&) = delete;
 
+  // Uses [base, base + kArenaSize). A different region than before drops all
+  // sheets; nullptr switches to a heap arena owned by the cache.
+  void set_arena(uint8_t* base);
+  // Drops all sheets (they point into the arena, which the caller may reuse).
   void clear();
+  // Drops all sheets but remembers which were too big.
+  void drop_sheets();
 
-  size_t entry_count() const { return count_; }
-  size_t total_bytes() const { return total_bytes_; }
-  uint32_t current_gen() const { return gen_; }
+  // Starts a chapter: sheets loaded only for the previous chapter are dropped.
+  void begin_chapter();
+  // A sheet already in the arena (and marks it used by this chapter), or nullptr.
+  const CssStylesheet* find(uint32_t key);
+
+  // Parses a sheet into the free end of the arena: fill(CssStylesheet&) must
+  // feed it through a CssStylesheet::Parser and return false on a read error.
+  // If it does not fit, sheets this chapter does not use are dropped and it is
+  // parsed again. `limit` caps the arena bytes used (the top may be reserved).
+  // Returns nullptr if the sheet could not be read or does not fit next to
+  // this chapter's other sheets. chapter_only: dropped at the next chapter
+  // (inline <style> blocks, sheets filtered for this chapter).
+  // keep_partial: on overflow keep the rules that fit instead of failing.
+  template <typename Fill>
+  const CssStylesheet* load(uint32_t key, const CssConfig& config, bool chapter_only, size_t limit,
+                            bool keep_partial, Fill&& fill) {
+    for (;;) {
+      size_t slot = 0;
+      while (slot < kMaxEntries + 1 && entries_[slot].used)
+        ++slot;
+      if (slot == kMaxEntries + 1) {
+        if (!evict_one())
+          return nullptr;
+        continue;
+      }
+      const size_t start = end_offset();
+      Entry& e = entries_[slot];
+      e.key = key;
+      e.offset = static_cast<uint32_t>(start);
+      e.last_used = gen_;
+      e.chapter_only = chapter_only;
+      e.sheet = CssStylesheet(config);
+      e.sheet.use_external(arena_ + start, limit > start ? limit - start : 0);
+      if (!fill(e.sheet))
+        return nullptr;
+      if (!e.sheet.overflow() || keep_partial) {
+        e.used = true;
+        order_[count_++] = static_cast<uint8_t>(slot);
+        peak_ = std::max(peak_, end_offset());
+        return &e.sheet;
+      }
+      if (!evict_one())
+        return nullptr;
+    }
+  }
+
+  uint8_t* arena() const {
+    return arena_;
+  }
+  size_t used() const {
+    return end_offset();
+  }
+  size_t entry_count() const {
+    return count_;
+  }
+  // Largest arena use so far (diagnostics).
+  size_t peak() const {
+    return peak_;
+  }
+
+  // Sheets that did not fit unfiltered: later chapters linking them go
+  // straight to the per-chapter filtered load.
+  void mark_too_big(uint32_t key);
+  bool too_big(uint32_t key) const;
 
  private:
   struct Entry {
-    std::string path;
+    uint32_t key = 0;
+    uint32_t offset = 0;
+    uint32_t last_used = 0;
+    bool chapter_only = false;
+    bool used = false;
     CssStylesheet sheet;
-    size_t bytes = 0;
-    uint32_t last_used_gen = 0;
   };
 
-  Entry entries_[kMaxEntries];
+  // Entries live in fixed slots and never move, so the CssStylesheet pointers
+  // handed out by find()/load() stay valid while other sheets are loaded or
+  // evicted (remove() only moves arena bytes and rebases sheets). order_ lists
+  // the used slots in arena order.
+  Entry entries_[kMaxEntries + 1];  // + the inline sheet
+  uint8_t order_[kMaxEntries + 1] = {};
   size_t count_ = 0;
-  // FNV-1a hashes of stylesheets skipped for lack of memory.
-  static constexpr size_t kMaxSkipped = 8;
-  uint32_t skipped_[kMaxSkipped] = {};
-  size_t skipped_count_ = 0;
-  size_t total_bytes_ = 0;
-  uint32_t gen_ = 0;
+  uint8_t* arena_ = nullptr;
+  std::vector<uint8_t> owned_arena_;
+  uint32_t gen_ = 1;
+  size_t peak_ = 0;
+  static constexpr size_t kMaxTooBig = 8;
+  uint32_t too_big_[kMaxTooBig] = {};
+  size_t too_big_count_ = 0;
 
-  static bool low_memory();
-  // Releases the least recently used stylesheet not loaded for the current
-  // chapter (last_used_gen <= protect_gen). False if there is none.
-  bool evict_for_memory(uint32_t protect_gen);
-  // Returns the index of the best LRU candidate with last_used_gen <= protect_gen
-  // (or any entry when protect_gen == 0). Returns kMaxEntries if none found.
-  size_t find_evict_slot(uint32_t protect_gen) const;
+  size_t end_offset() const {
+    if (count_ == 0)
+      return 0;
+    const Entry& last = entries_[order_[count_ - 1]];
+    return last.offset + last.sheet.size_bytes();
+  }
+  // Drops the least recently used sheet this chapter does not use; false if none.
+  bool evict_one();
+  // Removes the i-th sheet in arena order and moves the sheets after it down.
+  void remove(size_t i);
 };
 
 // Callback for element id="" annotations encountered during streaming XHTML parsing.
@@ -94,6 +160,7 @@ enum class EpubError {
   InvalidData,
   ZipError,
   XmlError,
+  CrcMismatch,  // chapter data read back wrong from the SD card
 };
 
 // EPUB book: parsed from an EPUB file.
@@ -101,6 +168,12 @@ enum class EpubError {
 // Chapters are parsed on-demand via parse_chapter().
 class Epub {
  public:
+  // xml_buf size for parse_chapter_streaming(): the XML reader's part, the CSS
+  // parser's scratch and the stylesheet arena (a display framebuffer).
+  static constexpr size_t kChapterXmlSize = 16384;
+  static constexpr size_t kChapterBufSize =
+      kChapterXmlSize + CssStylesheet::Parser::kScratchSize + CssCache::kArenaSize;
+
   Epub() = default;
 
   // Set CSS unit conversion config (call before open()).
@@ -140,8 +213,11 @@ class Epub {
 
   // Stream-parse a chapter: paragraphs are emitted one at a time via sink.
   // Uses ~37KB working memory instead of extracting the full XHTML.
-  // xml_buf_size: size of xml_buf (0 = the 16 KB minimum). Between the head scan
-  // and the body parse xml_buf is idle, and stylesheets that fit are read into it.
+  // xml_buf_size: size of xml_buf (0 = the 16 KB minimum). With at least
+  // kChapterBufSize, the stylesheets live in xml_buf too (see CssCache) and
+  // stay there from chapter to chapter, so the caller must not touch xml_buf
+  // between chapters — or call release_css() first. Otherwise the arena comes
+  // from the heap.
   EpubError parse_chapter_streaming(IZipFile& file, size_t index, ParagraphSink sink, void* sink_ctx, uint8_t* work_buf,
                                     uint8_t* xml_buf, IdSink id_sink = nullptr, void* id_sink_ctx = nullptr,
                                     size_t xml_buf_size = 0) const;
@@ -176,6 +252,15 @@ class Epub {
   const CssCache& css_cache() const {
     return css_cache_;
   }
+  // Forgets the parsed stylesheets (they may point into a caller's buffer).
+  void release_css() const {
+    css_cache_.clear();
+  }
+  // Chapters whose stylesheets could not be loaded completely (see
+  // parse_chapter_streaming). Should stay 0; logged by the converter.
+  size_t css_incomplete_chapters() const {
+    return css_incomplete_;
+  }
 
   // Resolve a path relative to a content file's directory.
   // e.g. resolve_path("OEBPS/chapters/", "../images/test.jpg") → "OEBPS/images/test.jpg"
@@ -195,6 +280,7 @@ class Epub {
   TableOfContents toc_;
   CssConfig css_config_;
   mutable CssCache css_cache_;
+  mutable size_t css_incomplete_ = 0;
   int cover_idx_ = -1;
 
   // Internal parsing steps

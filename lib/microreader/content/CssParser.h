@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -311,11 +310,44 @@ struct CssRule {
     return parse(s.c_str(), s.size(), config);
   }
 
+  // The two halves of parse(), for a caller that sees declarations one at a
+  // time: apply() takes one "key: value" (no ';'), finish() runs the checks
+  // that need the whole rule (the margin clamp). parse() == apply() for each
+  // ';'-separated part, then finish().
+  static void apply(CssRule& rule, const char* declaration, size_t length, const CssConfig& config);
+  static void finish(CssRule& rule, const CssConfig& config);
+
   // Merge: rhs overrides lhs where present
   CssRule operator+(const CssRule& rhs) const;
 };
 
+// Hashes of the element names, ids and classes a chapter uses, sorted — lets a
+// stylesheet keep only the rules that can match in that chapter.
+struct CssNameSet {
+  const uint32_t* hashes = nullptr;
+  size_t count = 0;
+
+  static uint32_t hash(const char* s, size_t len) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; ++i)
+      h = (h ^ static_cast<uint8_t>(s[i])) * 16777619u;
+    return h;
+  }
+  bool contains(std::string_view name) const;
+};
+
 // A simple CSS stylesheet. Matches selectors by element name, id, and class.
+//
+// Rules are stored as one flat byte sequence of groups, one group per CSS rule:
+//   [CssRule][u16 selector count] then per selector
+//   [u8 element_len][u8 id_len][u8 class_count][element][id]([u8 len][class])*
+// A comma list ("h1, h2, h3 { ... }") therefore stores its properties once.
+// Complex selectors (descendant, child, pseudo, attribute) are not supported
+// and never stored.
+//
+// The bytes live either in the sheet's own heap vector (the default) or in a
+// fixed caller-owned region (use_external(), for CssCache's arena) — there a
+// sheet that does not fit sets overflow() instead of allocating.
 class CssStylesheet {
  public:
   CssStylesheet() = default;
@@ -328,12 +360,65 @@ class CssStylesheet {
     return config_;
   }
 
+  // Store rules in [data, data + capacity) instead of the heap. Existing rules
+  // are dropped.
+  void use_external(uint8_t* data, size_t capacity);
+  // Moves an external sheet's view after its bytes were moved (CssCache compaction).
+  void rebase(uint8_t* data) {
+    ext_ = data;
+  }
+
   // Parse and add rules from a CSS string (contents of a <style> block or .css file).
   void extend_from_sheet(const char* css, size_t length);
-  void extend_from_mut_sheet(char* css, size_t length);
+  void extend_from_mut_sheet(char* css, size_t length) {
+    extend_from_sheet(css, length);
+  }
   void extend_from_sheet(const std::string& s) {
     extend_from_sheet(s.c_str(), s.size());
   }
+
+  // Streaming parser: takes a stylesheet in chunks of any size (a rule may span
+  // chunks), so the text never has to be in memory at once. Works in a fixed
+  // scratch area (kScratchSize bytes: the current selector and declaration).
+  // With a name filter, selectors naming anything outside the set are dropped.
+  class Parser {
+   public:
+    static constexpr size_t kSelectorCap = 2560;  // longest storable selector: 8 classes of 255 + element + id
+    static constexpr size_t kDeclarationCap = 1536;
+    static constexpr size_t kScratchSize = kSelectorCap + kDeclarationCap;
+
+    Parser(CssStylesheet& sheet, char* scratch, const CssNameSet* filter = nullptr);
+    void feed(const char* data, size_t length);
+    // End of the text: drops an unterminated rule.
+    void finish();
+
+   private:
+    enum class Mode : uint8_t { Prelude, AtRule, AtBlock, Body };
+
+    CssStylesheet& sheet_;
+    char* sel_;
+    char* decl_;
+    const CssNameSet* filter_;
+    size_t sel_len_ = 0;
+    size_t decl_len_ = 0;
+    size_t group_ = 0;  // offset of the open group
+    uint16_t group_selectors_ = 0;
+    int depth_ = 0;
+    CssRule rule_;
+    Mode mode_ = Mode::Prelude;
+    bool in_comment_ = false;
+    bool slash_ = false;  // '/' seen, may open a comment
+    bool star_ = false;   // '*' seen inside a comment, may close it
+    bool sel_space_ = false;
+    bool sel_bad_ = false;
+    bool decl_bad_ = false;
+    bool nested_ = false;
+
+    void put(char c);
+    void begin_group();
+    void end_selector();
+    void end_declaration();
+  };
 
   // Look up cascaded style for an element.
   CssRule get(const char* element, const char* id, const char* cls) const;
@@ -341,61 +426,46 @@ class CssStylesheet {
   CssRule get(const char* element, size_t element_len, const char* id, size_t id_len, const char* cls,
               size_t cls_len) const;
 
+  // Number of stored selectors.
   size_t rule_count() const {
-    return rules_.size();
+    return selector_count_;
+  }
+  bool empty() const {
+    return size_ == 0;
   }
 
-  // ESP32: free heap a sheet must leave behind. Below it a sheet stops taking
-  // rules — the conversion that loads it still needs room, and an allocation
-  // failure aborts the firmware.
+  // Bytes the rules take.
+  size_t size_bytes() const {
+    return size_;
+  }
+
+  // An external sheet ran out of room (or, heap-backed on ESP32, the heap got
+  // too low): the rules stored before that point are kept.
+  bool overflow() const {
+    return overflow_;
+  }
+
+  // ESP32, heap-backed sheets only: free heap a sheet must leave behind.
   static constexpr size_t kMinFreeHeap = 16 * 1024;
 
-  // Heap that extend_from_mut_sheet() will take for this text: the exact name
-  // pool plus the rule storage. Strips comments in place (as extend does), so
-  // `length` is updated and the text can be handed straight to it afterwards.
-  size_t heap_needed(char* css, size_t& length) const;
-
-  // Bytes held by the selector name pool (for memory diagnostics/tests).
-  size_t name_bytes() const {
-    return names_.size();
-  }
-
-  // True when a sheet stopped early because the heap ran low (ESP32 only):
-  // the rules parsed up to that point are kept, the rest are dropped.
-  bool truncated() const {
-    return truncated_;
-  }
-
-  // A simple selector (element, #id, .classes), stored compactly: its names
-  // live in the stylesheet's shared pool as [element][id] followed by one
-  // [len:u8][class] record per class. Complex selectors (descendant, child,
-  // pseudo, attribute) are not supported and never stored.
-  struct Selector {
-    uint32_t names = 0;  // offset into names_
-    uint8_t element_len = 0;
-    uint8_t id_len = 0;
-    uint8_t class_count = 0;
-
-    uint32_t specificity() const {
-      return (static_cast<uint32_t>(id_len != 0) << 16) | (static_cast<uint32_t>(class_count) << 8) |
-             static_cast<uint32_t>(element_len != 0);
-    }
-  };
-
  private:
-  struct Rule {
-    Selector selector;
-    CssRule rule;
-  };
-
   CssConfig config_;
-  // deque, not vector: grows in small fixed chunks, so a large sheet never
-  // needs one big contiguous block or a copy of all rules on growth.
-  std::deque<Rule> rules_;
-  std::string names_;
-  bool truncated_ = false;
+  std::vector<uint8_t> owned_;
+  uint8_t* ext_ = nullptr;
+  size_t size_ = 0;
+  size_t cap_ = 0;
+  size_t selector_count_ = 0;
+  bool external_ = false;
+  bool overflow_ = false;
 
-  bool matches(const Selector& sel, std::string_view element, std::string_view id, std::string_view cls) const;
+  uint8_t* data() {
+    return external_ ? ext_ : owned_.data();
+  }
+  const uint8_t* data() const {
+    return external_ ? ext_ : owned_.data();
+  }
+  // Appends n bytes; false (and overflow) if there is no room.
+  bool append(const void* src, size_t n);
 };
 
 }  // namespace microreader

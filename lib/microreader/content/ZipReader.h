@@ -20,6 +20,7 @@ enum class ZipError {
   DecompressionFailed,
   ReadError,
   OutOfMemory,
+  CrcMismatch,  // entry decompressed, but its CRC32 differs from the ZIP's (bad SD read)
 };
 
 // Metadata for a single file inside a ZIP archive.
@@ -32,6 +33,8 @@ struct ZipEntry {
   uint32_t local_header_offset = 0;  // offset to the local file header
   uint32_t data_offset = 0;          // offset to the first byte of file data (0 = not cached)
   uint16_t compression = 0;          // 0=stored, 8=deflate
+  uint32_t crc32 = 0;                // CRC32 of the uncompressed data, as recorded in the ZIP
+  bool has_crc = false;              // false when unknown (local header with a data descriptor)
 };
 
 // Callback that receives decompressed data chunks.
@@ -109,6 +112,10 @@ class ZipReader {
   ZipError extract_streaming(IZipFile& file, const ZipEntry& entry, ZipDataCallback callback, void* user_data,
                              uint8_t* work_buf, size_t work_buf_size) const;
 
+  // Decompress `entry` and compare its CRC32 with the ZIP's. Nothing is kept.
+  // work_buf as for ZipEntryInput::open().
+  static ZipError verify_crc(IZipFile& file, const ZipEntry& entry, uint8_t* work_buf, size_t work_buf_size);
+
  private:
   std::vector<ZipEntry> entries_;
   std::vector<char> name_blob_;  // contiguous storage for all entry names
@@ -166,8 +173,29 @@ class ZipEntryInput : public IXmlInput {
     return error_;
   }
 
+  // Reads (and discards) whatever the caller has not consumed, then checks the
+  // entry's size and CRC32 against the ZIP. Ok when they match or the ZIP gave
+  // no CRC; CrcMismatch when the data is wrong; ReadError/DecompressionFailed
+  // when the stream itself failed. Call after the last read().
+  ZipError finish();
+
+  // CRC32 is only computed when asked for (it costs a pass over every byte):
+  // call after open() and before the first read(). Without it finish() only
+  // drains the stream and reports read errors.
+  void enable_crc_check() {
+    check_crc_ = has_crc_;
+  }
+
  private:
+  size_t read_impl_(void* buf, size_t max_size);
+
   IZipFile* file_ = nullptr;
+  uint32_t crc_ = 0;
+  uint32_t expected_crc_ = 0;
+  uint32_t expected_size_ = 0;
+  size_t out_total_ = 0;
+  bool has_crc_ = false;
+  bool check_crc_ = false;
   void* decomp_ = nullptr;  // tinfl_decompressor* (points into work_buf, NOT heap-allocated)
 
   uint8_t* dict_ = nullptr;

@@ -19,29 +19,35 @@ namespace microreader {
 // Parse a CSS length value (already lowercased) to pixels.
 // For em/rem, uses glyph_width. For %, uses ref_width.
 // Returns std::nullopt if the value can't be parsed.
-static std::optional<int> parse_css_length(const std::string& value, uint16_t glyph_width, uint16_t ref_width) {
+static bool ends_with(std::string_view v, std::string_view suffix) {
+  return v.size() >= suffix.size() && v.compare(v.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// `value` must be NUL-terminated at value.data()[value.size()] (strtol/strtof).
+static std::optional<int> parse_css_length(std::string_view value, uint16_t glyph_width, uint16_t ref_width) {
   if (value == "0" || value == "auto")
     return 0;
   char* end = nullptr;
-  if (value.size() > 2 && value.substr(value.size() - 2) == "px") {
-    long v = std::strtol(value.c_str(), &end, 10);
-    if (end != value.c_str())
+  const char* begin = value.data();
+  if (value.size() > 2 && ends_with(value, "px")) {
+    long v = std::strtol(begin, &end, 10);
+    if (end != begin)
       return static_cast<int>(v);
-  } else if (value.size() > 2 && value.substr(value.size() - 2) == "pt") {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+  } else if (value.size() > 2 && ends_with(value, "pt")) {
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * 4 / 3 + 0.5f);
-  } else if (value.size() > 3 && value.substr(value.size() - 3) == "rem") {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+  } else if (value.size() > 3 && ends_with(value, "rem")) {
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * glyph_width + 0.5f);
-  } else if (value.size() > 2 && value.substr(value.size() - 2) == "em") {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+  } else if (value.size() > 2 && ends_with(value, "em")) {
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * glyph_width + 0.5f);
   } else if (value.size() > 1 && value.back() == '%') {
-    float v = std::strtof(value.c_str(), &end);
-    if (end != value.c_str())
+    float v = std::strtof(begin, &end);
+    if (end != begin)
       return static_cast<int>(v * ref_width / 100 + 0.5f);
   }
   return std::nullopt;
@@ -56,42 +62,54 @@ struct FourSides {
   int top = 0, right = 0, bottom = 0, left = 0;
 };
 
-static std::vector<std::string> split_css_values(const std::string& value) {
-  std::vector<std::string> parts;
+struct CssParts {
+  std::string_view v[4];
+  size_t count = 0;  // parts beyond the fourth are ignored (4+ parts use the first four)
+};
+
+// Splits on whitespace, NUL-terminating each part in place (so strtof can be
+// used on it). `value` must be mutable and NUL-terminated at value[size].
+static CssParts split_css_values(char* value, size_t size) {
+  CssParts parts;
   size_t p = 0;
-  while (p < value.size()) {
-    while (p < value.size() && std::isspace(static_cast<unsigned char>(value[p])))
+  while (p < size) {
+    while (p < size && std::isspace(static_cast<unsigned char>(value[p])))
       ++p;
     size_t start = p;
-    while (p < value.size() && !std::isspace(static_cast<unsigned char>(value[p])))
+    while (p < size && !std::isspace(static_cast<unsigned char>(value[p])))
       ++p;
-    if (p > start)
-      parts.push_back(value.substr(start, p - start));
+    if (p > start) {
+      if (parts.count < 4) {
+        parts.v[parts.count] = std::string_view(value + start, p - start);
+        ++parts.count;
+      }
+      if (p < size)
+        value[p++] = '\0';
+    }
   }
   return parts;
 }
 
-static FourSides parse_shorthand_sides(const std::vector<std::string>& parts, uint16_t glyph_width,
-                                       uint16_t ref_width) {
-  auto to_px = [&](const std::string& v) -> int {
+static FourSides parse_shorthand_sides(const CssParts& parts, uint16_t glyph_width, uint16_t ref_width) {
+  auto to_px = [&](std::string_view v) -> int {
     auto len = parse_css_length(v, glyph_width, ref_width);
     return len.value_or(0);
   };
   FourSides s;
-  if (parts.size() == 1) {
-    s.top = s.right = s.bottom = s.left = to_px(parts[0]);
-  } else if (parts.size() == 2) {
-    s.top = s.bottom = to_px(parts[0]);
-    s.left = s.right = to_px(parts[1]);
-  } else if (parts.size() == 3) {
-    s.top = to_px(parts[0]);
-    s.left = s.right = to_px(parts[1]);
-    s.bottom = to_px(parts[2]);
-  } else if (parts.size() >= 4) {
-    s.top = to_px(parts[0]);
-    s.right = to_px(parts[1]);
-    s.bottom = to_px(parts[2]);
-    s.left = to_px(parts[3]);
+  if (parts.count == 1) {
+    s.top = s.right = s.bottom = s.left = to_px(parts.v[0]);
+  } else if (parts.count == 2) {
+    s.top = s.bottom = to_px(parts.v[0]);
+    s.left = s.right = to_px(parts.v[1]);
+  } else if (parts.count == 3) {
+    s.top = to_px(parts.v[0]);
+    s.left = s.right = to_px(parts.v[1]);
+    s.bottom = to_px(parts.v[2]);
+  } else if (parts.count >= 4) {
+    s.top = to_px(parts.v[0]);
+    s.right = to_px(parts.v[1]);
+    s.bottom = to_px(parts.v[2]);
+    s.left = to_px(parts.v[3]);
   }
   return s;
 }
@@ -102,275 +120,288 @@ static FourSides parse_shorthand_sides(const std::vector<std::string>& parts, ui
 
 CssRule CssRule::parse(const char* decl, size_t length, const CssConfig& config) {
   CssRule rule;
-  std::string s(decl, length);
-  // Lowercase
-  for (auto& c : s)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
   size_t pos = 0;
-  while (pos < s.size()) {
-    size_t semi = s.find(';', pos);
-    if (semi == std::string::npos)
-      semi = s.size();
+  while (pos < length) {
+    const void* semi = std::memchr(decl + pos, ';', length - pos);
+    const size_t end = semi ? static_cast<size_t>(static_cast<const char*>(semi) - decl) : length;
+    apply(rule, decl + pos, end - pos, config);
+    pos = end + 1;
+  }
+  finish(rule, config);
+  return rule;
+}
 
-    size_t colon = s.find(':', pos);
-    if (colon != std::string::npos && colon < semi) {
-      // Extract key and value
-      size_t key_start = pos;
-      while (key_start < colon && std::isspace(static_cast<unsigned char>(s[key_start])))
-        ++key_start;
-      size_t key_end = colon;
-      while (key_end > key_start && std::isspace(static_cast<unsigned char>(s[key_end - 1])))
-        --key_end;
+void CssRule::apply(CssRule& rule, const char* decl, size_t length, const CssConfig& config) {
+  // No heap: lowercase into a fixed stack buffer. No supported value is
+  // anywhere near this long, so longer declarations are ignored.
+  constexpr size_t kMaxDecl = 512;
+  if (length >= kMaxDecl)
+    return;
+  char buf[kMaxDecl];
+  for (size_t i = 0; i < length; ++i)
+    buf[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(decl[i])));
+  buf[length] = '\0';
 
-      size_t val_start = colon + 1;
-      while (val_start < semi && std::isspace(static_cast<unsigned char>(s[val_start])))
-        ++val_start;
-      size_t val_end = semi;
-      while (val_end > val_start && std::isspace(static_cast<unsigned char>(s[val_end - 1])))
-        --val_end;
+  const size_t semi = length;
+  const char* colon_p = static_cast<const char*>(std::memchr(buf, ':', length));
+  if (!colon_p)
+    return;
+  const size_t colon = static_cast<size_t>(colon_p - buf);
+  size_t key_start = 0;
+  while (key_start < colon && std::isspace(static_cast<unsigned char>(buf[key_start])))
+    ++key_start;
+  size_t key_end = colon;
+  while (key_end > key_start && std::isspace(static_cast<unsigned char>(buf[key_end - 1])))
+    --key_end;
 
-      std::string key = s.substr(key_start, key_end - key_start);
-      std::string value = s.substr(val_start, val_end - val_start);
+  size_t val_start = colon + 1;
+  while (val_start < semi && std::isspace(static_cast<unsigned char>(buf[val_start])))
+    ++val_start;
+  size_t val_end = semi;
+  while (val_end > val_start && std::isspace(static_cast<unsigned char>(buf[val_end - 1])))
+    --val_end;
 
-      if (key == "text-align") {
-        if (value == "start" || value == "left")
-          rule.set_alignment(Alignment::Start);
-        else if (value == "end" || value == "right")
-          rule.set_alignment(Alignment::End);
-        else if (value == "center")
-          rule.set_alignment(Alignment::Center);
-        else if (value == "justify")
-          rule.set_alignment(Alignment::Justify);
-      } else if (key == "font-style") {
-        if (value == "normal")
-          rule.set_italic(false);
-        else if (value == "italic")
-          rule.set_italic(true);
-      } else if (key == "font-weight") {
-        if (value == "normal")
-          rule.set_bold(false);
-        else if (value == "bold")
-          rule.set_bold(true);
-      } else if (key == "text-indent") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value())
-          rule.set_indent(static_cast<int16_t>(*len));
-      } else if (key == "margin-left") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value() && *len > 0)
-          rule.set_margin_left(static_cast<uint16_t>(*len));
-      } else if (key == "margin-right") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value() && *len > 0)
-          rule.set_margin_right(static_cast<uint16_t>(*len));
-      } else if (key == "margin-top") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value())
-          rule.set_margin_top(static_cast<uint16_t>(std::max(0, *len)));
-      } else if (key == "margin-bottom") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value())
-          rule.set_margin_bottom(static_cast<uint16_t>(std::max(0, *len)));
-      } else if (key == "margin") {
-        auto parts = split_css_values(value);
-        auto s = parse_shorthand_sides(parts, config.glyph_width, config.content_width);
-        if (s.left > 0)
-          rule.set_margin_left(static_cast<uint16_t>(s.left));
-        if (s.right > 0)
-          rule.set_margin_right(static_cast<uint16_t>(s.right));
-        if (!parts.empty()) {
-          rule.set_margin_top(static_cast<uint16_t>(std::max(0, s.top)));
-          rule.set_margin_bottom(static_cast<uint16_t>(std::max(0, s.bottom)));
+  const std::string_view key(buf + key_start, key_end - key_start);
+  buf[val_end] = '\0';  // value is NUL-terminated for strtof/strtol
+  const std::string_view value(buf + val_start, val_end - val_start);
+
+  if (key == "text-align") {
+    if (value == "start" || value == "left")
+      rule.set_alignment(Alignment::Start);
+    else if (value == "end" || value == "right")
+      rule.set_alignment(Alignment::End);
+    else if (value == "center")
+      rule.set_alignment(Alignment::Center);
+    else if (value == "justify")
+      rule.set_alignment(Alignment::Justify);
+  } else if (key == "font-style") {
+    if (value == "normal")
+      rule.set_italic(false);
+    else if (value == "italic")
+      rule.set_italic(true);
+  } else if (key == "font-weight") {
+    if (value == "normal")
+      rule.set_bold(false);
+    else if (value == "bold")
+      rule.set_bold(true);
+  } else if (key == "text-indent") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value())
+      rule.set_indent(static_cast<int16_t>(*len));
+  } else if (key == "margin-left") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value() && *len > 0)
+      rule.set_margin_left(static_cast<uint16_t>(*len));
+  } else if (key == "margin-right") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value() && *len > 0)
+      rule.set_margin_right(static_cast<uint16_t>(*len));
+  } else if (key == "margin-top") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value())
+      rule.set_margin_top(static_cast<uint16_t>(std::max(0, *len)));
+  } else if (key == "margin-bottom") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value())
+      rule.set_margin_bottom(static_cast<uint16_t>(std::max(0, *len)));
+  } else if (key == "margin") {
+    auto parts = split_css_values(buf + val_start, value.size());
+    auto s = parse_shorthand_sides(parts, config.glyph_width, config.content_width);
+    if (s.left > 0)
+      rule.set_margin_left(static_cast<uint16_t>(s.left));
+    if (s.right > 0)
+      rule.set_margin_right(static_cast<uint16_t>(s.right));
+    if (parts.count > 0) {
+      rule.set_margin_top(static_cast<uint16_t>(std::max(0, s.top)));
+      rule.set_margin_bottom(static_cast<uint16_t>(std::max(0, s.bottom)));
+    }
+  } else if (key == "padding-left") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value()) {
+      uint16_t val = *len > 0 ? static_cast<uint16_t>(*len) : 0;
+      rule.set_margin_left(rule.has_margin_left_ ? rule.margin_left + val : val);
+    }
+  } else if (key == "padding-right") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value() && *len > 0) {
+      uint16_t val = static_cast<uint16_t>(*len);
+      rule.set_margin_right(rule.margin_right_opt().value_or(0) + val);
+    }
+  } else if (key == "padding-top") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value() && *len >= 0) {
+      uint16_t val = static_cast<uint16_t>(std::max(0, *len));
+      rule.set_margin_top(std::max(rule.margin_top_opt().value_or(0), val));
+    }
+  } else if (key == "padding-bottom") {
+    auto len = parse_css_length(value, config.glyph_width, config.content_width);
+    if (len.has_value() && *len >= 0) {
+      uint16_t val = static_cast<uint16_t>(std::max(0, *len));
+      rule.set_margin_bottom(std::max(rule.margin_bottom_opt().value_or(0), val));
+    }
+  } else if (key == "padding") {
+    auto parts = split_css_values(buf + val_start, value.size());
+    auto s = parse_shorthand_sides(parts, config.glyph_width, config.content_width);
+    if (parts.count > 0) {
+      uint16_t lv = s.left > 0 ? static_cast<uint16_t>(s.left) : 0;
+      rule.set_margin_left(rule.has_margin_left_ ? rule.margin_left + lv : lv);
+    }
+    if (s.right > 0)
+      rule.set_margin_right(rule.margin_right_opt().value_or(0) + static_cast<uint16_t>(s.right));
+    if (s.top > 0)
+      rule.set_margin_top(std::max(rule.margin_top_opt().value_or(0), static_cast<uint16_t>(s.top)));
+    if (s.bottom > 0)
+      rule.set_margin_bottom(std::max(rule.margin_bottom_opt().value_or(0), static_cast<uint16_t>(s.bottom)));
+  } else if (key == "float") {
+    if (value == "left" || value == "right")
+      rule.set_is_float(true);
+    else if (value == "none")
+      rule.set_is_float(false);
+  } else if (key == "display") {
+    if (value == "none")
+      rule.set_is_hidden(true);
+  } else if (key == "border-top-style") {
+    if (value != "none" && value != "hidden")
+      rule.set_border_top(true);
+    else
+      rule.set_border_top(false);
+  } else if (key == "border-top") {
+    // e.g. "1px solid black" — any non-none value means a visible border
+    if (value == "none" || value == "0" || value == "hidden")
+      rule.set_border_top(false);
+    else if (value.find("solid") != std::string_view::npos || value.find("dashed") != std::string_view::npos ||
+             value.find("dotted") != std::string_view::npos || value.find("double") != std::string_view::npos)
+      rule.set_border_top(true);
+  } else if (key == "width") {
+    if (!value.empty() && value.back() == '%') {
+      char* end = nullptr;
+      float v = std::strtof(value.data(), &end);
+      if (end != value.data()) {
+        int pct = static_cast<int>(v + 0.5f);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        rule.set_width_pct(static_cast<uint8_t>(pct));
+      }
+    }
+  } else if (key == "page-break-before") {
+    if (value == "always" || value == "left" || value == "right")
+      rule.set_page_break_before(true);
+    else if (value == "auto" || value == "avoid")
+      rule.set_page_break_before(false);
+  } else if (key == "page-break-after") {
+    if (value == "always" || value == "left" || value == "right")
+      rule.set_page_break_after(true);
+    else if (value == "auto" || value == "avoid")
+      rule.set_page_break_after(false);
+  } else if (key == "text-transform") {
+    if (value == "uppercase")
+      rule.set_text_transform(TextTransform::Uppercase);
+    else if (value == "lowercase")
+      rule.set_text_transform(TextTransform::Lowercase);
+    else if (value == "capitalize")
+      rule.set_text_transform(TextTransform::Capitalize);
+    else if (value == "none")
+      rule.set_text_transform(TextTransform::None);
+  } else if (key == "font-variant") {
+    if (value == "small-caps") {
+      rule.set_font_variant_small_caps(true);
+      // Approximate as uppercase when no explicit text-transform is set
+      if (!rule.has_text_transform_)
+        rule.set_text_transform(TextTransform::Uppercase);
+    }
+  } else if (key == "vertical-align") {
+    // CSS super/sub -> font_size_pct: 75% + VerticalAlign
+    if (value == "super") {
+      if (!rule.has_font_size_pct_)
+        rule.set_font_size_pct(75);
+      rule.set_vertical_align(VerticalAlign::Super);
+    } else if (value == "sub") {
+      if (!rule.has_font_size_pct_)
+        rule.set_font_size_pct(75);
+      rule.set_vertical_align(VerticalAlign::Sub);
+    } else if (value == "top" || value == "bottom") {
+      if (!rule.has_font_size_pct_)
+        rule.set_font_size_pct(75);
+    }
+  } else if (key == "line-height") {
+    // Parse line-height as percentage of our natural y_advance.
+    // Our fonts have y_advance ≈ 1.5× em-size, so CSS line-height: 1.5 = 100% (use y_advance as-is).
+    // CSS line-height: 1.2 (browser normal) = 80% (slightly tighter than y_advance).
+    // Common values: "normal", "1.2", "1.5", "140%", "1.4em"
+    static constexpr float kNormFactor = 1.5f;
+    char* end = nullptr;
+    if (value == "normal" || value == "inherit") {
+      rule.set_line_height_pct(100);
+    } else if (value.size() > 1 && value.back() == '%') {
+      float pct = std::strtof(value.data(), &end);
+      if (end != value.data()) {
+        uint8_t val = static_cast<uint8_t>(std::clamp(pct / kNormFactor, 70.0f, 200.0f));
+        rule.set_line_height_pct(val);
+      }
+    } else if (value.size() > 2 && ends_with(value, "em")) {
+      float em = std::strtof(value.data(), &end);
+      if (end != value.data()) {
+        uint8_t val = static_cast<uint8_t>(std::clamp(em * 100.0f / kNormFactor, 70.0f, 200.0f));
+        rule.set_line_height_pct(val);
+      }
+    } else {
+      // Unitless number (e.g. "1.5")
+      float num = std::strtof(value.data(), &end);
+      if (end != value.data()) {
+        uint8_t val = static_cast<uint8_t>(std::clamp(num * 100.0f / kNormFactor, 70.0f, 200.0f));
+        rule.set_line_height_pct(val);
+      }
+    }
+  } else if (key == "list-style-type" || key == "list-style") {
+    if (value == "none")
+      rule.set_list_style_none(true);
+  } else if (key == "font-size") {
+    if (value == "small" || value == "x-small" || value == "xx-small" || value == "smaller")
+      rule.set_font_size_pct(80);
+    else if (value == "large" || value == "larger")
+      rule.set_font_size_pct(120);
+    else if (value == "x-large")
+      rule.set_font_size_pct(140);
+    else if (value == "xx-large")
+      rule.set_font_size_pct(160);
+    else if (value == "medium" || value == "normal")
+      rule.set_font_size_pct(100);
+    else {
+      // Try parsing numeric values: percentages (90%) and em (0.9em)
+      char* end = nullptr;
+      if (value.size() > 1 && value.back() == '%') {
+        float pct = std::strtof(value.data(), &end);
+        if (end != value.data()) {
+          rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(pct, 30.0f, 250.0f)));
         }
-      } else if (key == "padding-left") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value()) {
-          uint16_t val = *len > 0 ? static_cast<uint16_t>(*len) : 0;
-          rule.set_margin_left(rule.has_margin_left_ ? rule.margin_left + val : val);
+      } else if (value.size() > 2 && ends_with(value, "em")) {
+        float em = std::strtof(value.data(), &end);
+        if (end != value.data()) {
+          rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(em * 100.0f, 30.0f, 250.0f)));
         }
-      } else if (key == "padding-right") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value() && *len > 0) {
-          uint16_t val = static_cast<uint16_t>(*len);
-          rule.set_margin_right(rule.margin_right_opt().value_or(0) + val);
+      } else if (value.size() > 3 && ends_with(value, "rem")) {
+        float rem = std::strtof(value.data(), &end);
+        if (end != value.data()) {
+          rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(rem * 100.0f, 30.0f, 250.0f)));
         }
-      } else if (key == "padding-top") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value() && *len >= 0) {
-          uint16_t val = static_cast<uint16_t>(std::max(0, *len));
-          rule.set_margin_top(std::max(rule.margin_top_opt().value_or(0), val));
+      } else if (value.size() > 2 && ends_with(value, "pt")) {
+        float pt = std::strtof(value.data(), &end);
+        if (end != value.data()) {
+          float ratio = pt / 12.0f;
+          rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(ratio * 100.0f, 30.0f, 250.0f)));
         }
-      } else if (key == "padding-bottom") {
-        auto len = parse_css_length(value, config.glyph_width, config.content_width);
-        if (len.has_value() && *len >= 0) {
-          uint16_t val = static_cast<uint16_t>(std::max(0, *len));
-          rule.set_margin_bottom(std::max(rule.margin_bottom_opt().value_or(0), val));
-        }
-      } else if (key == "padding") {
-        auto parts = split_css_values(value);
-        auto s = parse_shorthand_sides(parts, config.glyph_width, config.content_width);
-        if (!parts.empty()) {
-          uint16_t lv = s.left > 0 ? static_cast<uint16_t>(s.left) : 0;
-          rule.set_margin_left(rule.has_margin_left_ ? rule.margin_left + lv : lv);
-        }
-        if (s.right > 0)
-          rule.set_margin_right(rule.margin_right_opt().value_or(0) + static_cast<uint16_t>(s.right));
-        if (s.top > 0)
-          rule.set_margin_top(std::max(rule.margin_top_opt().value_or(0), static_cast<uint16_t>(s.top)));
-        if (s.bottom > 0)
-          rule.set_margin_bottom(std::max(rule.margin_bottom_opt().value_or(0), static_cast<uint16_t>(s.bottom)));
-      } else if (key == "float") {
-        if (value == "left" || value == "right")
-          rule.set_is_float(true);
-        else if (value == "none")
-          rule.set_is_float(false);
-      } else if (key == "display") {
-        if (value == "none")
-          rule.set_is_hidden(true);
-      } else if (key == "border-top-style") {
-        if (value != "none" && value != "hidden")
-          rule.set_border_top(true);
-        else
-          rule.set_border_top(false);
-      } else if (key == "border-top") {
-        // e.g. "1px solid black" — any non-none value means a visible border
-        if (value == "none" || value == "0" || value == "hidden")
-          rule.set_border_top(false);
-        else if (value.find("solid") != std::string::npos || value.find("dashed") != std::string::npos ||
-                 value.find("dotted") != std::string::npos || value.find("double") != std::string::npos)
-          rule.set_border_top(true);
-      } else if (key == "width") {
-        if (!value.empty() && value.back() == '%') {
-          char* end = nullptr;
-          float v = std::strtof(value.c_str(), &end);
-          if (end != value.c_str()) {
-            int pct = static_cast<int>(v + 0.5f);
-            if (pct < 0) pct = 0;
-            if (pct > 100) pct = 100;
-            rule.set_width_pct(static_cast<uint8_t>(pct));
-          }
-        }
-      } else if (key == "page-break-before") {
-        if (value == "always" || value == "left" || value == "right")
-          rule.set_page_break_before(true);
-        else if (value == "auto" || value == "avoid")
-          rule.set_page_break_before(false);
-      } else if (key == "page-break-after") {
-        if (value == "always" || value == "left" || value == "right")
-          rule.set_page_break_after(true);
-        else if (value == "auto" || value == "avoid")
-          rule.set_page_break_after(false);
-      } else if (key == "text-transform") {
-        if (value == "uppercase")
-          rule.set_text_transform(TextTransform::Uppercase);
-        else if (value == "lowercase")
-          rule.set_text_transform(TextTransform::Lowercase);
-        else if (value == "capitalize")
-          rule.set_text_transform(TextTransform::Capitalize);
-        else if (value == "none")
-          rule.set_text_transform(TextTransform::None);
-      } else if (key == "font-variant") {
-        if (value == "small-caps") {
-          rule.set_font_variant_small_caps(true);
-          // Approximate as uppercase when no explicit text-transform is set
-          if (!rule.has_text_transform_)
-            rule.set_text_transform(TextTransform::Uppercase);
-        }
-      } else if (key == "vertical-align") {
-        // CSS super/sub -> font_size_pct: 75% + VerticalAlign
-        if (value == "super") {
-          if (!rule.has_font_size_pct_)
-            rule.set_font_size_pct(75);
-          rule.set_vertical_align(VerticalAlign::Super);
-        } else if (value == "sub") {
-          if (!rule.has_font_size_pct_)
-            rule.set_font_size_pct(75);
-          rule.set_vertical_align(VerticalAlign::Sub);
-        } else if (value == "top" || value == "bottom") {
-          if (!rule.has_font_size_pct_)
-            rule.set_font_size_pct(75);
-        }
-      } else if (key == "line-height") {
-        // Parse line-height as percentage of our natural y_advance.
-        // Our fonts have y_advance ≈ 1.5× em-size, so CSS line-height: 1.5 = 100% (use y_advance as-is).
-        // CSS line-height: 1.2 (browser normal) = 80% (slightly tighter than y_advance).
-        // Common values: "normal", "1.2", "1.5", "140%", "1.4em"
-        static constexpr float kNormFactor = 1.5f;
-        char* end = nullptr;
-        if (value == "normal" || value == "inherit") {
-          rule.set_line_height_pct(100);
-        } else if (value.size() > 1 && value.back() == '%') {
-          float pct = std::strtof(value.c_str(), &end);
-          if (end != value.c_str()) {
-            uint8_t val = static_cast<uint8_t>(std::clamp(pct / kNormFactor, 70.0f, 200.0f));
-            rule.set_line_height_pct(val);
-          }
-        } else if (value.size() > 2 && value.substr(value.size() - 2) == "em") {
-          float em = std::strtof(value.c_str(), &end);
-          if (end != value.c_str()) {
-            uint8_t val = static_cast<uint8_t>(std::clamp(em * 100.0f / kNormFactor, 70.0f, 200.0f));
-            rule.set_line_height_pct(val);
-          }
-        } else {
-          // Unitless number (e.g. "1.5")
-          float num = std::strtof(value.c_str(), &end);
-          if (end != value.c_str()) {
-            uint8_t val = static_cast<uint8_t>(std::clamp(num * 100.0f / kNormFactor, 70.0f, 200.0f));
-            rule.set_line_height_pct(val);
-          }
-        }
-      } else if (key == "list-style-type" || key == "list-style") {
-        if (value == "none")
-          rule.set_list_style_none(true);
-      } else if (key == "font-size") {
-        if (value == "small" || value == "x-small" || value == "xx-small" || value == "smaller")
-          rule.set_font_size_pct(80);
-        else if (value == "large" || value == "larger")
-          rule.set_font_size_pct(120);
-        else if (value == "x-large")
-          rule.set_font_size_pct(140);
-        else if (value == "xx-large")
-          rule.set_font_size_pct(160);
-        else if (value == "medium" || value == "normal")
-          rule.set_font_size_pct(100);
-        else {
-          // Try parsing numeric values: percentages (90%) and em (0.9em)
-          char* end = nullptr;
-          if (value.size() > 1 && value.back() == '%') {
-            float pct = std::strtof(value.c_str(), &end);
-            if (end != value.c_str()) {
-              rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(pct, 30.0f, 250.0f)));
-            }
-          } else if (value.size() > 2 && value.substr(value.size() - 2) == "em") {
-            float em = std::strtof(value.c_str(), &end);
-            if (end != value.c_str()) {
-              rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(em * 100.0f, 30.0f, 250.0f)));
-            }
-          } else if (value.size() > 3 && value.substr(value.size() - 3) == "rem") {
-            float rem = std::strtof(value.c_str(), &end);
-            if (end != value.c_str()) {
-              rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(rem * 100.0f, 30.0f, 250.0f)));
-            }
-          } else if (value.size() > 2 && value.substr(value.size() - 2) == "pt") {
-            float pt = std::strtof(value.c_str(), &end);
-            if (end != value.c_str()) {
-              float ratio = pt / 12.0f;
-              rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(ratio * 100.0f, 30.0f, 250.0f)));
-            }
-          } else if (value.size() > 2 && value.substr(value.size() - 2) == "px") {
-            float px = std::strtof(value.c_str(), &end);
-            if (end != value.c_str()) {
-              float ratio = px / 24.0f;
-              rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(ratio * 100.0f, 30.0f, 250.0f)));
-            }
-          }
+      } else if (value.size() > 2 && ends_with(value, "px")) {
+        float px = std::strtof(value.data(), &end);
+        if (end != value.data()) {
+          float ratio = px / 24.0f;
+          rule.set_font_size_pct(static_cast<uint8_t>(std::clamp(ratio * 100.0f, 30.0f, 250.0f)));
         }
       }
     }
-    pos = semi + 1;
   }
+}
 
+void CssRule::finish(CssRule& rule, const CssConfig& config) {
   // If both margins are set in the same rule, clamp their total to
   // max_margin_pct% of content_width, scaling proportionally.
   if (rule.has_margin_left_ && rule.has_margin_right_) {
@@ -382,8 +413,6 @@ CssRule CssRule::parse(const char* decl, size_t length, const CssConfig& config)
       rule.set_margin_right(static_cast<uint16_t>(rule.margin_right * scale));
     }
   }
-
-  return rule;
 }
 
 CssRule CssRule::operator+(const CssRule& rhs) const {
@@ -542,101 +571,6 @@ bool parse_selector(const char* s, size_t len, SelectorView& out) {
   return !out.element.empty() || !out.id.empty() || out.class_count != 0;
 }
 
-// Calls fn(const SelectorView&, const CssRule&) for every supported selector of
-// every rule with at least one property we use. Comments must already be removed.
-template <typename Fn>
-void for_each_rule(std::string_view sheet, const CssConfig& config, Fn&& fn) {
-  size_t pos = 0;
-  while (pos < sheet.size()) {
-    // Find next '{' or '@'
-    size_t brace = std::string_view::npos;
-    size_t at = std::string_view::npos;
-    for (size_t i = pos; i < sheet.size(); ++i) {
-      if (sheet[i] == '{' || sheet[i] == '@') {
-        if (sheet[i] == '@')
-          at = i;
-        else
-          brace = i;
-        break;
-      }
-    }
-
-    // Handle at-rules
-    if (at != std::string_view::npos && (brace == std::string_view::npos || at < brace)) {
-      // Skip @-rule: find ';' or '{...}'
-      size_t semi = sheet.find(';', at);
-      size_t ob = sheet.find('{', at);
-      if (semi != std::string_view::npos && (ob == std::string_view::npos || semi < ob)) {
-        pos = semi + 1;
-      } else if (ob != std::string_view::npos) {
-        // Find matching '}'
-        int depth = 1;
-        size_t j = ob + 1;
-        while (j < sheet.size() && depth > 0) {
-          if (sheet[j] == '{')
-            ++depth;
-          else if (sheet[j] == '}')
-            --depth;
-          ++j;
-        }
-        pos = j;
-      } else {
-        break;
-      }
-      continue;
-    }
-
-    if (brace == std::string_view::npos)
-      break;
-
-    // Find closing '}'
-    int depth = 1;
-    size_t end_pos = brace + 1;
-    while (end_pos < sheet.size() && depth > 0) {
-      if (sheet[end_pos] == '{')
-        ++depth;
-      else if (sheet[end_pos] == '}')
-        --depth;
-      ++end_pos;
-    }
-    if (depth != 0)
-      break;
-    --end_pos;  // point at '}'
-
-    std::string_view declarations = sheet.substr(brace + 1, end_pos - brace - 1);
-
-    // Skip nested blocks
-    if (declarations.find('{') == std::string_view::npos) {
-      CssRule rule = CssRule::parse(declarations.data(), declarations.size(), config);
-      if (rule.has_any()) {
-        std::string_view selectors = sheet.substr(pos, brace - pos);
-        // Split by comma
-        size_t sp = 0;
-        while (sp < selectors.size()) {
-          size_t comma = selectors.find(',', sp);
-          if (comma == std::string_view::npos)
-            comma = selectors.size();
-          SelectorView sel;
-          if (parse_selector(selectors.data() + sp, comma - sp, sel) && !fn(sel, rule))
-            return;
-          sp = comma + 1;
-        }
-      }
-    }
-
-    pos = end_pos + 1;
-  }
-}
-
-bool heap_too_low(size_t need) {
-#ifdef ESP_PLATFORM
-  return esp_get_free_heap_size() < CssStylesheet::kMinFreeHeap + need;
-#else
-  (void)need;
-  return false;
-#endif
-}
-
 // Does the whitespace-separated class list contain `target`?
 bool class_list_contains(std::string_view cls, std::string_view target) {
   size_t p = 0;
@@ -652,111 +586,264 @@ bool class_list_contains(std::string_view cls, std::string_view target) {
   return false;
 }
 
-}  // namespace
+// Group header: the rule's properties, then its selector count.
+constexpr size_t kGroupHeader = sizeof(CssRule) + sizeof(uint16_t);
 
-void CssStylesheet::extend_from_sheet(const char* css, size_t length) {
-  std::string sheet_copy(css, length);
-  extend_from_mut_sheet(sheet_copy.data(), sheet_copy.size());
-}
-
-// Removes /* comments */ in place; returns the new length. Idempotent.
-static size_t strip_comments(char* css, size_t length) {
-  size_t rd = 0, wr = 0;
-  while (rd < length) {
-    if (rd + 1 < length && css[rd] == '/' && css[rd + 1] == '*') {
-      rd += 2;
-      while (rd + 1 < length) {
-        if (css[rd] == '*' && css[rd + 1] == '/') {
-          rd += 2;
-          break;
-        }
-        ++rd;
-      }
-    } else {
-      css[wr++] = css[rd++];
-    }
-  }
-  return wr;
-}
-
-// Pass 1 of a sheet: the exact name-pool bytes and the number of stored selectors.
-static void count_sheet(std::string_view sheet, const CssConfig& config, size_t& name_bytes, size_t& selectors) {
-  name_bytes = 0;
-  selectors = 0;
-  for_each_rule(sheet, config, [&](const SelectorView& sel, const CssRule&) {
-    name_bytes += sel.name_bytes();
-    ++selectors;
-    return true;
-  });
-}
-
-size_t CssStylesheet::heap_needed(char* css, size_t& length) const {
-  length = strip_comments(css, length);
-  size_t name_bytes = 0, selectors = 0;
-  count_sheet(std::string_view(css, length), config_, name_bytes, selectors);
-  // std::deque stores rules in 512-byte nodes (plus allocator overhead) and
-  // keeps a small node map.
-  constexpr size_t kNode = 512;
-  const size_t per_node = sizeof(Rule) < kNode ? kNode / sizeof(Rule) : 1;
-  const size_t nodes = (selectors + per_node - 1) / per_node + 1;
-  return name_bytes + nodes * (kNode + 16) + 64;
-}
-
-void CssStylesheet::extend_from_mut_sheet(char* css, size_t length) {
-  const std::string_view sheet(css, strip_comments(css, length));
-
-  // Pass 1: size the name pool exactly, so it is one allocation of the final
-  // size instead of a doubling string (and never 1.5x its size mid-copy).
-  size_t name_bytes = 0;
-  size_t selector_count = 0;
-  count_sheet(sheet, config_, name_bytes, selector_count);
-  if (selector_count == 0)
-    return;
-  if (heap_too_low(name_bytes)) {
-    truncated_ = true;
-    return;
-  }
-  names_.reserve(names_.size() + name_bytes);
-
-  // Pass 2: store the rules. Stops early (keeping what it has) if the heap runs
-  // low, rather than letting a later allocation abort.
-  for_each_rule(sheet, config_, [&](const SelectorView& sel, const CssRule& rule) {
-    if (heap_too_low(sizeof(Rule))) {
-      truncated_ = true;
-      return false;
-    }
-    Selector compact;
-    compact.names = static_cast<uint32_t>(names_.size());
-    compact.element_len = static_cast<uint8_t>(sel.element.size());
-    compact.id_len = static_cast<uint8_t>(sel.id.size());
-    compact.class_count = sel.class_count;
-    names_.append(sel.element);
-    names_.append(sel.id);
-    for (uint8_t i = 0; i < sel.class_count; ++i) {
-      names_.push_back(static_cast<char>(sel.classes[i].size()));
-      names_.append(sel.classes[i]);
-    }
-    rules_.push_back(Rule{compact, rule});
-    return true;
-  });
-}
-
-bool CssStylesheet::matches(const Selector& sel, std::string_view element, std::string_view id,
-                            std::string_view cls) const {
-  const char* p = names_.data() + sel.names;
-  if (sel.element_len != 0 && element != std::string_view(p, sel.element_len))
-    return false;
-  p += sel.element_len;
-  if (sel.id_len != 0 && id != std::string_view(p, sel.id_len))
-    return false;
-  p += sel.id_len;
-  for (uint8_t i = 0; i < sel.class_count; ++i) {
-    const size_t len = static_cast<uint8_t>(*p++);
-    if (!class_list_contains(cls, std::string_view(p, len)))
-      return false;
+// Walks one stored selector at p; returns the byte after it. `matched` tells
+// whether it applies to the element, `specificity` is its cascade weight.
+const uint8_t* match_selector(const uint8_t* p, std::string_view element, std::string_view id, std::string_view cls,
+                              bool& matched, uint32_t& specificity) {
+  const uint8_t element_len = p[0];
+  const uint8_t id_len = p[1];
+  const uint8_t class_count = p[2];
+  p += 3;
+  specificity = (static_cast<uint32_t>(id_len != 0) << 16) | (static_cast<uint32_t>(class_count) << 8) |
+                static_cast<uint32_t>(element_len != 0);
+  const char* names = reinterpret_cast<const char*>(p);
+  matched = (element_len == 0 || element == std::string_view(names, element_len)) &&
+            (id_len == 0 || id == std::string_view(names + element_len, id_len));
+  p += element_len + id_len;
+  for (uint8_t i = 0; i < class_count; ++i) {
+    const size_t len = *p++;
+    if (matched && !class_list_contains(cls, std::string_view(reinterpret_cast<const char*>(p), len)))
+      matched = false;
     p += len;
   }
+  return p;
+}
+
+}  // namespace
+
+bool CssNameSet::contains(std::string_view name) const {
+  const uint32_t h = hash(name.data(), name.size());
+  return std::binary_search(hashes, hashes + count, h);
+}
+
+void CssStylesheet::use_external(uint8_t* data, size_t capacity) {
+  owned_ = {};
+  external_ = true;
+  ext_ = data;
+  cap_ = capacity;
+  size_ = 0;
+  selector_count_ = 0;
+  overflow_ = false;
+}
+
+bool CssStylesheet::append(const void* src, size_t n) {
+  if (overflow_)
+    return false;
+  if (external_) {
+    if (n > cap_ - size_) {
+      overflow_ = true;
+      return false;
+    }
+  } else if (size_ + n > owned_.capacity()) {
+    const size_t want = std::max({owned_.capacity() * 2, size_ + n, size_t(256)});
+#ifdef ESP_PLATFORM
+    if (esp_get_free_heap_size() < kMinFreeHeap + want) {
+      overflow_ = true;
+      return false;
+    }
+#endif
+    owned_.reserve(want);
+  }
+  if (!external_)
+    owned_.resize(size_ + n);
+  std::memcpy(data() + size_, src, n);
+  size_ += n;
   return true;
+}
+
+void CssStylesheet::extend_from_sheet(const char* css, size_t length) {
+  std::vector<char> scratch(Parser::kScratchSize);
+  Parser parser(*this, scratch.data());
+  parser.feed(css, length);
+  parser.finish();
+}
+
+// ---------------------------------------------------------------------------
+// CssStylesheet::Parser — a character-at-a-time state machine, equivalent to
+// parsing the whole text at once: comments are removed first, then
+//   prelude '{' declarations '}'   stores the rule for each supported selector
+//                                  of the prelude, unless the block nests '{'
+//                                  or sets no property we use;
+//   '@' ... ';'  or  '@' ... {...} is skipped (with anything before the '@').
+// Selectors are split on ',' and declarations on ';' as they arrive, so only
+// the current selector and declaration are ever buffered.
+// ---------------------------------------------------------------------------
+
+CssStylesheet::Parser::Parser(CssStylesheet& sheet, char* scratch, const CssNameSet* filter)
+    : sheet_(sheet), sel_(scratch), decl_(scratch + kSelectorCap), filter_(filter) {
+  begin_group();
+}
+
+void CssStylesheet::Parser::feed(const char* data, size_t length) {
+  for (size_t i = 0; i < length; ++i) {
+    const char c = data[i];
+    if (in_comment_) {
+      if (star_ && c == '/')
+        in_comment_ = false;
+      star_ = !in_comment_ ? false : c == '*';
+      continue;
+    }
+    if (slash_) {
+      slash_ = false;
+      if (c == '*') {
+        in_comment_ = true;
+        star_ = false;
+        continue;
+      }
+      put('/');
+    }
+    if (c == '/') {
+      slash_ = true;
+      continue;
+    }
+    put(c);
+  }
+}
+
+void CssStylesheet::Parser::finish() {
+  if (slash_) {
+    slash_ = false;
+    put('/');
+  }
+  // An unterminated rule is dropped.
+  sheet_.size_ = group_;
+  group_selectors_ = 0;
+}
+
+// Opens a group for the next rule: its header is reserved now, so the
+// selectors can follow it, and filled in when the rule closes.
+void CssStylesheet::Parser::begin_group() {
+  static const uint8_t kZero[kGroupHeader] = {};
+  group_ = sheet_.size_;
+  group_selectors_ = 0;
+  sel_len_ = 0;
+  sel_space_ = false;
+  sel_bad_ = false;
+  sheet_.append(kZero, sizeof(kZero));
+}
+
+void CssStylesheet::Parser::end_selector() {
+  if (!sel_bad_ && sel_len_ > 0 && group_selectors_ < UINT16_MAX) {
+    SelectorView v;
+    bool keep = parse_selector(sel_, sel_len_, v);
+    if (keep && filter_) {
+      keep = (v.element.empty() || filter_->contains(v.element)) && (v.id.empty() || filter_->contains(v.id));
+      for (uint8_t i = 0; keep && i < v.class_count; ++i)
+        keep = filter_->contains(v.classes[i]);
+    }
+    if (keep) {
+      const uint8_t head[3] = {static_cast<uint8_t>(v.element.size()), static_cast<uint8_t>(v.id.size()),
+                               v.class_count};
+      // Checked up front so a selector is stored whole or not at all.
+      if (sheet_.external_ && v.name_bytes() + sizeof(head) > sheet_.cap_ - sheet_.size_) {
+        sheet_.overflow_ = true;
+      } else {
+        sheet_.append(head, sizeof(head));
+        sheet_.append(v.element.data(), v.element.size());
+        sheet_.append(v.id.data(), v.id.size());
+        for (uint8_t i = 0; i < v.class_count; ++i) {
+          const uint8_t len = static_cast<uint8_t>(v.classes[i].size());
+          sheet_.append(&len, 1);
+          sheet_.append(v.classes[i].data(), len);
+        }
+        ++group_selectors_;
+      }
+    }
+  }
+  sel_len_ = 0;
+  sel_space_ = false;
+  sel_bad_ = false;
+}
+
+void CssStylesheet::Parser::end_declaration() {
+  if (!decl_bad_ && decl_len_ > 0)
+    CssRule::apply(rule_, decl_, decl_len_, sheet_.config_);
+  decl_len_ = 0;
+  decl_bad_ = false;
+}
+
+void CssStylesheet::Parser::put(char c) {
+  switch (mode_) {
+    case Mode::Prelude:
+      if (c == '@') {
+        sheet_.size_ = group_;  // drops the selectors seen so far
+        group_selectors_ = 0;
+        mode_ = Mode::AtRule;
+      } else if (c == '{') {
+        end_selector();
+        mode_ = Mode::Body;
+        depth_ = 1;
+        nested_ = false;
+        rule_ = CssRule();
+        decl_len_ = 0;
+        decl_bad_ = false;
+      } else if (c == ',') {
+        end_selector();
+      } else if (std::isspace(static_cast<unsigned char>(c))) {
+        if (sel_len_ > 0)
+          sel_space_ = true;
+      } else {
+        if (sel_space_)
+          sel_bad_ = true;  // whitespace inside: a descendant selector
+        if (sel_len_ < kSelectorCap)
+          sel_[sel_len_++] = c;
+        else
+          sel_bad_ = true;  // longer than any storable selector
+      }
+      break;
+
+    case Mode::AtRule:
+      if (c == ';') {
+        mode_ = Mode::Prelude;
+        begin_group();
+      } else if (c == '{') {
+        mode_ = Mode::AtBlock;
+        depth_ = 1;
+      }
+      break;
+
+    case Mode::AtBlock:
+      if (c == '{') {
+        ++depth_;
+      } else if (c == '}' && --depth_ == 0) {
+        mode_ = Mode::Prelude;
+        begin_group();
+      }
+      break;
+
+    case Mode::Body:
+      if (c == '{') {
+        ++depth_;
+        nested_ = true;
+      } else if (c == '}') {
+        if (--depth_ > 0)
+          break;
+        if (!nested_) {
+          end_declaration();
+          CssRule::finish(rule_, sheet_.config_);
+        }
+        if (!nested_ && rule_.has_any() && group_selectors_ > 0 && !sheet_.overflow_) {
+          std::memcpy(sheet_.data() + group_, &rule_, sizeof(CssRule));
+          std::memcpy(sheet_.data() + group_ + sizeof(CssRule), &group_selectors_, sizeof(uint16_t));
+          sheet_.selector_count_ += group_selectors_;
+        } else {
+          sheet_.size_ = group_;
+        }
+        mode_ = Mode::Prelude;
+        begin_group();
+      } else if (!nested_) {
+        if (c == ';')
+          end_declaration();
+        else if (decl_len_ < kDeclarationCap)
+          decl_[decl_len_++] = c;
+        else
+          decl_bad_ = true;  // no declaration we use is this long
+      }
+      break;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -764,7 +851,7 @@ bool CssStylesheet::matches(const Selector& sel, std::string_view element, std::
 // ---------------------------------------------------------------------------
 
 CssRule CssStylesheet::get(const char* element, const char* id, const char* cls) const {
-  if (rules_.empty())
+  if (size_ == 0)
     return {};
 
   size_t el_len = element ? std::strlen(element) : 0;
@@ -775,7 +862,7 @@ CssRule CssStylesheet::get(const char* element, const char* id, const char* cls)
 
 CssRule CssStylesheet::get(const char* element, size_t element_len, const char* id, size_t id_len, const char* cls,
                            size_t cls_len) const {
-  if (rules_.empty())
+  if (size_ == 0)
     return {};
   const std::string_view element_sv(element ? element : "", element ? element_len : 0);
   const std::string_view id_sv(id ? id : "", id ? id_len : 0);
@@ -784,16 +871,28 @@ CssRule CssStylesheet::get(const char* element, size_t element_len, const char* 
   struct Match {
     uint32_t specificity;
     size_t index;
-    const CssRule* rule;
+    const uint8_t* rule;
   };
   Match inline_buf[8];
   size_t match_count = 0;
   bool used_heap = false;
   std::vector<Match> heap_matches;
 
-  for (size_t i = 0; i < rules_.size(); ++i) {
-    if (matches(rules_[i].selector, element_sv, id_sv, cls_sv)) {
-      Match m{rules_[i].selector.specificity(), i, &rules_[i].rule};
+  const uint8_t* p = data();
+  const uint8_t* const end = p + size_;
+  size_t index = 0;
+  while (p < end) {
+    const uint8_t* rule = p;
+    uint16_t selectors;
+    std::memcpy(&selectors, p + sizeof(CssRule), sizeof(selectors));
+    p += kGroupHeader;
+    for (uint16_t s = 0; s < selectors; ++s, ++index) {
+      bool matched;
+      uint32_t specificity;
+      p = match_selector(p, element_sv, id_sv, cls_sv, matched, specificity);
+      if (!matched)
+        continue;
+      Match m{specificity, index, rule};
       if (!used_heap && match_count < 8) {
         inline_buf[match_count++] = m;
       } else {
@@ -819,7 +918,9 @@ CssRule CssStylesheet::get(const char* element, size_t element_len, const char* 
 
   CssRule result;
   for (size_t i = 0; i < match_count; ++i) {
-    result = result + *matches[i].rule;
+    CssRule rule;
+    std::memcpy(static_cast<void*>(&rule), matches[i].rule, sizeof(CssRule));
+    result = result + rule;
   }
   return result;
 }

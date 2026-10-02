@@ -251,6 +251,8 @@ ZipError ZipReader::open(IZipFile& file, uint8_t* work_buf, size_t work_buf_size
                            entry.compressed_size = cde.compressed_size;
                            entry.local_header_offset = cde.local_header_offset;
                            entry.compression = cde.compression;
+                           entry.crc32 = cde.crc32;
+                           entry.has_crc = true;
                            entries_.push_back(entry);
                            blob_offset += cde.filename_len;
                          });
@@ -283,6 +285,9 @@ ZipError ZipReader::read_local_entry(IZipFile& file, uint32_t offset, ZipEntry& 
   out.compression = lfh.compression;
   out.compressed_size = lfh.compressed_size;
   out.uncompressed_size = lfh.uncompressed_size;
+  // Bit 3: sizes and CRC follow the data, the header holds zeros.
+  out.has_crc = (lfh.flags & 0x0008) == 0;
+  out.crc32 = out.has_crc ? lfh.crc32 : 0;
   out.name = {};
   return ZipError::Ok;
 }
@@ -486,6 +491,12 @@ ZipError ZipEntryInput::open(IZipFile& file, const ZipEntry& entry, uint8_t* wor
   done_ = false;
   error_ = false;
   out_avail_ = 0;
+  has_crc_ = entry.has_crc;
+  check_crc_ = false;
+  expected_crc_ = entry.crc32;
+  expected_size_ = entry.uncompressed_size;
+  crc_ = 0;
+  out_total_ = 0;
 
   ZipError err = seek_to_data(file, entry);
   if (err != ZipError::Ok)
@@ -528,6 +539,36 @@ ZipError ZipEntryInput::open(IZipFile& file, const ZipEntry& entry, uint8_t* wor
 }
 
 size_t ZipEntryInput::read(void* buf, size_t max_size) {
+  size_t n = read_impl_(buf, max_size);
+  if (check_crc_ && n > 0)
+    crc_ = static_cast<uint32_t>(mz_crc32(crc_, static_cast<const uint8_t*>(buf), n));
+  out_total_ += n;
+  return n;
+}
+
+ZipError ZipEntryInput::finish() {
+  uint8_t scratch[256];
+  while (read(scratch, sizeof(scratch)) > 0) {
+  }
+  if (error_ || !done_)
+    return ZipError::ReadError;
+  if (check_crc_ && (crc_ != expected_crc_ || out_total_ != expected_size_))
+    return ZipError::CrcMismatch;
+  return ZipError::Ok;
+}
+
+ZipError ZipReader::verify_crc(IZipFile& file, const ZipEntry& entry, uint8_t* work_buf, size_t work_buf_size) {
+  if (!entry.has_crc)
+    return ZipError::Ok;
+  ZipEntryInput in;
+  ZipError err = in.open(file, entry, work_buf, work_buf_size);
+  if (err != ZipError::Ok)
+    return err;
+  in.enable_crc_check();
+  return in.finish();
+}
+
+size_t ZipEntryInput::read_impl_(void* buf, size_t max_size) {
   if (error_)
     return 0;
 
