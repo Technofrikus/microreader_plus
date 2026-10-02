@@ -553,3 +553,71 @@ TEST(RegressionBackwardNav, Ch36BrSpacingIncludesHeading) {
   mrb.close();
   std::remove(mrb_path.c_str());
 }
+
+// Blink reminder setting: Off -> 15 -> 20 -> ... -> 60 -> Off, and back.
+TEST(BlinkReminderSetting, CyclesThroughFifteenToSixtyInFives) {
+#if MR_ETA_DEBUG
+  // Debug builds add an "every page" step (1) between 60 and Off.
+  const std::vector<uint8_t> expected = {15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 1, 0};
+#else
+  const std::vector<uint8_t> expected = {15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 0};
+#endif
+  uint8_t m = 0;
+  std::vector<uint8_t> seen;
+  for (size_t i = 0; i < expected.size(); ++i) {
+    m = ReaderSettings::blink_cycle(m, true);
+    seen.push_back(m);
+  }
+  EXPECT_EQ(seen, expected);
+  for (size_t i = 0; i < expected.size(); ++i) {
+    const uint8_t prev = ReaderSettings::blink_cycle(m, false);
+    EXPECT_EQ(ReaderSettings::blink_cycle(prev, true), m);
+    m = prev;
+  }
+}
+
+namespace {
+class NullDisplay final : public IDisplay {
+ public:
+  void full_refresh(const uint8_t*, RefreshMode, bool, bool) override {}
+  void partial_refresh(const uint8_t*, const uint8_t*) override {}
+};
+
+// Pixel of the frame being drawn at logical (x, y) in the default portrait rotation.
+bool is_white(DrawBuffer& buf, int x, int y) {
+  const auto& cfg = buf.config();
+  const int px = y + cfg.panel_offset_x;
+  const int py = cfg.physical_height - 1 - x;
+  return buf.render_buf()[py * cfg.stride + px / 8] & (0x80 >> (px & 7));
+}
+}  // namespace
+
+// The blink draws black pixels over the displayed page, then restores it.
+TEST(BlinkOverlay, InkOverPageThenRestore) {
+  NullDisplay disp;
+  const DeviceConfig cfg = DeviceConfig::x4();
+  DrawBuffer buf(disp, cfg);
+  buf.fill(true);
+  buf.set_pixel(100, 100, false);  // "text" under the eye
+  buf.refresh();                   // the page is now the displayed frame
+
+  DrawBuffer::RegionSave page;
+  ASSERT_TRUE(buf.save_displayed_region(90, 90, 40, 40, page));
+  ASSERT_TRUE(page.ok());
+
+  // 16x16 bitmap: first row all black, the rest white (transparent).
+  uint8_t bmp[16 * 2];
+  memset(bmp, 0xFF, sizeof(bmp));
+  bmp[0] = bmp[1] = 0x00;
+
+  buf.start_overlay_frame();
+  buf.draw_ink_1bit(bmp, 95, 95, 16, 16);
+  EXPECT_FALSE(is_white(buf, 95, 95));   // ink
+  EXPECT_FALSE(is_white(buf, 110, 95));  // ink, last column
+  EXPECT_TRUE(is_white(buf, 100, 101));  // transparent: stays page (white)
+  EXPECT_FALSE(is_white(buf, 100, 100)); // transparent: the page's black pixel survives
+
+  buf.restore_region(page);
+  EXPECT_TRUE(is_white(buf, 95, 95));    // ink gone
+  EXPECT_FALSE(is_white(buf, 100, 100)); // page back
+}

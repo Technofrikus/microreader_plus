@@ -565,6 +565,7 @@ void microreader::Application::save_settings_() {
   std::fprintf(f, "override_pub_fonts=%u\n", rs.override_publisher_fonts ? 1u : 0u);
   std::fprintf(f, "font_size=%u\n", static_cast<unsigned>(rs.font_size_idx));
   std::fprintf(f, "antialias_enabled=%u\n", rs.antialias_enabled ? 1u : 0u);
+  std::fprintf(f, "blink_minutes=%u\n", static_cast<unsigned>(rs.blink_minutes));
   std::fprintf(f, "avg_ms_per_char=%lu\n", static_cast<unsigned long>(rs.avg_ms_per_char));
 
   // Menu list format
@@ -675,6 +676,8 @@ void microreader::Application::load_settings_() {
       rs.font_size_idx = uval < kMaxFontSizes ? static_cast<uint8_t>(uval) : 1;
     else if (std::sscanf(line, "antialias_enabled=%u", &uval) == 1)
       rs.antialias_enabled = (uval != 0);
+    else if (std::sscanf(line, "blink_minutes=%u", &uval) == 1)
+      rs.blink_minutes = ReaderSettings::blink_valid(uval) ? static_cast<uint8_t>(uval) : 0;
     else if (std::sscanf(line, "avg_ms_per_char=%u", &uval) == 1)
       rs.avg_ms_per_char = uval;
     // Migration: old format stored avg_page_time_ms (ms-per-page). Convert to

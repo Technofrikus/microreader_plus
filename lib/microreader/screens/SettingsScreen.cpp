@@ -65,6 +65,14 @@ static std::string get_menu_font_label(int size) {
   return std::string("Menu Size: ") + (size == 0 ? "Small" : (size == 1 ? "Medium" : "Large"));
 }
 
+static std::string get_blink_label(uint8_t minutes) {
+  if (minutes == 0)
+    return "Blink Reminder: Off";
+  if (minutes < ReaderSettings::kBlinkMinMinutes)  // debug "every page" step
+    return "Blink Reminder: Every page";
+  return "Blink Reminder: " + std::to_string(minutes) + " min";
+}
+
 static std::string get_sleep_image_label(const std::string& path) {
   if (path.empty())
     return "Sleep Image: Auto";
@@ -178,6 +186,10 @@ void SettingsScreen::on_start() {
   // SleepImageScreen, not here.
   idx_sleep_image_ = count();
   add_item(get_sleep_image_label(app_ ? app_->sleep_image_path() : std::string()));
+
+  // Global: applies to every book (ReaderScreen reads it from the same settings).
+  idx_blink_ = count();
+  add_item(get_blink_label(app_ ? app_->reader_settings().blink_minutes : 0));
 
   add_separator();
 
@@ -368,6 +380,15 @@ void SettingsScreen::on_select(int index) {
       app_->push_screen(ScreenId::SleepImage);
     return;
   }
+  if (index == idx_blink_) {
+    if (app_) {
+      uint8_t& m = app_->reader_settings().blink_minutes;
+      m = ReaderSettings::blink_cycle(m, true);
+      set_item_label(idx_blink_, get_blink_label(m));
+      app_->save_settings_();
+    }
+    return;
+  }
   if (index == idx_bluetooth_) {
     app_->push_screen(ScreenId::Bluetooth);
     return;
@@ -481,6 +502,15 @@ void SettingsScreen::on_long_select(int index) {
       set_item_label(idx_list_format_, get_list_format_label(fmt));
     }
     app_->save_settings_();
+    return;
+  }
+  if (index == idx_blink_) {
+    if (app_) {
+      uint8_t& m = app_->reader_settings().blink_minutes;
+      m = ReaderSettings::blink_cycle(m, false);
+      set_item_label(idx_blink_, get_blink_label(m));
+      app_->save_settings_();
+    }
     return;
   }
   if (index == idx_reader_controls_) {

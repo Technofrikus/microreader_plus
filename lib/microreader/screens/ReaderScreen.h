@@ -263,6 +263,15 @@ class ReaderScreen final : public IScreen {
   // steady_clock on desktop). Used for ETA page-time measurement.
   static uint32_t now_ms_();
 
+  // Blink reminder (ReaderSettings::blink_minutes). last_blink_ms_ is the
+  // reference point: the book's open, or the last time the eyes were shown.
+  uint32_t last_blink_ms_ = 0;
+  // True once the interval has elapsed; checked on each page turn.
+  bool blink_due_() const;
+  // Blink open, closed, open (black pixels only) over the page on the glass.
+  // The caller then renders the next page over the last frame.
+  void show_blink_(DrawBuffer& buf);
+
   bool decode_image_to_buffer_(uint16_t img_key, uint32_t offset, DrawBuffer& buf, int dest_x, int dest_y,
                                uint16_t max_w, uint16_t max_h, uint16_t src_y = 0, uint16_t clip_h = 0);
   // Render page content (BW only). Sets grayscale_pending_ if font has grayscale.

@@ -71,6 +71,7 @@ class SettingsScreen final : public ListMenuScreen {
   int idx_menu_font_ = -1;
   int idx_font_ = -1;
   int idx_sleep_image_ = -1;
+  int idx_blink_ = -1;
   int idx_bluetooth_ = -1;
   int idx_convert_sleep_ = -1;
   int idx_convert_books_ = -1;

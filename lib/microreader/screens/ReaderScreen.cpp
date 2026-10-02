@@ -11,6 +11,7 @@
 #include "../DiagnosticLog.h"
 #include "../HeapLog.h"
 #include "../content/CoverSleep.h"
+#include "../display/BlinkImages.h"
 #include "../display/ui_font_small.h"
 #include "../display/ui_font_medium.h"
 #include "../display/ui_font_large.h"
@@ -738,6 +739,7 @@ void ReaderScreen::start(DrawBuffer& buf, IRuntime& runtime) {
   layout_engine_.set_image_size_fn(image_size_fn_);
   layout_engine_.set_hyphenation_lang(detect_language(mrb_.metadata().language));
   reset_eta_();  // Reset ETA tracking for new book/session
+  last_blink_ms_ = now_ms_();
   render_page_(buf);
   // Stamp the start of the first page's display for ETA measurement.
   page_display_start_ms_ = now_ms_();
@@ -826,6 +828,38 @@ void ReaderScreen::stop() {
   // saved_chapter_idx_ / saved_page_pos_ are intentionally NOT reset here —
   // resume() uses them as the nav-history origin when a link jump is pending.
   buf_ = nullptr;
+}
+
+bool ReaderScreen::blink_due_() const {
+  const uint8_t minutes = reader_settings_.blink_minutes;
+  if (minutes == 0)
+    return false;
+  if (minutes < ReaderSettings::kBlinkMinMinutes)  // debug "every page"
+    return true;
+  return now_ms_() - last_blink_ms_ >= static_cast<uint32_t>(minutes) * 60000u;
+}
+
+void ReaderScreen::show_blink_(DrawBuffer& buf) {
+  const uint8_t* frames[3] = {kBlink1, kBlink2, kBlink1};  // open, closed, open
+  const int x = (buf.width() - kBlinkWidth) / 2;
+  const int y = (buf.height() - kBlinkHeight) / 2;
+
+  // The current page is on the glass. Remember what lies under the eye so each
+  // frame starts from the clean page. The new page is rendered by the caller,
+  // straight over the last frame.
+  DrawBuffer::RegionSave page;
+  if (!buf.save_displayed_region(x, y, kBlinkWidth, kBlinkHeight, page)) {
+    MR_LOGI("reader", "blink skipped: no memory for the page under the eye");
+    return;
+  }
+  // Only the black pixels go over the page; the white of the bitmap is transparent.
+  for (const uint8_t* frame : frames) {
+    buf.start_overlay_frame();
+    buf.restore_region(page);
+    buf.draw_ink_1bit(frame, x, y, kBlinkWidth, kBlinkHeight);
+    buf.refresh();
+  }
+  last_blink_ms_ = now_ms_();
 }
 
 void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime& runtime) {
@@ -1003,6 +1037,9 @@ void ReaderScreen::update(const ButtonState& buttons, DrawBuffer& buf, IRuntime&
       buf.revert_grayscale();
       grayscale_active_ = false;
     }
+    // The eyes blink over the page being left; the new page follows.
+    if (blink_due_())
+      show_blink_(buf);
     render_page_(buf);
     // Stamp the start of this page's display for ETA measurement.
     page_display_start_ms_ = now_ms_();

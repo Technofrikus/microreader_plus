@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../DebugConfig.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -76,14 +77,47 @@ struct ReaderSettings {
   uint8_t padding_v_idx = 1;                           // vertical top padding preset index
   uint8_t font_size_idx = 1;                           // base font size preset index (1 = Normal/24px)
   ProgressMode progress_mode = ProgressMode::None;  // (legacy) reading progress indicator mode
-  ProgressBarMode progress_bar_mode = ProgressBarMode::None; // (legacy) thin progress bar scope
+  ProgressBarMode progress_bar_mode = ProgressBarMode::Chapter; // (legacy) thin progress bar scope
   bool override_publisher_fonts = false;               // ignore publisher's font sizes
   bool antialias_enabled = true;                       // grayscale anti-aliasing on text
+
+  // Blink reminder: after this many minutes of reading, the next page turn
+  // first shows an open and a closed eye. 0 = off, else 15..60 in steps of 5.
+  uint8_t blink_minutes = 0;
+  static constexpr uint8_t kBlinkMinMinutes = 15;
+  static constexpr uint8_t kBlinkMaxMinutes = 60;
+  static constexpr uint8_t kBlinkStepMinutes = 5;
+#if MR_ETA_DEBUG
+  // Debug builds only: blink on every page turn (for checking the frames).
+  static constexpr uint8_t kBlinkEveryPage = 1;
+#endif
+  static bool blink_valid(unsigned minutes) {
+#if MR_ETA_DEBUG
+    if (minutes == kBlinkEveryPage) return true;
+#endif
+    return minutes >= kBlinkMinMinutes && minutes <= kBlinkMaxMinutes;
+  }
+  // Next/previous value in the cycle Off -> 15 -> ... -> 60 -> [Every page] -> Off.
+  static uint8_t blink_cycle(uint8_t minutes, bool forward) {
+#if MR_ETA_DEBUG
+    constexpr uint8_t kAfterMax = kBlinkEveryPage;
+#else
+    constexpr uint8_t kAfterMax = 0;
+#endif
+    if (forward) {
+      if (minutes == 0) return kBlinkMinMinutes;
+      if (minutes < kBlinkMinMinutes) return 0;  // Every page -> Off
+      return minutes >= kBlinkMaxMinutes ? kAfterMax : static_cast<uint8_t>(minutes + kBlinkStepMinutes);
+    }
+    if (minutes == 0) return kAfterMax == 0 ? kBlinkMaxMinutes : kAfterMax;
+    if (minutes < kBlinkMinMinutes) return kBlinkMaxMinutes;  // Every page -> 60
+    return minutes <= kBlinkMinMinutes ? 0 : static_cast<uint8_t>(minutes - kBlinkStepMinutes);
+  }
 
   // Three-slot status bar. Each slot independently shows one StatusInfo value.
   // Defaults match the previous single-centred behaviour plus the requested layout.
   StatusInfo status_left = StatusInfo::EtaChapter;
-  StatusInfo status_middle = StatusInfo::PercentChapter;
+  StatusInfo status_middle = StatusInfo::BatteryIcon;
   StatusInfo status_right = StatusInfo::EtaBook;
   StatusSize status_size = StatusSize::Small;          // text size for the whole status bar
 

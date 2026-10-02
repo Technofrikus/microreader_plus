@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <new>
 #include <utility>
 
 #include "../DiagnosticLog.h"
@@ -227,6 +228,85 @@ class DrawBuffer {
       buf[bidx] |= bit;
     else
       buf[bidx] &= static_cast<uint8_t>(~bit);
+  }
+
+  // ---- Overlays: draw over the displayed page, then take it back ----
+  //
+  // A copy of the displayed frame's bytes under a logical rectangle. The
+  // buffer is a nothrow allocation (exceptions are off), so check ok().
+  class RegionSave {
+   public:
+    RegionSave() = default;
+    RegionSave(const RegionSave&) = delete;
+    RegionSave& operator=(const RegionSave&) = delete;
+    ~RegionSave() {
+      delete[] data_;
+    }
+    bool ok() const {
+      return data_ != nullptr;
+    }
+
+   private:
+    friend class DrawBuffer;
+    uint8_t* data_ = nullptr;
+    int row0_ = 0, rows_ = 0, byte0_ = 0, bytes_ = 0;
+  };
+
+  // Logical rectangle -> the physical rows and byte columns it touches.
+  // Returns false when it lies outside the panel.
+  bool save_displayed_region(int lx, int ly, int lw, int lh, RegionSave& out) const {
+    int px0, py0, pw, ph;
+    if (rotation_ == Rotation::Deg0) {
+      px0 = lx, py0 = ly, pw = lw, ph = lh;
+    } else {
+      px0 = ly, py0 = config_.physical_height - lx - lw, pw = lh, ph = lw;
+    }
+    if (pw <= 0 || ph <= 0 || px0 < 0 || py0 < 0 || px0 + pw > config_.physical_width ||
+        py0 + ph > config_.physical_height)
+      return false;
+    out.row0_ = py0;
+    out.rows_ = ph;
+    out.byte0_ = (px0 + config_.panel_offset_x) / 8;
+    out.bytes_ = (px0 + pw - 1 + config_.panel_offset_x) / 8 - out.byte0_ + 1;
+    delete[] out.data_;
+    out.data_ = new (std::nothrow) uint8_t[static_cast<size_t>(out.rows_) * out.bytes_];
+    if (!out.data_)
+      return false;
+    for (int r = 0; r < out.rows_; ++r)
+      memcpy(out.data_ + static_cast<size_t>(r) * out.bytes_,
+             active_() + static_cast<size_t>(out.row0_ + r) * config_.stride + out.byte0_, out.bytes_);
+    return true;
+  }
+
+  // Start the next frame as a copy of what is on the glass.
+  void start_overlay_frame() {
+    memcpy(inactive_(), active_(), config_.pixel_bytes);
+  }
+
+  // Put the saved bytes back into the frame being drawn.
+  void restore_region(const RegionSave& s) {
+    if (!s.data_)
+      return;
+    for (int r = 0; r < s.rows_; ++r)
+      memcpy(inactive_() + static_cast<size_t>(s.row0_ + r) * config_.stride + s.byte0_,
+             s.data_ + static_cast<size_t>(r) * s.bytes_, s.bytes_);
+  }
+
+  // Draw only the black pixels of a 1bpp bitmap (MSB first, 1 = white);
+  // white pixels are transparent and leave the frame as it is.
+  void draw_ink_1bit(const uint8_t* data, int lx, int ly, int w, int h) {
+    const int stride = (w + 7) / 8;
+    for (int row = 0; row < h; ++row) {
+      const uint8_t* src = data + static_cast<size_t>(row) * stride;
+      for (int bx = 0; bx < stride; ++bx) {
+        const uint8_t b = src[bx];
+        if (b == 0xFF)
+          continue;
+        for (int k = 0; k < 8 && bx * 8 + k < w; ++k)
+          if (!((b >> (7 - k)) & 1))
+            set_pixel(lx + bx * 8 + k, ly + row, false);
+      }
+    }
   }
 
   void blit_1bit_row(int lx, int ly, const uint8_t* data_1bit, int num_pixels) {
